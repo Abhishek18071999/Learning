@@ -188,7 +188,103 @@ git reflog                      # every position HEAD has been: your safety net`
       solution: {
         text: [
           "Git auto-merges the new function because it does not overlap. Only the edited function conflicts. Combine both edits by understanding intent (e.g. one adds validation, the other changes the formula: keep validation and the new formula), then run the code or tests.",
+          "conflict_lab.sh builds the scenario in a throwaway repo with fixed commit dates, so your hashes match the output. `merge.conflictStyle diff3` adds a `|||||||` section with the original line, which makes intent obvious: main added validation above an unchanged return, the branch changed only the return. Both survive. TAX_RATE and format_total merged automatically because they are separate hunks.",
+          "Decision note: the validation and the tax formula are independent, so the resolved function validates first and then applies tax. check_pricing.py proves all three changes are present before the merge is committed.",
         ],
+        code: { lang: "bash", file: "conflict_lab.sh", code: `#!/usr/bin/env bash
+# Two branches change the same function; one also adds a new function. Merge, resolve, test.
+set -euo pipefail
+export GIT_AUTHOR_NAME="Asha" GIT_AUTHOR_EMAIL="asha@example.com"
+export GIT_COMMITTER_NAME="Asha" GIT_COMMITTER_EMAIL="asha@example.com"
+export GIT_AUTHOR_DATE="2026-01-05T10:00:00Z" GIT_COMMITTER_DATE="2026-01-05T10:00:00Z"  # fixed dates: same hashes as shown
+
+rm -rf conflict-lab && git init -q -b main conflict-lab && cd conflict-lab
+git config merge.conflictStyle diff3          # conflicts also show the common ancestor
+
+cat > pricing.py <<'PY'
+"""Checkout pricing."""
+
+
+def total(price: float, qty: int) -> float:
+    return price * qty
+
+
+def discount(amount: float, percent: float) -> float:
+    return amount * (1 - percent / 100)
+PY
+git add pricing.py && git commit -qm "Add pricing"
+
+git switch -qc feature/tax                    # changes 1 + 2: new formula, new function
+cat > pricing.py <<'PY'
+"""Checkout pricing."""
+
+TAX_RATE = 0.18
+
+
+def total(price: float, qty: int) -> float:
+    return round(price * qty * (1 + TAX_RATE), 2)
+
+
+def discount(amount: float, percent: float) -> float:
+    return amount * (1 - percent / 100)
+
+
+def format_total(amount: float) -> str:
+    return f"INR {amount:,.2f}"
+PY
+git commit -qam "Add 18% tax and format_total"
+
+git switch -q main                            # change 3: validation in the same function
+cat > pricing.py <<'PY'
+"""Checkout pricing."""
+
+
+def total(price: float, qty: int) -> float:
+    if qty <= 0:
+        raise ValueError("qty must be positive")
+    return price * qty
+
+
+def discount(amount: float, percent: float) -> float:
+    return amount * (1 - percent / 100)
+PY
+git commit -qam "Reject non-positive quantities"
+
+echo "== merge"
+git merge feature/tax || true                 # exits 1 on conflict; we resolve below
+echo "== conflicted: $(git diff --name-only --diff-filter=U)"
+cat pricing.py
+
+echo "== resolve: keep main's validation AND the branch's tax formula"
+python3 - <<'PY'
+import re
+from pathlib import Path
+p = Path("pricing.py")
+resolved = ('    if qty <= 0:\\n        raise ValueError("qty must be positive")\\n'
+            '    return round(price * qty * (1 + TAX_RATE), 2)\\n')
+p.write_text(re.sub(r"<<<<<<< .*?>>>>>>> [^\\n]*\\n", resolved, p.read_text(), flags=re.S))
+PY
+if grep -nE '^(<<<<<<<|=======|>>>>>>>|\\|{7})' pricing.py; then
+  echo "conflict markers left" >&2; exit 1
+fi
+
+cat > check_pricing.py <<'PY'
+from pricing import discount, format_total, total
+
+assert total(100.0, 2) == 236.0, "tax formula from feature/tax"
+try:
+    total(100.0, 0)
+    raise SystemExit("validation from main was lost")
+except ValueError:
+    pass
+assert format_total(discount(total(1000.0, 1), 10)) == "INR 1,062.00", "new function merged"
+print("all 3 checks passed")
+PY
+python3 check_pricing.py
+git add pricing.py check_pricing.py
+git commit -q --no-edit                       # completes the merge with the default message
+git log --oneline --graph --all` },
+        output: "== merge\nAuto-merging pricing.py\nCONFLICT (content): Merge conflict in pricing.py\nAutomatic merge failed; fix conflicts and then commit the result.\n== conflicted: pricing.py\n\"\"\"Checkout pricing.\"\"\"\n\nTAX_RATE = 0.18\n\n\ndef total(price: float, qty: int) -> float:\n<<<<<<< HEAD\n    if qty <= 0:\n        raise ValueError(\"qty must be positive\")\n    return price * qty\n||||||| 5a80c0a\n    return price * qty\n=======\n    return round(price * qty * (1 + TAX_RATE), 2)\n>>>>>>> feature/tax\n\n\ndef discount(amount: float, percent: float) -> float:\n    return amount * (1 - percent / 100)\n\n\ndef format_total(amount: float) -> str:\n    return f\"INR {amount:,.2f}\"\n== resolve: keep main's validation AND the branch's tax formula\nall 3 checks passed\n*   166f8bd Merge branch 'feature/tax'\n|\\  \n| * 653aa48 Add 18% tax and format_total\n* | 5ff4dad Reject non-positive quantities\n|/  \n* 5a80c0a Add pricing",
         pitfalls: ["Accepting one side wholesale and losing the other's fix", "Committing with markers still in the file (search for <<<<<<< before committing)"],
       },
     },
@@ -201,7 +297,36 @@ git reflog                      # every position HEAD has been: your safety net`
         text: [
           "`git reflog` lists every position HEAD pointed to; the entry before the reset is the old tip. `git reset --hard HEAD@{1}` or `git branch rescue <hash>` restores it.",
           "It works because commits are not deleted immediately; they become unreachable and are garbage-collected later (by default reflog entries expire after about 90 days, unreachable ones after about 30). It does not help for changes that were never committed, or in a different clone.",
+          "recover_lab.sh reproduces the accident and the rescue. Pin the commits with a branch before anything else (`git branch rescue <hash>`), then move main. `HEAD@{1}` is only the right entry if nothing has moved HEAD since the reset, so read the reflog before using it.",
         ],
+        code: { lang: "bash", file: "recover_lab.sh", code: `#!/usr/bin/env bash
+# Lose three commits with reset --hard, then get them back with the reflog.
+set -euo pipefail
+export GIT_AUTHOR_NAME="Asha" GIT_AUTHOR_EMAIL="asha@example.com"
+export GIT_COMMITTER_NAME="Asha" GIT_COMMITTER_EMAIL="asha@example.com"
+export GIT_AUTHOR_DATE="2026-01-05T10:00:00Z" GIT_COMMITTER_DATE="2026-01-05T10:00:00Z"  # fixed dates: same hashes as shown
+
+rm -rf recover-lab && git init -q -b main recover-lab && cd recover-lab
+echo "# notes" > notes.md && git add notes.md && git commit -qm "Start notes"
+for topic in DNS TCP TLS; do
+  echo "- $topic" >> notes.md && git commit -qam "Add $topic notes"
+done
+echo "== before"; git log --oneline
+
+git reset --hard HEAD~3                       # the "accident"
+echo "== after reset"; git log --oneline
+
+echo "== reflog: every place HEAD has been"
+git reflog -n 5
+
+lost=$(git rev-parse 'HEAD@{1}')             # where HEAD was just before the reset
+git branch rescue "$lost"                     # safe first step: pin the commits with a branch
+git reset --hard rescue                       # then move main back to them
+git branch -d rescue
+echo "== recovered"; git log --oneline
+cat notes.md` },
+        output: "== before\n1304d82 Add TLS notes\n33dd341 Add TCP notes\n2ebf6cb Add DNS notes\n50467e8 Start notes\nHEAD is now at 50467e8 Start notes\n== after reset\n50467e8 Start notes\n== reflog: every place HEAD has been\n50467e8 HEAD@{0}: reset: moving to HEAD~3\n1304d82 HEAD@{1}: commit: Add TLS notes\n33dd341 HEAD@{2}: commit: Add TCP notes\n2ebf6cb HEAD@{3}: commit: Add DNS notes\n50467e8 HEAD@{4}: commit (initial): Start notes\nHEAD is now at 1304d82 Add TLS notes\nDeleted branch rescue (was 1304d82).\n== recovered\n1304d82 Add TLS notes\n33dd341 Add TCP notes\n2ebf6cb Add DNS notes\n50467e8 Start notes\n# notes\n- DNS\n- TCP\n- TLS",
+        pitfalls: ["Using HEAD@{1} after other commands have moved HEAD", "Running `git gc --prune=now` or deleting the clone before recovering"],
       },
     },
     capstone: {

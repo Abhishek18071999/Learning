@@ -202,7 +202,60 @@ Label intent so the author knows what blocks merging:
       criteria: ["PR uses the template", "Two self-review comments with labels", "Merged with squash"],
       hints: ["Settings → General → Pull Requests lets you allow only squash merging."],
       solution: {
-        text: ["The point is practising the reviewer's mindset on your own code: you will find at least one thing to improve. Typical findings are missing error handling, a hardcoded value, or a missing test."],
+        text: [
+          "The point is practising the reviewer's mindset on your own code: you will find at least one thing to improve. Typical findings are missing error handling, a hardcoded value, or a missing test.",
+          "first-pr.md is a complete worked example: repo settings for squash-only merging, a filled-in template, two labelled self-review comments with concrete inputs and outputs, the fix commit and the merge. GitHub does not let you approve your own PR, so leave the comments as a 'Comment' review. The slugify outputs quoted in the comments come from running both versions, and the three test cases pass on the fixed version.",
+        ],
+        code: { lang: "markdown", file: "first-pr.md", code: `# First reviewed PR: "Add slugify() for lesson URLs" (practice repo pr-practice)
+
+## 1. Repo settings: squash only, delete merged branches
+\`\`\`bash
+gh repo edit --enable-squash-merge --enable-merge-commit=false \\
+  --enable-rebase-merge=false --delete-branch-on-merge
+\`\`\`
+(Web UI: Settings > General > Pull Requests.)
+
+## 2. PR description (filled from .github/pull_request_template.md)
+~~~markdown
+## What
+Adds \`slugify(title)\` in \`textutils.py\`, turning a lesson title into a URL slug:
+"DNS & TLS 101" -> "dns-tls-101".
+
+## Why
+Closes #1. Lesson URLs currently use numeric ids, which are unreadable when shared.
+
+## How to test
+\`python -m pytest -q test_textutils.py\` (3 cases, including edge punctuation and accents)
+
+## Risk
+Low. New function, no callers yet. No migrations or config changes.
+
+- [x] Tests added or updated
+- [x] No secrets or debug code
+~~~
+
+## 3. Self-review comments (Files changed tab, on the first commit)
+textutils.py, line 5: \`return re.sub(r"[^a-z0-9]+", "-", title.lower())\`
+
+> **blocking:** Leading and trailing punctuation becomes a hyphen:
+> \`slugify("  Hello, World! ")\` returns \`"-hello-world-"\`, which gives URLs like
+> \`/lessons/-hello-world-\`. Suggest \`.strip("-")\` on the result, plus a test case.
+
+> **question:** Non-ASCII letters are dropped, not transliterated:
+> \`slugify("Café Menu")\` returns \`"caf-menu"\`. Should we normalise with
+> \`unicodedata.normalize("NFKD", ...)\` and keep the ASCII part, giving \`"cafe-menu"\`?
+> Fine to defer if all titles are English, but then say so in a docstring.
+
+## 4. Fix pushed in a second commit: "Strip edge hyphens and transliterate accents"
+Both threads answered with a link to the commit and marked resolved. Tests:
+\`("DNS & TLS 101", "dns-tls-101")\`, \`("  Hello, World! ", "hello-world")\`, \`("Café Menu", "cafe-menu")\`: 3 passed.
+
+## 5. Merge
+\`\`\`bash
+gh pr checks --watch
+gh pr merge --squash --delete-branch --subject "Add slugify() for lesson URLs (#2)"
+\`\`\`
+Result on main: one commit, "Add slugify() for lesson URLs (#2)". The branch is deleted.` },
       },
     },
     intermediate: {
@@ -240,7 +293,69 @@ def average_order_value(db, email: str) -> float:
       criteria: ["PR follows the project's contribution rules", "Description links the issue", "You responded to review feedback"],
       hints: ["GitHub search: label:\"good first issue\" language:python state:open"],
       solution: {
-        text: ["Read CONTRIBUTING.md first, comment on the issue before starting, keep the change minimal, run the project's tests locally, and reply to every review comment. A merged OSS PR is strong portfolio evidence."],
+        text: [
+          "Read CONTRIBUTING.md first, comment on the issue before starting, keep the change minimal, run the project's tests locally, and reply to every review comment. A merged OSS PR is strong portfolio evidence.",
+          "oss.sh wraps the workflow in GitHub CLI commands: find candidate issues, read the issue and CONTRIBUTING, claim the issue with a comment, fork with --clone (origin is your fork, upstream is theirs) and work on a branch. Then push and open a PR whose body starts with `Fixes #N`, so GitHub links the issue and closes it on merge. After review, push follow-up commits to the same branch; the PR updates itself.",
+        ],
+        code: { lang: "bash", file: "oss.sh", code: `#!/usr/bin/env bash
+# Open-source contribution workflow with the GitHub CLI (gh auth login first).
+#   ./oss.sh find                          list fresh "good first issue"s
+#   ./oss.sh start  <owner/repo> <issue>   read rules, fork, clone, branch
+#   ./oss.sh pr     <owner/repo> <issue>   push and open the PR (run inside the clone)
+#   ./oss.sh update                        after review: push fixes, show threads
+set -euo pipefail
+
+cmd="\${1:-}"
+repo="\${2:-}"
+issue="\${3:-}"
+need_args() { [[ -n "$repo" && "$issue" =~ ^[0-9]+$ ]] || { echo "usage: $0 $cmd <owner/repo> <issue-number>" >&2; exit 2; }; }
+
+case "$cmd" in
+  find)
+    gh search issues --label "good first issue" --language python --state open \\
+      --no-assignee --sort updated --limit 15 ;;
+  start)
+    need_args
+    gh issue view "$issue" --repo "$repo" --comments     # is someone already on it?
+    for f in CONTRIBUTING.md .github/CONTRIBUTING.md docs/CONTRIBUTING.md; do
+      gh api "repos/$repo/contents/$f" -H "Accept: application/vnd.github.raw" 2>/dev/null && break
+    done
+    read -rp "Comment on the issue to claim it first? [y/N] " ok
+    if [[ "$ok" == y ]]; then
+      gh issue comment "$issue" --repo "$repo" \\
+        --body "I'd like to take this one. I plan to keep the change minimal and add a test. I'll open a PR within a few days."
+    fi
+    gh repo fork "$repo" --clone --default-branch-only   # origin = your fork, upstream = theirs
+    cd "\${repo#*/}"
+    git remote set-head upstream --auto                 # so upstream/HEAD names their default branch
+    git switch -c "fix/issue-$issue"
+    echo "Now: make the change, run the project's own test/lint commands, commit."
+    echo "Then from $(pwd): ../oss.sh pr $repo $issue" ;;
+  pr)
+    need_args
+    [[ -z "$(git status --porcelain)" ]] || { echo "error: commit or stash your changes first" >&2; exit 1; }
+    branch=$(git branch --show-current)
+    title=$(git log -1 --format=%s)
+    git push -u origin "$branch"
+    gh pr create --repo "$repo" --head "$(gh api user --jq .login):$branch" --title "$title" \\
+      --body "Fixes #$issue
+
+## What
+$(git log --format='- %s' "upstream/HEAD..HEAD")
+
+## How I tested
+Ran the project's test suite locally as described in CONTRIBUTING.md; all tests pass.
+
+I'm new to this codebase, so feedback on style or approach is very welcome." ;;
+  update)
+    git push                                           # new commits update the PR
+    gh pr view --comments
+    gh pr checks ;;
+  *)
+    echo "usage: $0 find | start <owner/repo> <issue> | pr <owner/repo> <issue> | update" >&2
+    exit 2 ;;
+esac` },
+        pitfalls: ["Working on your fork's main branch, so every later change lands in the same PR", "Reformatting files you did not need to touch, which buries the real change"],
       },
     },
     capstone: {
@@ -249,7 +364,104 @@ def average_order_value(db, email: str) -> float:
       criteria: ["Template and CODEOWNERS committed", "CI runs on PRs", "main requires the CI check"],
       hints: ["Reuse the workflow from the hands-on section."],
       solution: {
-        text: ["Even solo, working through PRs gives you a reviewable history and CI gates, which interviewers look at when they browse your GitHub."],
+        text: [
+          "Even solo, working through PRs gives you a reviewable history and CI gates, which interviewers look at when they browse your GitHub.",
+          "ci.yml has two jobs whose names (ai-tests, scripts-lint) become the required checks. There is deliberately no `paths:` filter. Until Phase 1 creates services/ai, the pip and pytest steps are skipped and the check still reports success.",
+          "protect-main.sh creates a ruleset through the REST API: PR required, squash only, both checks required and the branch must be up to date (strict), no force pushes or deletion. Approvals are 0 because GitHub does not let you approve your own PR; raise it to 1 and turn on code-owner review when a second person joins.",
+        ],
+        code: { lang: "yaml", file: ".github/workflows/ci.yml", code: `name: CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: ci-\${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  ai-tests:
+    name: ai-tests                      # this exact name is the required check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: services/ai
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # No paths filter: a required check that never runs blocks every PR.
+      # Until Phase 1 creates services/ai, the steps skip and the check still reports success.
+      - if: hashFiles('services/ai/requirements.txt') != ''
+        run: python -m pip install -r requirements.txt
+      - if: hashFiles('services/ai/requirements.txt') != ''
+        run: python -m pytest -q
+  scripts-lint:
+    name: scripts-lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: shellcheck scripts/*.sh     # preinstalled on GitHub's Ubuntu runners
+
+# ---- .github/CODEOWNERS ----
+# Later lines win. Solo for now; swap in team handles (@org/team) as people join.
+*                    @devatlas-asha
+/services/ai/        @devatlas-asha
+/.github/            @devatlas-asha
+/scripts/            @devatlas-asha
+
+# ---- .github/pull_request_template.md ----
+## What
+<!-- One or two sentences: what changes for the user or the system? -->
+
+## Why
+<!-- Link the issue: "Closes #12". What problem does this solve? -->
+
+## How to test
+<!-- Commands a reviewer can run, e.g. ./scripts/dev.sh test -->
+
+## Risk
+<!-- Migrations? Config changes? Rollback plan? -->
+
+- [ ] Tests added or updated
+- [ ] No secrets or debug code
+
+# ---- scripts/protect-main.sh ----
+#!/usr/bin/env bash
+# Create a ruleset on the default branch: PR required, CI required, no force pushes.
+# Run inside the repo after \`gh auth login\`. Settings > Rules > Rulesets shows the result.
+set -euo pipefail
+gh api --method POST "repos/{owner}/{repo}/rulesets" --input - <<'JSON'
+{
+  "name": "protect-main",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": { "ref_name": { "include": ["~DEFAULT_BRANCH"], "exclude": [] } },
+  "rules": [
+    { "type": "deletion" },
+    { "type": "non_fast_forward" },
+    { "type": "pull_request",
+      "parameters": {
+        "required_approving_review_count": 0,
+        "dismiss_stale_reviews_on_push": true,
+        "require_code_owner_review": false,
+        "require_last_push_approval": false,
+        "required_review_thread_resolution": true,
+        "allowed_merge_methods": ["squash"]
+      } },
+    { "type": "required_status_checks",
+      "parameters": {
+        "strict_required_status_checks_policy": true,
+        "required_status_checks": [ { "context": "ai-tests" }, { "context": "scripts-lint" } ]
+      } }
+  ]
+}
+JSON
+echo "ruleset created: direct pushes to main are now rejected"` },
+        pitfalls: ["A paths filter on a required workflow: PRs that do not touch those paths wait forever for a check that never runs", "Requiring an approval on a solo repo, which blocks every PR"],
       },
     },
   },

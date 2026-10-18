@@ -313,7 +313,123 @@ public static class PagingExtensions
       criteria: ["Async with CancellationToken", "Pure LINQ logic tested with xUnit", "Interface ready for an EF Core implementation later"],
       hints: ["Return a record LeaderboardEntry(string User, double Average)."],
       solution: {
-        text: ["Keep the ranking logic in Core against an interface; the EF Core implementation in lesson 4.1.2 will push the same query into SQL."],
+        text: [
+          "Keep the ranking logic in Core against an interface; the EF Core implementation in lesson 4.1.2 will push the same query into SQL.",
+          "`LeaderboardService` depends only on `IAttemptReader`, takes a CancellationToken and forwards it, and validates its arguments with the .NET 8 throw helpers. The ranking is one LINQ chain: GroupBy user, Average, OrderByDescending, then ThenBy name so ties always come out in the same order, then Take.",
+          "The in-memory reader lives in the test project and honours cancellation like a real store would. The xUnit tests cover ordering with a tie, the Take limit, an unknown lesson, invalid arguments and cancellation. `dotnet test` result: Passed 6, Failed 0 (built with nullable and warnings-as-errors from Directory.Build.props).",
+        ],
+        code: {
+          lang: "csharp", file: "DevAtlas.Core/Leaderboard.cs",
+          code: `namespace DevAtlas.Core;
+
+public sealed record Attempt(string User, string LessonId, int Score);
+
+public sealed record LeaderboardEntry(string User, double Average);
+
+/// <summary>Read side of attempt storage. In memory today, EF Core in lesson 4.1.2.</summary>
+public interface IAttemptReader
+{
+    Task<IReadOnlyList<Attempt>> GetForLessonAsync(string lessonId, CancellationToken ct);
+}
+
+public sealed class LeaderboardService(IAttemptReader reader)
+{
+    public async Task<IReadOnlyList<LeaderboardEntry>> TopAsync(string lessonId, int count, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(lessonId);
+        ArgumentOutOfRangeException.ThrowIfLessThan(count, 1);
+
+        var attempts = await reader.GetForLessonAsync(lessonId, ct);
+        return Rank(attempts, count);
+    }
+
+    // Pure ranking logic: average per user, best first, ties broken by name so the order is stable.
+    private static IReadOnlyList<LeaderboardEntry> Rank(IEnumerable<Attempt> attempts, int count) =>
+        attempts
+            .GroupBy(a => a.User)
+            .Select(g => new LeaderboardEntry(g.Key, Math.Round(g.Average(a => a.Score), 1)))
+            .OrderByDescending(e => e.Average)
+            .ThenBy(e => e.User, StringComparer.Ordinal)
+            .Take(count)
+            .ToList();
+}
+
+// ---- DevAtlas.Core.Tests/InMemoryAttemptReader.cs ----
+using DevAtlas.Core;
+
+namespace DevAtlas.Core.Tests;
+
+public sealed class InMemoryAttemptReader(IEnumerable<Attempt> attempts) : IAttemptReader
+{
+    private readonly List<Attempt> _attempts = [.. attempts];
+
+    public Task<IReadOnlyList<Attempt>> GetForLessonAsync(string lessonId, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();   // behave like a real store when the caller gives up
+        IReadOnlyList<Attempt> result = _attempts.Where(a => a.LessonId == lessonId).ToList();
+        return Task.FromResult(result);
+    }
+}
+
+// ---- DevAtlas.Core.Tests/LeaderboardServiceTests.cs ----
+using DevAtlas.Core;
+
+namespace DevAtlas.Core.Tests;
+
+public class LeaderboardServiceTests
+{
+    private static readonly Attempt[] Attempts =
+    [
+        new("asha", "1.3.1", 90), new("asha", "1.3.1", 70),   // asha averages 80
+        new("ravi", "1.3.1", 55), new("ravi", "1.3.1", 85),   // ravi averages 70
+        new("meera", "1.3.1", 95),
+        new("zoe", "1.3.1", 80),                              // ties with asha on 80
+        new("meera", "1.3.2", 10),                            // other lesson: ignored
+    ];
+
+    private static LeaderboardService CreateService() => new(new InMemoryAttemptReader(Attempts));
+
+    [Fact]
+    public async Task Ranks_by_average_score_and_breaks_ties_by_name()
+    {
+        var top = await CreateService().TopAsync("1.3.1", 10);
+
+        Assert.Equal(
+            [new("meera", 95.0), new("asha", 80.0), new("zoe", 80.0), new LeaderboardEntry("ravi", 70.0)],
+            top);
+    }
+
+    [Fact]
+    public async Task Returns_at_most_count_entries()
+    {
+        var top = await CreateService().TopAsync("1.3.1", 2);
+        Assert.Equal(["meera", "asha"], top.Select(e => e.User));
+    }
+
+    [Fact]
+    public async Task Unknown_lesson_gives_an_empty_leaderboard()
+    {
+        Assert.Empty(await CreateService().TopAsync("9.9.9", 5));
+    }
+
+    [Theory]
+    [InlineData("", 5)]
+    [InlineData("1.3.1", 0)]
+    public async Task Rejects_invalid_arguments(string lessonId, int count)
+    {
+        await Assert.ThrowsAnyAsync<ArgumentException>(() => CreateService().TopAsync(lessonId, count));
+    }
+
+    [Fact]
+    public async Task Passes_the_cancellation_token_to_the_reader()
+    {
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        await Assert.ThrowsAsync<OperationCanceledException>(() => CreateService().TopAsync("1.3.1", 3, cts.Token));
+    }
+}`,
+        },
+        pitfalls: ["Ordering by average alone: users with equal averages come out in arbitrary order and tests become flaky", "Returning the LINQ query without ToList: it re-runs on every enumeration, and with EF Core the DbContext may be gone by then", "Calling .Result on the reader's task inside the service instead of awaiting it"],
       },
     },
   },

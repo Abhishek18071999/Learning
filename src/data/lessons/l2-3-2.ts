@@ -354,7 +354,164 @@ assert find_cycle({"a": ["b"], "b": ["c"]}) is None`,
       criteria: ["Order respects every prerequisite", "CI fails on cycles with a readable path", "Unit tests for both outcomes"],
       hints: ["Reuse study_order and find_cycle."],
       solution: {
-        text: ["Content validation in CI is the same idea as schema checks for code: bad data is caught at review time, not by learners."],
+        text: [
+          "`validate` checks the content in three steps: duplicate ids, prerequisites that point to lessons that do not exist, then Kahn's `study_order` from the lesson. Kahn's algorithm only tells you that a cycle exists, so on failure it calls the challenge's `find_cycle` to build a readable message such as `prerequisite cycle: a requires c requires b requires a`. Everything is O(V + E), plus sorting for deterministic output.",
+          "`test_real_curriculum_is_a_dag` is the CI gate: it loads `content/lessons.json`, asserts that every prerequisite comes before its lesson in the order, and fails the build with the exact cycle. DevAtlas lesson files store prerequisites as strings like \"2.3.1 Trees, BSTs and heaps\", so the export takes the id before the first space. Other tests cover a 3-lesson cycle, a lesson that requires itself, unknown and duplicate ids, empty input and loading from a file.",
+          "Run from services/ai: `python -m devatlas_ai.curriculum` prints the output below, `pytest` runs the tests.",
+        ],
+        code: { lang: "python", file: "services/ai/devatlas_ai/curriculum.py", code: `"""Validate lesson prerequisites: unknown ids and cycles fail with a readable message."""
+import json
+from collections import Counter, deque
+from pathlib import Path
+from typing import Any
+
+
+class CurriculumError(ValueError):
+    pass
+
+
+def study_order(prereqs: dict[str, list[str]]) -> list[str]:
+    """Kahn's algorithm from the lesson: O(V + E) plus sorting for deterministic output."""
+    nodes = set(prereqs) | {p for ps in prereqs.values() for p in ps}
+    indegree = {n: 0 for n in nodes}
+    unlocks: dict[str, list[str]] = {n: [] for n in nodes}
+    for lesson, ps in prereqs.items():
+        for p in ps:
+            unlocks[p].append(lesson)
+            indegree[lesson] += 1
+    q = deque(sorted(n for n in nodes if indegree[n] == 0))
+    order: list[str] = []
+    while q:
+        n = q.popleft()
+        order.append(n)
+        for nxt in sorted(unlocks[n]):
+            indegree[nxt] -= 1
+            if indegree[nxt] == 0:
+                q.append(nxt)
+    if len(order) < len(nodes):
+        cycle = find_cycle(prereqs) or []
+        raise CurriculumError("prerequisite cycle: " + " requires ".join(cycle))
+    return order
+
+
+def find_cycle(graph: dict[str, list[str]]) -> list[str] | None:
+    """Iterative three-colour DFS from the challenge. Returns e.g. ['a', 'c', 'b', 'a']."""
+    WHITE, GREY, BLACK = 0, 1, 2
+    color = {n: WHITE for n in set(graph) | {m for ns in graph.values() for m in ns}}
+    for start in sorted(color):
+        if color[start] != WHITE:
+            continue
+        path, stack = [start], [(start, iter(sorted(graph.get(start, []))))]
+        color[start] = GREY
+        while stack:
+            node, it = stack[-1]
+            nxt = next(it, None)
+            if nxt is None:
+                color[node] = BLACK; path.pop(); stack.pop()
+            elif color[nxt] == GREY:
+                return path[path.index(nxt):] + [nxt]
+            elif color[nxt] == WHITE:
+                color[nxt] = GREY; path.append(nxt)
+                stack.append((nxt, iter(sorted(graph.get(nxt, [])))))
+    return None
+
+
+def validate(lessons: list[dict[str, Any]]) -> list[str]:
+    """lessons: [{"id": "2.3.2", "prerequisites": ["2.3.1"]}, ...]. Returns the study order."""
+    ids = [lesson["id"] for lesson in lessons]
+    dupes = sorted(i for i, n in Counter(ids).items() if n > 1)     # O(V), not ids.count in a loop
+    if dupes:
+        raise CurriculumError(f"duplicate lesson ids: {dupes}")
+    known = set(ids)
+    prereqs = {lesson["id"]: list(lesson.get("prerequisites", [])) for lesson in lessons}
+    unknown = sorted(f"{lid} -> {p}" for lid, ps in prereqs.items() for p in ps if p not in known)
+    if unknown:
+        raise CurriculumError(f"unknown prerequisites: {unknown}")
+    return study_order(prereqs)
+
+
+def load_lessons(path: Path) -> list[dict[str, Any]]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+if __name__ == "__main__":
+    lessons: list[dict[str, Any]] = [{"id": "2.1.1", "prerequisites": ["1.1.1"]}, {"id": "1.1.1"},
+               {"id": "2.3.2", "prerequisites": ["2.3.1", "2.1.1"]},
+               {"id": "2.3.1", "prerequisites": ["2.1.1"]}]
+    print(validate(lessons))
+    lessons[1]["prerequisites"] = ["2.3.2"]           # introduce a cycle
+    try:
+        validate(lessons)
+    except CurriculumError as e:
+        print(e)
+
+# ---- services/ai/tests/test_curriculum.py ----
+import json
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from devatlas_ai.curriculum import CurriculumError, load_lessons, validate
+
+CONTENT = Path(__file__).parent.parent / "content" / "lessons.json"
+
+
+def test_real_curriculum_is_a_dag() -> None:
+    """The CI gate: fails the build with the exact cycle if someone adds one."""
+    lessons = load_lessons(CONTENT)
+    order = validate(lessons)
+    position = {lid: i for i, lid in enumerate(order)}
+    for lesson in lessons:                             # every prerequisite comes first
+        for p in lesson.get("prerequisites", []):
+            assert position[p] < position[lesson["id"]]
+
+
+def test_cycle_message_names_the_path() -> None:
+    lessons: list[dict[str, Any]] = [{"id": "a", "prerequisites": ["c"]}, {"id": "b", "prerequisites": ["a"]},
+               {"id": "c", "prerequisites": ["b"]}, {"id": "d"}]
+    with pytest.raises(CurriculumError, match=r"^prerequisite cycle: a requires c requires b requires a$"):
+        validate(lessons)
+
+
+def test_self_prerequisite_is_a_cycle() -> None:
+    with pytest.raises(CurriculumError, match="a requires a"):
+        validate([{"id": "a", "prerequisites": ["a"]}])
+
+
+def test_unknown_and_duplicate_ids() -> None:
+    with pytest.raises(CurriculumError, match="unknown prerequisites: \\\\['b -> zz'\\\\]"):
+        validate([{"id": "b", "prerequisites": ["zz"]}])
+    with pytest.raises(CurriculumError, match="duplicate"):
+        validate([{"id": "a"}, {"id": "a"}])
+
+
+def test_empty_and_independent_lessons() -> None:
+    assert validate([]) == []
+    assert validate([{"id": "b"}, {"id": "a"}]) == ["a", "b"]      # deterministic
+
+
+def test_load_from_file(tmp_path: Path) -> None:
+    f = tmp_path / "lessons.json"
+    f.write_text(json.dumps([{"id": "x"}, {"id": "y", "prerequisites": ["x"]}]))
+    assert validate(load_lessons(f)) == ["x", "y"]
+
+# ---- services/ai/content/lessons.json ----
+[
+  {"id": "1.1.1", "title": "Python essentials"},
+  {"id": "2.1.1", "title": "Big-O and hash maps", "prerequisites": ["1.1.1"]},
+  {"id": "2.1.2", "title": "Two pointers and sliding window", "prerequisites": ["2.1.1"]},
+  {"id": "2.2.1", "title": "Stacks, queues and linked lists", "prerequisites": ["2.1.2"]},
+  {"id": "2.2.2", "title": "Recursion, sorting and binary search", "prerequisites": ["2.2.1"]},
+  {"id": "2.3.1", "title": "Trees, BSTs and heaps", "prerequisites": ["2.2.2"]},
+  {"id": "2.3.2", "title": "Graphs: BFS, DFS, Dijkstra, union-find", "prerequisites": ["2.3.1"]},
+  {"id": "2.3.3", "title": "Tries", "prerequisites": ["2.3.1"]}
+]` },
+        output: "['1.1.1', '2.1.1', '2.3.1', '2.3.2']\nprerequisite cycle: 1.1.1 requires 2.3.2 requires 2.1.1 requires 1.1.1",
+        pitfalls: [
+          "Reporting only 'cycle detected': content authors need the exact path to fix it.",
+          "Silently ignoring unknown prerequisite ids: a typo like '2.3.l' leaves a lesson looking unlocked.",
+        ],
       },
     },
   },

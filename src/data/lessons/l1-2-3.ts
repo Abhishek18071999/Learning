@@ -330,7 +330,157 @@ export function loadEnv(env: Record<string, string | undefined>): Config {
       criteria: ["No any in the API layer", "Every response validated before use", "tsc --noEmit passes in CI"],
       hints: ["Later you can generate these types from the ASP.NET Core OpenAPI document."],
       solution: {
-        text: ["Keep all API calls in one module that returns validated, typed data; components then never deal with unknown shapes."],
+        text: [
+          "Keep all API calls in one module that returns validated, typed data; components then never deal with unknown shapes.",
+          "types.ts declares the four shapes and one guard per shape, built from tiny reusable checks (`isRecord`, `isString`, `isNumber`, `isIsoDate`) and a generic `arrayOf` that turns a guard for T into a guard for T[]. Guards check rules the type alone cannot express: minutes > 0, score between 0 and 1, http(s) news links only.",
+          "client.ts reuses the lesson's `getJson` and exposes one function per endpoint through `createApi(base, fetchFn)`. Injecting fetch lets the Vitest file test success, wrong shape and HTTP errors without a server. Verified with `tsc --noEmit` (strict, noUncheckedIndexedAccess) and `vitest run`: 4 tests pass.",
+        ],
+        code: {
+          lang: "typescript", file: "web/src/api/types.ts",
+          code: `// Shapes returned by the DevAtlas API, plus runtime guards. Types vanish at runtime,
+// so every response is checked by a guard before the rest of the app sees it.
+
+export type Level = "Beginner" | "Intermediate" | "Advanced";
+const LEVELS: readonly string[] = ["Beginner", "Intermediate", "Advanced"];
+
+export interface Lesson {
+  id: string;
+  title: string;
+  minutes: number;
+  level: Level;
+  tags?: string[];
+}
+
+export interface Progress {
+  lessonId: string;
+  completed: boolean;
+  updatedAt: string; // ISO 8601
+}
+
+export interface QuizResult {
+  userId: number;
+  lessonId: string;
+  score: number; // 0..1
+  takenAt: string; // ISO 8601
+}
+
+export interface NewsItem {
+  title: string;
+  url: string;
+  source: string;
+  publishedAt: string; // ISO 8601
+}
+
+export type Guard<T> = (data: unknown) => data is T;
+
+const isRecord = (d: unknown): d is Record<string, unknown> =>
+  typeof d === "object" && d !== null && !Array.isArray(d);
+const isString = (d: unknown): d is string => typeof d === "string";
+const isNumber = (d: unknown): d is number => typeof d === "number" && Number.isFinite(d);
+const isIsoDate = (d: unknown): d is string => isString(d) && !Number.isNaN(Date.parse(d));
+
+export const arrayOf =
+  <T>(guard: Guard<T>): Guard<T[]> =>
+  (d): d is T[] =>
+    Array.isArray(d) && d.every(guard);
+
+export const isLesson: Guard<Lesson> = (d): d is Lesson =>
+  isRecord(d) &&
+  isString(d.id) &&
+  isString(d.title) &&
+  isNumber(d.minutes) && d.minutes > 0 &&
+  isString(d.level) && LEVELS.includes(d.level) &&
+  (d.tags === undefined || arrayOf(isString)(d.tags));
+
+export const isProgress: Guard<Progress> = (d): d is Progress =>
+  isRecord(d) && isString(d.lessonId) && typeof d.completed === "boolean" && isIsoDate(d.updatedAt);
+
+export const isQuizResult: Guard<QuizResult> = (d): d is QuizResult =>
+  isRecord(d) &&
+  Number.isInteger(d.userId) &&
+  isString(d.lessonId) &&
+  isNumber(d.score) && d.score >= 0 && d.score <= 1 &&
+  isIsoDate(d.takenAt);
+
+export const isNewsItem: Guard<NewsItem> = (d): d is NewsItem =>
+  isRecord(d) &&
+  isString(d.title) &&
+  isString(d.url) && /^https?:\\/\\//.test(d.url) && // blocks javascript: links in rendered anchors
+  isString(d.source) &&
+  isIsoDate(d.publishedAt);
+
+// ---- web/src/api/client.ts ----
+// The only module that talks to the API. Components import these functions and get typed,
+// validated data; they never see \`unknown\` or call fetch themselves.
+import {
+  arrayOf, isLesson, isNewsItem, isProgress, isQuizResult,
+  type Guard, type Lesson, type NewsItem, type Progress, type QuizResult,
+} from "./types";
+
+export async function getJson<T>(url: string, validate: Guard<T>, fetchFn: typeof fetch = fetch): Promise<T> {
+  const res = await fetchFn(url, { signal: AbortSignal.timeout(5000), headers: { Accept: "application/json" } });
+  if (!res.ok) throw new Error(\`HTTP \${res.status} for \${url}\`);
+  const data: unknown = await res.json();
+  if (!validate(data)) throw new Error(\`Unexpected response shape from \${url}\`);
+  return data;
+}
+
+export function createApi(base: string, fetchFn: typeof fetch = fetch) {
+  const get = <T>(path: string, guard: Guard<T>) => getJson(\`\${base}\${path}\`, guard, fetchFn);
+  return {
+    lessons: (): Promise<Lesson[]> => get("/lessons", arrayOf(isLesson)),
+    lesson: (id: string): Promise<Lesson> => get(\`/lessons/\${encodeURIComponent(id)}\`, isLesson),
+    progress: (): Promise<Progress[]> => get("/me/progress", arrayOf(isProgress)),
+    quizResults: (lessonId: string): Promise<QuizResult[]> =>
+      get(\`/me/quiz-results?lesson=\${encodeURIComponent(lessonId)}\`, arrayOf(isQuizResult)),
+    news: (): Promise<NewsItem[]> => get("/news", arrayOf(isNewsItem)),
+  };
+}
+
+export type Api = ReturnType<typeof createApi>;
+
+// ---- web/src/api/client.test.ts ----
+import { describe, expect, it } from "vitest";
+import { createApi } from "./client";
+
+// A fake fetch: the network is the boundary we replace in tests.
+function fakeFetch(routes: Record<string, unknown>): typeof fetch {
+  return async (input) => {
+    const url = String(input);
+    return url in routes ? Response.json(routes[url]) : new Response("not found", { status: 404 });
+  };
+}
+
+const lesson = { id: "1.2.3", title: "TypeScript", minutes: 70, level: "Beginner", tags: ["ts"] };
+
+describe("api client", () => {
+  it("returns typed, validated lessons", async () => {
+    const api = createApi("/api", fakeFetch({ "/api/lessons": [lesson] }));
+    const lessons = await api.lessons();
+    expect(lessons[0]?.minutes).toBe(70);
+  });
+
+  it("rejects a response with the wrong shape", async () => {
+    const api = createApi("/api", fakeFetch({ "/api/lessons/1.2.3": { ...lesson, minutes: "70" } }));
+    await expect(api.lesson("1.2.3")).rejects.toThrow("Unexpected response shape from /api/lessons/1.2.3");
+  });
+
+  it("rejects out-of-range scores and unsafe news links", async () => {
+    const api = createApi("/api", fakeFetch({
+      "/api/me/quiz-results?lesson=1.2.3": [{ userId: 7, lessonId: "1.2.3", score: 80, takenAt: "2026-10-18T09:00:00Z" }],
+      "/api/news": [{ title: "x", url: "javascript:alert(1)", source: "y", publishedAt: "2026-10-18" }],
+    }));
+    await expect(api.quizResults("1.2.3")).rejects.toThrow("Unexpected response shape");
+    await expect(api.news()).rejects.toThrow("Unexpected response shape");
+  });
+
+  it("surfaces HTTP errors", async () => {
+    const api = createApi("/api", fakeFetch({}));
+    await expect(api.progress()).rejects.toThrow("HTTP 404 for /api/me/progress");
+  });
+});`,
+        },
+        pitfalls: ["Writing `const data = await res.json() as Lesson[]`: a cast is a promise to the compiler, not a check, and bad data flows straight into components", "Checking only the outer array and not every element", "Letting components call fetch directly, so validation is skipped on the one call nobody remembered"],
       },
     },
   },

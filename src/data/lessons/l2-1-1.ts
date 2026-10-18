@@ -34,7 +34,7 @@ export const lesson: Lesson = {
     text: [
       "A dict stores entries in an array of slots. To insert key k it computes `hash(k)`, maps it to a slot index, and stores the entry there. If the slot is taken (a **collision**) it probes for another slot (CPython uses open addressing). When the table gets too full it allocates a bigger one and re-inserts everything: that occasional O(n) resize is why insertion is *amortised* O(1).",
       "Keys must be **hashable**: their hash must never change. That is why lists cannot be dict keys in Python but tuples of immutable values can.",
-      "Real numbers at n = 1,000,000: O(n log n) ≈ 20 million steps (fine); O(n²) = 10¹² steps (hours). Rule of thumb for interviews: roughly 10⁷–10⁸ simple operations per second in Python's ballpark is far less than C++; know your constraints.",
+      "Real numbers at n = 1,000,000: O(n log n) ≈ 20 million steps (fine); O(n²) = 10¹² steps (hours). Rule of thumb: Python does roughly 10⁷ simple operations per second; compiled languages like C++ or Rust roughly 10⁸ to 10⁹.",
     ],
     diagram: {
       title: "Hash map lookup",
@@ -271,7 +271,123 @@ def top_k_bucket(nums: list[int], k: int) -> list[int]:
       brief: ["Add `dedupe_new(new_articles, stored_urls: set[str])` to the AI service, reusing your URL normaliser from lesson 1.1.1. Benchmark 5,000 new vs 200,000 stored URLs and record the time in the README."],
       criteria: ["O(new + stored) complexity", "Benchmark numbers recorded", "Unit tests"],
       hints: ["Generate fake URLs with f-strings in a loop."],
-      solution: { text: ["Normalise stored URLs once into a set, then filter new articles with an O(1) membership check each. Expect milliseconds, compared to minutes for the nested version."] },
+      solution: {
+        text: [
+          "Normalise the stored URLs once into a set with `build_url_index` (O(stored), done at startup or kept as a normalised column), then `dedupe_new` normalises each new URL and checks the set: O(1) average per article, O(new) per batch and O(new + stored) overall. A second small set catches duplicates inside the same batch without mutating the caller's index.",
+          "Measured on a shared machine: building the 200,000-URL index took about 1 s, the 5,000-article dedupe about 20 ms, and the nested version (a list scan per new article) 10 to 25 s on the same input. Record your own numbers in the README; the ratio matters more than the absolute times.",
+          "Run from services/ai: `python -m devatlas_ai.dedupe` prints the benchmark, `pytest` runs the tests.",
+        ],
+        code: { lang: "python", file: "services/ai/devatlas_ai/dedupe.py", code: `"""Article dedupe for the ingester: O(new + stored) with a set of normalised URLs."""
+from collections.abc import Iterable
+from dataclasses import dataclass
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+
+@dataclass(frozen=True)
+class Article:
+    title: str
+    url: str
+    published_at: str
+
+
+def norm_url(url: str) -> str:
+    """URL normaliser from lesson 1.1.1: lowercase host, drop utm_*, trailing '/' and #fragment."""
+    p = urlsplit(url.strip())
+    query = urlencode([(k, v) for k, v in parse_qsl(p.query) if not k.startswith("utm_")])
+    return urlunsplit((p.scheme.lower(), p.netloc.lower(), p.path.rstrip("/"), query, ""))
+
+
+def build_url_index(urls: Iterable[str]) -> set[str]:
+    """Normalise stored URLs once (at startup, or keep a normalised column). O(stored)."""
+    return {norm_url(u) for u in urls}
+
+
+def dedupe_new(new_articles: Iterable[Article], stored_urls: set[str]) -> list[Article]:
+    """Return new articles whose normalised URL is not in stored_urls or earlier in this batch.
+
+    stored_urls must already be normalised (see build_url_index). Time O(new): one O(1)
+    average set lookup per article; with building the index, O(new + stored) overall.
+    Extra space O(new) for the URLs added during this batch. Keeps the first duplicate.
+    """
+    in_batch: set[str] = set()         # separate set: the caller's index is never mutated
+    fresh: list[Article] = []
+    for article in new_articles:
+        key = norm_url(article.url)
+        if key not in stored_urls and key not in in_batch:
+            in_batch.add(key)                              # also dedupes inside the batch
+            fresh.append(article)
+    return fresh
+
+
+def dedupe_nested(new_articles: list[Article], stored_urls: list[str]) -> list[Article]:
+    """The old O(new x stored) version, kept only for the benchmark."""
+    return [a for a in new_articles if norm_url(a.url) not in stored_urls]   # list scan each
+
+
+if __name__ == "__main__":
+    import time
+
+    raw = [f"https://news.example.com/story/{i}/?utm_source=rss" for i in range(200_000)]
+    new = [Article(f"Story {i}", f"https://NEWS.example.com/story/{i}", "2026-10-18")
+           for i in range(197_500, 202_500)]               # 2,500 already stored, 2,500 fresh
+
+    t = time.perf_counter()
+    index = build_url_index(raw)
+    print(f"build index of 200,000 stored URLs (once): {time.perf_counter() - t:.2f}s")
+
+    t = time.perf_counter()
+    fresh = dedupe_new(new, index)
+    print(f"dedupe_new, 5,000 new: {(time.perf_counter() - t) * 1000:.0f} ms, fresh: {len(fresh)}")
+
+    stored_list = list(index)
+    t = time.perf_counter()
+    assert dedupe_nested(new, stored_list) == fresh
+    print(f"nested version, same input: {time.perf_counter() - t:.1f}s")
+
+# ---- services/ai/tests/test_dedupe.py ----
+from devatlas_ai.dedupe import Article, build_url_index, dedupe_new, norm_url
+
+
+def art(url: str, title: str = "t") -> Article:
+    return Article(title, url, "2026-10-18")
+
+
+def test_norm_url_ignores_tracking_case_and_trailing_slash() -> None:
+    assert norm_url(" https://Example.com/a/?utm_source=x&id=7#top ") == "https://example.com/a?id=7"
+
+
+def test_filters_stored_urls_after_normalising_both_sides() -> None:
+    index = build_url_index(["https://example.com/a/?utm_medium=email"])
+    fresh = dedupe_new([art("https://EXAMPLE.com/a"), art("https://example.com/b")], index)
+    assert [a.url for a in fresh] == ["https://example.com/b"]
+    assert index == {"https://example.com/a"}             # caller's index not mutated
+
+
+def test_duplicates_inside_the_batch_keep_the_first() -> None:
+    batch = [art("https://x.io/p", "first"), art("https://x.io/p/", "second")]
+    assert [a.title for a in dedupe_new(batch, set())] == ["first"]
+
+
+def test_edge_cases_empty_inputs_and_meaningful_query_params() -> None:
+    assert dedupe_new([], {"https://x.io"}) == []
+    assert dedupe_new([art("https://x.io/p")], set()) == [art("https://x.io/p")]
+    assert len(dedupe_new([art("https://x.io/p?id=1")], {"https://x.io/p?id=2"})) == 1
+
+
+def test_scales_linearly() -> None:
+    import time
+    stored = {f"https://x.io/{i}" for i in range(200_000)}
+    new = [art(f"https://x.io/{i}") for i in range(195_000, 200_000)]
+    t = time.perf_counter()
+    assert dedupe_new(new, stored) == []
+    assert time.perf_counter() - t < 1    # O(new + stored); the nested version takes seconds` },
+        output: "build index of 200,000 stored URLs (once): ~1s (varies by machine)\ndedupe_new, 5,000 new: ~20 ms, fresh: 2500\nnested version, same input: ~10-25s",
+        pitfalls: [
+          "Normalising only one side: stored and new URLs must go through the same norm_url, or 'https://X.com/a/' and 'https://x.com/a' look different.",
+          "Re-normalising all stored URLs on every batch: that is where most of the time goes, so build the index once.",
+          "Forgetting duplicates inside the batch itself: two feeds often carry the same story in one run.",
+        ],
+      },
     },
   },
   deeper: [

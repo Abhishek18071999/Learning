@@ -209,7 +209,7 @@ print(min_daily_minutes(lessons, 90))`,
   cheatSheet: [
     "Recursion: base case first, trust smaller calls, combine.",
     "Merge sort O(n log n) stable; quicksort average O(n log n), worst O(n²).",
-    "Built-in sort: sorted(xs, key=..., reverse=...) — stable, Timsort.",
+    "Built-in sort: sorted(xs, key=..., reverse=...): stable, Timsort.",
     "Binary search O(log n) on sorted data; bisect_left/bisect_right.",
     "Invariant + one bound convention ([lo, hi)) prevents off-by-ones.",
     "Binary search on the answer: monotonic feasible(x).",
@@ -298,7 +298,141 @@ assert min_capacity([3, 2, 2, 4, 1, 4], 3) == 6`,
       criteria: ["O(log n) lookup", "Sorted order maintained on insert", "Tests with equal timestamps"],
       hints: ["Python 3.10+ bisect functions accept key=."],
       solution: {
-        text: ["bisect.insort(items, item, key=lambda i: i.published_at) keeps order; items[bisect_left(items, ts, key=...):] returns everything since ts."],
+        text: [
+          "`RecentNews` keeps one invariant: the list is sorted by `published_at`. `insert_item` uses `bisect.insort_right(..., key=...)` (Python 3.10+), which places an item after existing items with the same timestamp, so ties stay in arrival order. Finding the slot is O(log n); shifting the list is O(n) in the worst case, but it is a fast memory move and fine for tens of thousands of items.",
+          "`items_since(ts)` uses `bisect_left` with the same key, so items exactly at ts are included, then slices: O(log n + k) for k results. One test swaps in a counting key function to show the lookup reads at most 17 keys for 100,000 items; others cover equal timestamps, an empty list, cutoffs before and after everything, and a randomised comparison with a linear scan.",
+          "Naive datetimes are rejected because comparing naive and aware datetimes raises TypeError, and mixing time zones would misorder news from different sources. `max_items` bounds memory by dropping the oldest items.",
+          "Run from services/ai: `python -m devatlas_ai.recent_news` prints the output below, `pytest` runs the tests.",
+        ],
+        code: { lang: "python", file: "services/ai/devatlas_ai/recent_news.py", code: `"""In-memory recent news, kept sorted by published time for O(log n) 'since' queries."""
+import bisect
+from dataclasses import dataclass
+from datetime import datetime, timezone
+
+
+@dataclass(frozen=True)
+class NewsItem:
+    id: str
+    title: str
+    published_at: datetime          # timezone-aware, so comparisons are unambiguous
+
+
+def _published(item: NewsItem) -> datetime:
+    return item.published_at
+
+
+class RecentNews:
+    """Invariant: self._items is sorted by published_at; equal times keep arrival order."""
+
+    def __init__(self, max_items: int = 10_000) -> None:
+        self._items: list[NewsItem] = []
+        self.max_items = max_items
+
+    def insert_item(self, item: NewsItem) -> None:
+        """O(log n) to find the slot + O(n) worst case to shift the list (memmove, fast in practice).
+
+        insort_right puts an item after existing items with the same timestamp (stable).
+        """
+        if item.published_at.tzinfo is None:
+            raise ValueError("published_at must be timezone-aware")
+        bisect.insort_right(self._items, item, key=_published)
+        if len(self._items) > self.max_items:          # bound memory: drop the oldest
+            del self._items[: len(self._items) - self.max_items]
+
+    def items_since(self, ts: datetime) -> list[NewsItem]:
+        """All items with published_at >= ts, oldest first. O(log n + k) for k results."""
+        start = bisect.bisect_left(self._items, ts, key=_published)   # first item at or after ts
+        return self._items[start:]
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+
+if __name__ == "__main__":
+    def at(hour: int) -> datetime:
+        return datetime(2026, 10, 18, hour, tzinfo=timezone.utc)
+
+    news = RecentNews()
+    for i, h in enumerate([9, 7, 12, 9, 15]):           # arrives out of order, two at 09:00
+        news.insert_item(NewsItem(f"n{i}", f"story {i}", at(h)))
+    print([(n.id, n.published_at.hour) for n in news.items_since(at(9))])
+    print(len(news.items_since(at(16))), len(news.items_since(at(0))))
+
+# ---- services/ai/tests/test_recent_news.py ----
+import random
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from devatlas_ai.recent_news import NewsItem, RecentNews
+
+T0 = datetime(2026, 10, 18, tzinfo=timezone.utc)
+
+
+def item(i: str, minutes: int) -> NewsItem:
+    return NewsItem(i, f"title {i}", T0 + timedelta(minutes=minutes))
+
+
+def test_since_includes_items_exactly_at_ts_and_keeps_arrival_order_for_ties() -> None:
+    news = RecentNews()
+    for i, m in [("a", 10), ("b", 5), ("c", 10), ("d", 20), ("e", 10)]:
+        news.insert_item(item(i, m))
+    assert [n.id for n in news.items_since(T0 + timedelta(minutes=10))] == ["a", "c", "e", "d"]
+
+
+def test_edges_empty_before_all_after_all() -> None:
+    news = RecentNews()
+    assert news.items_since(T0) == []
+    news.insert_item(item("a", 1))
+    assert [n.id for n in news.items_since(T0 - timedelta(days=1))] == ["a"]
+    assert news.items_since(T0 + timedelta(minutes=2)) == []
+
+
+def test_sorted_order_maintained_and_matches_linear_scan() -> None:
+    rng = random.Random(42)
+    news = RecentNews()
+    inserted = [item(str(i), rng.randint(0, 100)) for i in range(500)]
+    for it in inserted:
+        news.insert_item(it)
+    times = [n.published_at for n in news.items_since(T0)]
+    assert times == sorted(times)
+    cutoff = T0 + timedelta(minutes=50)
+    expected = sorted((n for n in inserted if n.published_at >= cutoff), key=lambda n: n.published_at)
+    assert news.items_since(cutoff) == expected      # stable sort == insort_right order
+
+
+def test_max_items_drops_oldest() -> None:
+    news = RecentNews(max_items=2)
+    for i, m in [("a", 1), ("b", 3), ("c", 2)]:
+        news.insert_item(item(i, m))
+    assert [n.id for n in news.items_since(T0)] == ["c", "b"]
+
+
+def test_naive_datetime_rejected() -> None:
+    with pytest.raises(ValueError):
+        RecentNews().insert_item(NewsItem("x", "t", datetime(2026, 1, 1)))
+
+
+def test_lookup_is_logarithmic(monkeypatch: pytest.MonkeyPatch) -> None:
+    import devatlas_ai.recent_news as mod
+    news = RecentNews(max_items=200_000)
+    for i in range(100_000):
+        news.insert_item(item(str(i), i))
+    calls = 0
+
+    def counting_key(n: NewsItem) -> datetime:
+        nonlocal calls
+        calls += 1
+        return n.published_at
+
+    monkeypatch.setattr(mod, "_published", counting_key)
+    assert len(news.items_since(T0 + timedelta(minutes=70_000))) == 30_000
+    assert calls <= 17                          # ceil(log2(100_000)) = 17 key reads, not 100,000` },
+        output: "[('n0', 9), ('n3', 9), ('n2', 12), ('n4', 15)]\n0 5",
+        pitfalls: [
+          "Passing an item as the search value to bisect_left with key=: the value must already be the key (the timestamp). insort is different: it applies key to the item.",
+          "Calling insort O(log n): only the search is. Inserting into a Python list shifts elements, so for heavy write loads use a heap or a sorted-container library.",
+        ],
       },
     },
   },

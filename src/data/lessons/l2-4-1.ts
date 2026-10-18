@@ -307,7 +307,180 @@ assert [len(parens(k)) for k in range(1, 6)] == [1, 2, 5, 14, 42]`,
       criteria: ["Pruning on time and remaining coverage", "Deterministic output (sorted input)", "Completes within 100 ms on 200 questions in tests"],
       hints: ["Prune when remaining time cannot cover the phases still missing."],
       solution: {
-        text: ["Sort by time, track remaining minutes and uncovered phases, and stop a branch early when it is impossible to finish. For larger banks, a solver library (OR-Tools CP-SAT) is a sensible upgrade."],
+        text: [
+          "`build_quiz` sorts questions by (minutes, id), so the search order, and therefore the first quiz found, is the same whatever order the bank arrives in. It is the choose / explore / un-choose template from the lesson with four prunes: time (stop the loop when a question no longer fits, valid because the list is sorted); coverage (enough questions of each missing phase must remain, and the time left must fit the cheapest questions still needed per phase); reachability (bit t of `reach[i]` is set when some subset of the remaining questions sums to t, built with one big-integer shift per question); and a cache of dead states (index, time left, still-needed counts) that already failed.",
+          "The worst case is still exponential, since this is a subset-sum variant with extra constraints, but the 200-question tests finish well under the 100 ms limit, including impossible cases such as an odd target when every question has an even length, which the reachability check rejects at once. A brute-force test over every subset of 40 small banks checks that the search finds a quiz exactly when one exists.",
+          "`min_per_phase` maps a phase to its minimum number of questions, so {\"ai\": 1, \"dsa\": 1} means at least one of each. For bigger banks or more rules (difficulty mix, no repeats across weeks), switch to a solver such as OR-Tools CP-SAT. Run from services/ai: `python -m devatlas_ai.quiz_builder` prints the output below, `pytest` runs the tests.",
+        ],
+        code: { lang: "python", file: "services/ai/devatlas_ai/quiz_builder.py", code: `"""Balanced quiz builder: exact total time + phase coverage, by backtracking with pruning."""
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Question:
+    id: str
+    phase: str
+    minutes: int
+
+
+def build_quiz(questions: list[Question], minutes: int,
+               min_per_phase: dict[str, int]) -> list[Question] | None:
+    """First quiz (in sorted order) whose minutes sum to \`minutes\` and that has at least
+    min_per_phase[p] questions from each phase p. None if impossible.
+
+    Worst case exponential (it is a subset-sum variant), but pruning keeps real inputs fast:
+      1. time: questions are sorted by minutes, so stop the loop once one does not fit;
+      2. coverage: the time left must fit the cheapest questions still needed per phase,
+         and enough questions of each missing phase must remain after index i;
+      3. reachability: reach[i] is a bitmask of every total some subset of qs[i:] can make,
+         so a branch stops at once if \`left\` is not reachable at all (e.g. odd target, even times);
+      4. dead states: (index, time left, still-needed counts) that already failed are skipped.
+    """
+    if minutes <= 0 or any(m < 0 for m in min_per_phase.values()):
+        raise ValueError("minutes must be > 0 and phase minimums >= 0")
+    qs = sorted(questions, key=lambda q: (q.minutes, q.id))      # deterministic order
+    phases = sorted(p for p, m in min_per_phase.items() if m > 0)
+    n = len(qs)
+    # remaining[i][j] = how many questions of phases[j] exist in qs[i:]
+    remaining = [[0] * len(phases) for _ in range(n + 1)]
+    for i in range(n - 1, -1, -1):
+        remaining[i] = remaining[i + 1].copy()
+        if qs[i].phase in phases:
+            remaining[i][phases.index(qs[i].phase)] += 1
+    # cheapest[j][c] = minutes of the c cheapest questions of phases[j] (lower bound for coverage)
+    cheapest: list[list[int]] = []
+    for p in phases:
+        prefix = [0]
+        for q in qs:
+            if q.phase == p:
+                prefix.append(prefix[-1] + q.minutes)
+        cheapest.append(prefix)
+
+    full = (1 << (minutes + 1)) - 1
+    reach = [1] * (n + 1)                                          # bit t set = total t possible
+    for i in range(n - 1, -1, -1):
+        reach[i] = (reach[i + 1] | (reach[i + 1] << qs[i].minutes)) & full
+
+    chosen: list[Question] = []
+    dead: set[tuple[int, int, tuple[int, ...]]] = set()
+
+    def backtrack(start: int, left: int, need: tuple[int, ...]) -> bool:
+        if left == 0:
+            return not any(need)
+        state = (start, left, need)
+        if state in dead or not (reach[start] >> left) & 1:
+            return False
+        for j, c in enumerate(need):                               # coverage pruning
+            if c > remaining[start][j]:
+                dead.add(state)
+                return False
+        if sum(cheapest[j][c] for j, c in enumerate(need)) > left:
+            dead.add(state)
+            return False
+        for i in range(start, n):
+            q = qs[i]
+            if q.minutes > left:
+                break                                              # time pruning: sorted
+            if q.minutes == 0:
+                continue
+            j = phases.index(q.phase) if q.phase in phases else -1
+            next_need = need if j < 0 or need[j] == 0 else need[:j] + (need[j] - 1,) + need[j + 1:]
+            chosen.append(q)                                       # choose
+            if backtrack(i + 1, left - q.minutes, next_need):      # explore
+                return True
+            chosen.pop()                                           # un-choose
+        dead.add(state)
+        return False
+
+    start_need = tuple(min_per_phase[p] for p in phases)
+    return chosen.copy() if backtrack(0, minutes, start_need) else None
+
+
+if __name__ == "__main__":
+    bank = [Question("sql-1", "data", 10), Question("git-1", "tools", 5), Question("docker-1", "tools", 15),
+            Question("rag-1", "ai", 20), Question("http-1", "web", 5), Question("dsa-1", "dsa", 10)]
+    quiz = build_quiz(bank, 30, {"ai": 1, "dsa": 1})
+    print([q.id for q in quiz] if quiz else None)
+    print(build_quiz(bank, 30, {"ai": 1, "data": 1, "dsa": 1}))
+
+# ---- services/ai/tests/test_quiz_builder.py ----
+import itertools
+import random
+import time
+
+import pytest
+
+from devatlas_ai.quiz_builder import Question, build_quiz
+
+PHASES = ["dsa", "web", "data", "ai", "ops"]
+
+
+def valid(quiz: list[Question], minutes: int, need: dict[str, int]) -> bool:
+    return (sum(q.minutes for q in quiz) == minutes and len({q.id for q in quiz}) == len(quiz)
+            and all(sum(q.phase == p for q in quiz) >= c for p, c in need.items()))
+
+
+def bank(n: int, seed: int) -> list[Question]:
+    rng = random.Random(seed)
+    return [Question(f"q{i:03}", rng.choice(PHASES), rng.randint(2, 15)) for i in range(n)]
+
+
+def test_small_example_and_impossible_coverage() -> None:
+    qs = [Question("a", "ai", 20), Question("b", "dsa", 10), Question("c", "web", 5)]
+    quiz = build_quiz(qs, 30, {"ai": 1, "dsa": 1})
+    assert quiz is not None and [q.id for q in quiz] == ["b", "a"]
+    assert build_quiz(qs, 30, {"web": 1, "ai": 1}) is None      # 25 or 35, never 30
+    assert build_quiz([], 10, {}) is None
+
+
+def test_matches_brute_force_on_small_banks() -> None:
+    for seed in range(40):
+        qs = bank(10, seed)
+        need = {"dsa": 1, "web": 1}
+        target = random.Random(seed).randint(10, 40)
+        exists = any(valid(list(c), target, need)
+                     for r in range(1, 11) for c in itertools.combinations(qs, r))
+        quiz = build_quiz(qs, target, need)
+        assert (quiz is not None) == exists
+        if quiz is not None:
+            assert valid(quiz, target, need)
+
+
+def test_deterministic_regardless_of_input_order() -> None:
+    qs = bank(60, 3)
+    first = build_quiz(qs, 45, {p: 1 for p in PHASES})
+    assert first is not None and first == build_quiz(list(reversed(qs)), 45, {p: 1 for p in PHASES})
+
+
+@pytest.mark.parametrize("target,need", [(45, {p: 1 for p in PHASES}),
+                                         (60, {"dsa": 2, "ai": 2, "ops": 1}),
+                                         (9, {p: 1 for p in PHASES})])  # impossible: 5 phases x 2+ min
+def test_200_questions_under_100_ms(target: int, need: dict[str, int]) -> None:
+    qs = bank(200, 11)
+    t = time.perf_counter()
+    quiz = build_quiz(qs, target, need)
+    assert time.perf_counter() - t < 0.1
+    if target == 9:
+        assert quiz is None
+    else:
+        assert quiz is not None and valid(quiz, target, need)
+
+
+def test_impossible_parity_finishes_fast() -> None:
+    qs = [Question(f"q{i:03}", PHASES[i % 5], 2 * (1 + i % 7)) for i in range(200)]   # all even
+    t = time.perf_counter()
+    assert build_quiz(qs, 61, {"dsa": 1}) is None                                    # odd target
+    assert time.perf_counter() - t < 0.1
+
+
+def test_invalid_arguments() -> None:
+    with pytest.raises(ValueError):
+        build_quiz([], 0, {})` },
+        output: "['dsa-1', 'rag-1']\nNone",
+        pitfalls: [
+          "Unsorted input: the `break` on time is only valid when later questions are at least as long, and the 'first' quiz would change with input order.",
+          "Checking coverage only when the time reaches zero: the search explores huge numbers of branches that can never cover the missing phases.",
+        ],
       },
     },
   },

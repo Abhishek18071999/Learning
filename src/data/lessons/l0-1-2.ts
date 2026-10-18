@@ -221,7 +221,107 @@ curl -i localhost:8000/users/1 -H "If-None-Match: $ETAG"`,
       criteria: ["Six codes with one-line reasons", "Distinguishes 400/409/422 correctly"],
       hints: ["Is it the client's fault (4xx) or the server's (5xx)?"],
       solution: {
-        text: ["1) 409 Conflict (valid request, conflicts with existing state). 2) 400 Bad Request (malformed). 3) 429 Too Many Requests with Retry-After. 4) 503 Service Unavailable (or 500 if unhandled; 503 signals 'try later'). 5) 204 No Content. 6) 301, or 308 if the method must be preserved."],
+        text: [
+          "1) 409 Conflict (valid request, conflicts with existing state). 2) 400 Bad Request (malformed). 3) 429 Too Many Requests with Retry-After. 4) 503 Service Unavailable (or 500 if unhandled; 503 signals 'try later'). 5) 204 No Content. 6) 301, or 308 if the method must be preserved.",
+          "status_detective.py implements each scenario in a small standard-library server and probes it, so you see the code and the headers a client actually receives: Retry-After on 429 and 503, Location on 301. The client does not follow the redirect, so the 301 itself is visible.",
+        ],
+        code: { lang: "python", file: "status_detective.py", code: `"""Status code detective: each scenario implemented by a tiny server, then probed.
+
+Run: python3 status_detective.py   (Python 3.10+, standard library only)
+"""
+import json
+import threading
+import time
+from collections import deque
+import urllib.error
+import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+USERS = {"asha@example.com", "ravi@example.com"}
+DB_UP = False  # pretend the database is down
+hits: dict[str, deque[float]] = {}  # client IP -> request times in the last second
+
+
+class Handler(BaseHTTPRequestHandler):
+    def reply(self, status: int, body: dict | None = None, headers: dict | None = None) -> None:
+        data = json.dumps(body).encode() if body is not None else b""
+        self.send_response(status)
+        for k, v in (headers or {}).items():
+            self.send_header(k, v)
+        if body is not None:
+            self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_POST(self) -> None:  # POST /signup
+        raw = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        try:
+            body = json.loads(raw)
+        except json.JSONDecodeError:  # (2) malformed: the client must fix the syntax
+            return self.reply(400, {"error": {"code": "invalid_json"}})
+        if body.get("email") in USERS:  # (1) valid request, clashes with existing state
+            return self.reply(409, {"error": {"code": "email_taken"}})
+        self.reply(201, {"email": body["email"]}, {"Location": "/users/3"})
+
+    def do_GET(self) -> None:
+        if self.path == "/old-pricing":  # (6) moved for good; GET-only, so 301 is fine
+            return self.reply(301, headers={"Location": "/pricing"})
+        if self.path == "/orders":  # (4) a dependency is down: temporary, retry later
+            if not DB_UP:
+                return self.reply(503, {"error": {"code": "db_unavailable"}}, {"Retry-After": "30"})
+        if self.path == "/search":  # (3) more than 100 requests per second from one client
+            now, window = time.monotonic(), hits.setdefault(self.client_address[0], deque())
+            window.append(now)
+            while window[0] < now - 1:
+                window.popleft()
+            if len(window) > 100:
+                return self.reply(429, {"error": {"code": "rate_limited"}}, {"Retry-After": "1"})
+        self.reply(200, {"ok": True})
+
+    def do_DELETE(self) -> None:  # (5) done, nothing to return
+        self.reply(204)
+
+    def log_message(self, *args) -> None:  # keep the demo output clean
+        pass
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None  # show the 301 itself instead of following it
+
+
+OPENER = urllib.request.build_opener(NoRedirect, urllib.request.ProxyHandler({}))  # no proxy for localhost
+
+
+def probe(method: str, path: str, body: bytes | None = None) -> tuple[int, str]:
+    req = urllib.request.Request(f"http://127.0.0.1:{PORT}{path}", data=body, method=method)
+    try:
+        with OPENER.open(req) as resp:
+            return resp.status, resp.reason
+    except urllib.error.HTTPError as err:
+        extra = [f"{h}: {err.headers[h]}" for h in ("Retry-After", "Location") if h in err.headers]
+        return err.code, " ".join([err.reason, *extra])
+
+
+server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+PORT = server.server_address[1]
+threading.Thread(target=server.serve_forever, daemon=True).start()
+
+for _ in range(200):  # burn through the rate limit first
+    last = probe("GET", "/search")
+cases = [
+    ("1 signup, email exists", probe("POST", "/signup", b'{"email": "asha@example.com"}')),
+    ("2 JSON missing a brace", probe("POST", "/signup", b'{"email": "new@example.com"')),
+    ("3 200 requests in 1 s", last),
+    ("4 database is down", probe("GET", "/orders")),
+    ("5 DELETE succeeded", probe("DELETE", "/users/2")),
+    ("6 moved permanently", probe("GET", "/old-pricing")),
+]
+for name, (code, reason) in cases:
+    print(f"{name:26} {code} {reason}")
+server.shutdown()` },
+        output: "1 signup, email exists     409 Conflict\n2 JSON missing a brace     400 Bad Request\n3 200 requests in 1 s      429 Too Many Requests Retry-After: 1\n4 database is down         503 Service Unavailable Retry-After: 30\n5 DELETE succeeded         204 No Content\n6 moved permanently        301 Moved Permanently Location: /pricing",
         pitfalls: ["Using 500 for validation errors", "Using 401 for rate limiting"],
       },
     },
@@ -265,7 +365,84 @@ curl -i localhost:8000/users/1 -H "If-None-Match: $ETAG"`,
         text: [
           "Hashed JS/CSS: `public, max-age=31536000, immutable`. Images (not hashed): `public, max-age=86400` plus ETag. Homepage: `public, max-age=0, s-maxage=60, stale-while-revalidate=30` so the CDN refreshes every minute and serves slightly stale content while refetching. Articles: `public, s-maxage=3600, stale-while-revalidate=600`. My account: `private, no-store`. /api/me: `private, no-cache` with ETag, or `no-store` if it contains sensitive data.",
           "stale-while-revalidate lets a cache serve an expired copy immediately while it fetches a fresh one in the background, hiding origin latency from users.",
+          "Expiry vs revalidation: max-age and s-maxage say how long a copy may be reused without asking at all. Revalidation (no-cache, or max-age=0 with an ETag) means the cache asks every time but only downloads the body if it changed; otherwise it gets a 304 with no body.",
+          "cache_policy.py keeps the whole policy in one ordered table, serves each resource type with its header and proves revalidation: sending the ETag back returns 304 with 0 body bytes. In production the same table becomes CDN rules or nginx `location` blocks.",
         ],
+        code: { lang: "python", file: "cache_policy.py", code: `"""Caching policy for a news site, served and checked end to end.
+
+Run: python3 cache_policy.py   (Python 3.10+, standard library only)
+"""
+import hashlib
+import threading
+import urllib.error
+import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+# (path prefix, Cache-Control, send an ETag?)   First match wins, so order matters.
+POLICY: list[tuple[str, str, bool]] = [
+    # Content-hashed name: a change means a new URL, so cache "forever".
+    ("/assets/", "public, max-age=31536000, immutable", False),
+    # Same URL may get a new image (crop, correction): a day, then revalidate cheaply.
+    ("/images/", "public, max-age=86400", True),
+    # Personal pages must never land in a shared cache, or on disk.
+    ("/account", "private, no-store", False),
+    # Personal API: browser may keep it but must revalidate (304 if unchanged).
+    ("/api/me", "private, no-cache", True),
+    # Articles: browsers revalidate, CDN keeps 1 h and may serve stale for 10 min while refetching.
+    ("/articles/", "public, max-age=0, s-maxage=3600, stale-while-revalidate=600", True),
+    # Homepage changes every minute: CDN holds 60 s, serves stale up to 30 s during refresh.
+    ("/", "public, max-age=0, s-maxage=60, stale-while-revalidate=30", True),
+]
+
+
+def policy_for(path: str) -> tuple[str, bool]:
+    for prefix, header, etag in POLICY:
+        if path.startswith(prefix):  # "/" is last, so it catches the homepage and other HTML
+            return header, etag
+    raise LookupError(path)
+
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        body = f"content of {self.path}".encode()  # stand-in for the real page or file
+        cache_control, use_etag = policy_for(self.path)
+        etag = '"' + hashlib.sha256(body).hexdigest()[:12] + '"'
+        if use_etag and self.headers.get("If-None-Match") == etag:
+            self.send_response(304)  # unchanged: headers only, no body
+            body = b""
+        else:
+            self.send_response(200)
+        self.send_header("Cache-Control", cache_control)
+        if use_etag:
+            self.send_header("ETag", etag)
+        if self.path.startswith(("/account", "/api/me")):
+            self.send_header("Vary", "Cookie")  # belt and braces for any cache in between
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args) -> None:
+        pass
+
+
+server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+base = f"http://127.0.0.1:{server.server_address[1]}"
+threading.Thread(target=server.serve_forever, daemon=True).start()
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+for path in ["/assets/app.3f9a1c.js", "/images/flood.jpg", "/", "/articles/budget-2026",
+             "/account", "/api/me"]:
+    with opener.open(base + path) as resp:
+        print(f"{path:24} {resp.status} {resp.headers['Cache-Control']}")
+        etag = resp.headers.get("ETag")
+    if etag:  # prove revalidation: send the validator back, expect 304 and no body
+        try:
+            opener.open(urllib.request.Request(base + path, headers={"If-None-Match": etag}))
+        except urllib.error.HTTPError as err:  # urllib reports 304 as an "error"
+            print(f"{'':24} {err.code} on revalidation, {len(err.read())} body bytes")
+server.shutdown()` },
+        output: "/assets/app.3f9a1c.js    200 public, max-age=31536000, immutable\n/images/flood.jpg        200 public, max-age=86400\n                         304 on revalidation, 0 body bytes\n/                        200 public, max-age=0, s-maxage=60, stale-while-revalidate=30\n                         304 on revalidation, 0 body bytes\n/articles/budget-2026    200 public, max-age=0, s-maxage=3600, stale-while-revalidate=600\n                         304 on revalidation, 0 body bytes\n/account                 200 private, no-store\n/api/me                  200 private, no-cache\n                         304 on revalidation, 0 body bytes",
+        pitfalls: ["Putting `public` or `s-maxage` on anything that differs per user", "Using no-cache when you mean no-store: no-cache still stores the response"],
       },
     },
     capstone: {

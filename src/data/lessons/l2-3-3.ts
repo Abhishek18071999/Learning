@@ -319,7 +319,194 @@ assert find_words(["oaan", "etae", "ihkr", "iflv"], ["oath", "pea", "eat", "rain
       criteria: ["Normalised, case-insensitive matching", "Top 5 ranked results", "p95 latency measured with a quick load test"],
       hints: ["Build the trie once at startup; rebuild on content changes."],
       solution: {
-        text: ["Load content at startup, insert normalised titles and terms with scores, and keep the trie in memory; with debouncing on the client, request volume stays small."],
+        text: [
+          "`SuggestTrie` is the lesson's trie with two changes for real titles: it indexes every word start (so 'binary' finds 'Recursion, sorting and binary search'), and it stores the display item at the end node because the key itself is normalised. `normalise` is shared by insert and query: NFKD plus dropping combining marks removes accents, casefold handles case, and punctuation and repeated whitespace collapse to single spaces.",
+          "A lookup walks the prefix in O(P), collects the items below it with an iterative DFS, removes items that matched at several word starts, and keeps the top 5 by score with heapq.nsmallest on (-score, text): O(M log 5) for M matches. The trie is built once in the FastAPI lifespan; content changes ship with a deploy, which rebuilds it.",
+          "`Query(min_length=1, max_length=64)` returns 422 for missing, empty or huge queries, which bounds the work per request. On the frontend, wrap the fetch in the debounce from lesson 1.2.2 (about 150 to 250 ms) so typing a word sends one or two requests instead of one per key.",
+          "`python -m devatlas_ai.api` runs a quick in-process load test with TestClient (2,000 requests). It measures the app and routing, not the network; for a realistic p95, run `uvicorn devatlas_ai.api:app` and point a load tool such as hey or k6 at it. `pytest` runs the tests.",
+        ],
+        code: { lang: "python", file: "services/ai/devatlas_ai/suggest.py", code: `"""Autocomplete over lesson titles and glossary terms, backed by the lesson's trie."""
+import heapq
+import re
+import unicodedata
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Suggestion:
+    text: str            # display form, original casing
+    kind: str            # "lesson" or "term"
+    score: int           # popularity (higher is better)
+
+
+def normalise(text: str) -> str:
+    """One function for insert and query: strip accents, casefold, keep letters/digits/spaces."""
+    decomposed = unicodedata.normalize("NFKD", text)
+    no_marks = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+    return " ".join(re.sub(r"[^\\w]+", " ", no_marks.casefold()).split())
+
+
+class TrieNode:
+    __slots__ = ("children", "items")
+
+    def __init__(self) -> None:
+        self.children: dict[str, TrieNode] = {}
+        self.items: list[Suggestion] = []          # non-empty = some key ends here
+
+
+class SuggestTrie:
+    def __init__(self) -> None:
+        self.root = TrieNode()
+
+    def insert(self, item: Suggestion) -> None:
+        """Index every word start, so 'binary' finds 'Recursion, sorting and binary search'.
+
+        O(W * L) for W words of a title of length L; memory is one node per distinct prefix.
+        """
+        words = normalise(item.text).split()
+        for i in range(len(words)):
+            node = self.root
+            for ch in " ".join(words[i:]):
+                node = node.children.setdefault(ch, TrieNode())
+            node.items.append(item)
+
+    def suggest(self, query: str, k: int = 5) -> list[Suggestion]:
+        """O(P) to walk the prefix + O(M log k) over the M completions below it."""
+        node = self.root
+        for ch in normalise(query):
+            child = node.children.get(ch)
+            if child is None:
+                return []
+            node = child
+        if node is self.root:
+            return []                                 # empty query after normalising
+        best: dict[Suggestion, None] = {}             # an item can match at several word starts
+        stack = [node]
+        while stack:                                  # iterative DFS: no recursion limit
+            n = stack.pop()
+            best.update(dict.fromkeys(n.items))
+            stack.extend(n.children.values())
+        return heapq.nsmallest(k, best, key=lambda s: (-s.score, s.text.casefold()))
+
+# ---- services/ai/devatlas_ai/api.py ----
+from collections.abc import AsyncIterator, Iterable
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, Query
+from pydantic import BaseModel
+
+from devatlas_ai.suggest import Suggestion, SuggestTrie
+
+
+class SuggestionOut(BaseModel):
+    text: str
+    kind: str
+
+
+def create_app(content: Iterable[Suggestion]) -> FastAPI:
+    trie = SuggestTrie()
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        for item in content:                          # built once at startup; rebuild on deploy
+            trie.insert(item)
+        yield
+
+    app = FastAPI(lifespan=lifespan)
+
+    @app.get("/suggest", response_model=list[SuggestionOut])
+    def suggest(q: str = Query(min_length=1, max_length=64)) -> list[Suggestion]:
+        return trie.suggest(q, k=5)                   # capped: bounded work per request
+
+    return app
+
+
+# In the service this comes from the content files; scores are lesson views / glossary lookups.
+LESSONS = [("Big-O and hash maps", 950), ("Two pointers and sliding window", 720),
+           ("Recursion, sorting and binary search", 640), ("Trees, BSTs and heaps", 610),
+           ("Graphs: BFS, DFS, Dijkstra, union-find", 580), ("Tries", 300)]
+TERMS = [("Binary search", 500), ("Hash map", 480), ("Heap", 450), ("Dijkstra's algorithm", 260),
+         ("Hash function", 200), ("Hashable", 90), ("Hashing", 80), ("Déjà vu bug", 10)]
+CONTENT = ([Suggestion(t, "lesson", s) for t, s in LESSONS]
+           + [Suggestion(t, "term", s) for t, s in TERMS])
+app = create_app(CONTENT)                             # uvicorn devatlas_ai.api:app
+
+
+if __name__ == "__main__":
+    import random
+    import statistics
+    import time
+
+    from fastapi.testclient import TestClient
+
+    with TestClient(app) as client:
+        print([s["text"] for s in client.get("/suggest", params={"q": "has"}).json()])
+        print([s["text"] for s in client.get("/suggest", params={"q": "  BINARY se"}).json()])
+        rng, latencies = random.Random(0), []
+        for _ in range(2000):                          # quick in-process load test
+            q = rng.choice(["h", "ha", "bin", "tr", "dij", "gra", "zz", "deja"])
+            t = time.perf_counter()
+            assert client.get("/suggest", params={"q": q}).status_code == 200
+            latencies.append((time.perf_counter() - t) * 1000)
+        p95 = statistics.quantiles(latencies, n=100)[94]
+        print(f"p95 over 2000 requests: {p95:.1f} ms")
+
+# ---- services/ai/tests/test_suggest.py ----
+from collections.abc import Iterator
+
+import pytest
+from fastapi.testclient import TestClient
+
+from devatlas_ai.api import CONTENT, create_app
+from devatlas_ai.suggest import Suggestion, SuggestTrie, normalise
+
+
+@pytest.fixture
+def client() -> Iterator[TestClient]:
+    with TestClient(create_app(CONTENT)) as c:
+        yield c
+
+
+def texts(client: TestClient, q: str) -> list[str]:
+    resp = client.get("/suggest", params={"q": q})
+    assert resp.status_code == 200
+    return [s["text"] for s in resp.json()]
+
+
+def test_top_5_ranked_by_score(client: TestClient) -> None:
+    assert texts(client, "h") == [
+        "Big-O and hash maps", "Trees, BSTs and heaps", "Hash map", "Heap", "Hash function"]
+
+
+def test_case_accents_and_whitespace_are_normalised(client: TestClient) -> None:
+    assert texts(client, "DEJA") == ["Déjà vu bug"]
+    assert texts(client, "  binary   SE") == [
+        "Recursion, sorting and binary search", "Binary search"]
+
+
+def test_mid_title_word_matches_once(client: TestClient) -> None:
+    assert texts(client, "s").count("Recursion, sorting and binary search") == 1
+
+
+def test_no_match_and_validation(client: TestClient) -> None:
+    assert texts(client, "zzz") == []
+    assert texts(client, "!!!") == []      # empty after normalising
+    assert client.get("/suggest", params={"q": ""}).status_code == 422
+    assert client.get("/suggest", params={"q": "x" * 65}).status_code == 422
+    assert client.get("/suggest").status_code == 422
+
+
+def test_trie_unit() -> None:
+    t = SuggestTrie()
+    t.insert(Suggestion("Docker", "term", 90)); t.insert(Suggestion("docs", "term", 40))
+    assert [s.text for s in t.suggest("DOC", k=1)] == ["Docker"]
+    assert normalise("Crème  Brûlée!") == "creme brulee"` },
+        output: "['Big-O and hash maps', 'Hash map', 'Hash function', 'Hashable', 'Hashing']\n['Recursion, sorting and binary search', 'Binary search']\np95 over 2000 requests: ~1-5 ms (varies by machine)",
+        pitfalls: [
+          "Normalising the inserted titles but not the query (or the reverse): 'Déjà' then never matches 'deja'.",
+          "Returning every completion for a one-letter prefix: cap k and the query length.",
+          "Building the trie inside the request handler: an O(P) lookup becomes O(all content) on every keystroke.",
+        ],
       },
     },
   },

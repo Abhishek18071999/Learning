@@ -317,7 +317,160 @@ assert list(heapq.merge([1, 4, 7], [2, 5], [0, 9])) == [0, 1, 2, 4, 5, 7, 9]`,
       criteria: ["O(log k) add", "Duplicate story ids handled", "Tests"],
       hints: ["Keep a dict of current scores; when popping, skip heap entries whose score no longer matches (lazy deletion)."],
       solution: {
-        text: ["Lazy deletion keeps updates cheap: push the new (score, id) and ignore stale entries when they surface. Periodically rebuild if stale entries accumulate."],
+        text: [
+          "The heap holds the top k as (score, -seq, story_id) entries, so `heap[0]` is the weakest story in the top k. A new story either fills a free slot or replaces the weakest if it beats it: O(log k). A higher score for a story already in the top k pushes a fresh entry and leaves the old one stale; `_live` records which entry is current, so stale entries are skipped when they surface (lazy deletion) and compacted once the heap exceeds 2k entries, which keeps it O(k) in size.",
+          "A lower score for a story inside the top k is the one case lazy deletion cannot handle: a story evicted earlier may now deserve the slot. That path rebuilds the top k from the full score dict with heapq.nlargest, O(n log k), which is why the tracker keeps every story's latest score (O(n) memory). If trending scores only grow within a time bucket, the rebuild never runs.",
+          "Ties go to the story that reached its score first (the sequence number), so `top()` is deterministic. The main test replays 15,000 random adds and updates and compares every `top()` with a brute-force sort. Run from services/ai: `python -m devatlas_ai.trending` prints the output below, `pytest` runs the tests.",
+        ],
+        code: { lang: "python", file: "services/ai/devatlas_ai/trending.py", code: `"""Trending stories: a bounded min-heap of the top k, with lazy deletion for score updates."""
+import heapq
+import itertools
+
+
+class TrendingTracker:
+    """Keeps the k highest-scoring stories. Ties: the story that reached its score first ranks higher.
+
+    - _scores: latest (score, seq) per story. O(n) memory, needed so a story that falls out of the
+      top k can be replaced by the right one.
+    - _heap: min-heap of (score, -seq, story_id). The weakest top-k entry is at _heap[0].
+    - _live: story_id -> seq of its current heap entry. Any other entry is stale (lazy deletion).
+    Invariant: the live entries are exactly the top min(k, n) stories.
+    """
+
+    def __init__(self, k: int) -> None:
+        if k < 1:
+            raise ValueError("k must be >= 1")
+        self.k = k
+        self._scores: dict[str, tuple[int, int]] = {}
+        self._heap: list[tuple[int, int, str]] = []
+        self._live: dict[str, int] = {}
+        self._seq = itertools.count()
+
+    def _is_live(self, entry: tuple[int, int, str]) -> bool:
+        return self._live.get(entry[2]) == -entry[1]
+
+    def _drop_stale_top(self) -> None:
+        while self._heap and not self._is_live(self._heap[0]):
+            heapq.heappop(self._heap)
+
+    def _push(self, story_id: str) -> None:
+        score, seq = self._scores[story_id]
+        heapq.heappush(self._heap, (score, -seq, story_id))   # O(log heap)
+        self._live[story_id] = seq
+
+    def _rebuild(self) -> None:
+        """O(n log k): recompute the top k from all scores. Only needed when a top story drops."""
+        best = heapq.nlargest(self.k, self._scores.items(), key=lambda kv: (kv[1][0], -kv[1][1]))
+        self._heap = [(score, -seq, sid) for sid, (score, seq) in best]
+        heapq.heapify(self._heap)
+        self._live = {sid: seq for sid, (_, seq) in best}
+
+    def add(self, story_id: str, score: int) -> None:
+        """New story or score update. O(log k) amortised; O(n log k) if a top-k score decreases."""
+        old = self._scores.get(story_id)
+        if old is not None and old[0] == score:
+            return                                  # unchanged: keep its place in tie order
+        self._scores[story_id] = (score, next(self._seq))
+        if story_id in self._live:
+            if old is not None and score < old[0]:
+                self._rebuild()                     # it may now lose to a story outside the heap
+            else:
+                self._push(story_id)                # old entry becomes stale
+        elif len(self._live) < self.k:
+            self._push(story_id)
+        else:
+            self._drop_stale_top()
+            weakest_score, weakest_neg_seq, weakest_id = self._heap[0]
+            if (score, -self._scores[story_id][1]) > (weakest_score, weakest_neg_seq):
+                heapq.heappop(self._heap)
+                del self._live[weakest_id]
+                self._push(story_id)
+        if len(self._heap) > 2 * self.k:            # too many stale entries: compact to O(k)
+            self._heap = [e for e in self._heap if self._is_live(e)]
+            heapq.heapify(self._heap)
+
+    def top(self) -> list[tuple[str, int]]:
+        """Best first. O(k log k)."""
+        live = sorted((e for e in self._heap if self._is_live(e)), reverse=True)
+        return [(sid, score) for score, _, sid in live]
+
+
+if __name__ == "__main__":
+    t = TrendingTracker(k=3)
+    for story, score in [("rust-2024", 320), ("k8s-tips", 95), ("pg-18", 410),
+                         ("css-grid", 60), ("llm-evals", 280)]:
+        t.add(story, score)
+    print(t.top())
+    t.add("k8s-tips", 500)          # update an existing story upward
+    t.add("pg-18", 10)              # a top story drops out: llm-evals comes back
+    print(t.top())
+
+# ---- services/ai/tests/test_trending.py ----
+import random
+
+import pytest
+
+from devatlas_ai.trending import TrendingTracker
+
+
+def reference_top(scores: dict[str, tuple[int, int]], k: int) -> list[tuple[str, int]]:
+    order = sorted(scores.items(), key=lambda kv: (-kv[1][0], kv[1][1]))
+    return [(sid, s) for sid, (s, _) in order[:k]]
+
+
+def test_basic_top_k_and_fewer_than_k() -> None:
+    t = TrendingTracker(k=3)
+    assert t.top() == []
+    t.add("a", 5)
+    assert t.top() == [("a", 5)]
+    for sid, s in [("b", 9), ("c", 1), ("d", 7)]:
+        t.add(sid, s)
+    assert t.top() == [("b", 9), ("d", 7), ("a", 5)]
+
+
+def test_duplicate_ids_update_instead_of_appearing_twice() -> None:
+    t = TrendingTracker(k=2)
+    t.add("a", 5); t.add("b", 4); t.add("a", 6)
+    assert t.top() == [("a", 6), ("b", 4)]
+    t.add("c", 3); t.add("a", 1)                     # a falls out, c returns
+    assert t.top() == [("b", 4), ("c", 3)]
+
+
+def test_ties_keep_the_earlier_story() -> None:
+    t = TrendingTracker(k=1)
+    t.add("first", 10); t.add("second", 10); t.add("first", 10)   # re-adding same score is a no-op
+    assert t.top() == [("first", 10)]
+
+
+def test_heap_stays_bounded() -> None:
+    t = TrendingTracker(k=5)
+    for i in range(10_000):
+        t.add(f"s{i % 50}", i)                        # constant upward updates
+    assert len(t._heap) <= 2 * t.k + 1
+
+
+def test_matches_brute_force_on_random_operations() -> None:
+    rng = random.Random(1)
+    for _ in range(50):
+        k = rng.randint(1, 5)
+        t, seq = TrendingTracker(k), 0
+        scores: dict[str, tuple[int, int]] = {}
+        for _ in range(300):
+            sid, score = f"s{rng.randint(0, 15)}", rng.randint(0, 30)
+            t.add(sid, score)
+            if scores.get(sid, (None,))[0] != score:
+                scores[sid] = (score, seq); seq += 1
+            assert t.top() == reference_top(scores, k)
+
+
+def test_invalid_k() -> None:
+    with pytest.raises(ValueError):
+        TrendingTracker(0)` },
+        output: "[('pg-18', 410), ('rust-2024', 320), ('llm-evals', 280)]\n[('k8s-tips', 500), ('rust-2024', 320), ('llm-evals', 280)]",
+        pitfalls: [
+          "Pushing a new entry for an updated story without tracking which entry is current: the same story appears twice in the top k.",
+          "Ignoring score decreases: with a plain bounded heap, a story that drops keeps its slot, and the true next-best story never comes back.",
+        ],
       },
     },
   },

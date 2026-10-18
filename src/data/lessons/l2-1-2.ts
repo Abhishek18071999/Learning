@@ -360,7 +360,169 @@ assert min_window("a", "aa") == ""`,
       criteria: ["O(n) badge computation", "Limiter tests with explicit times (no real clock)", "Documented memory cost per key"],
       hints: ["Memory per key is O(limit) timestamps."],
       solution: {
-        text: ["Inject `now` into the limiter (as in lesson 1.1.4) so tests are deterministic. Memory is O(limit) per active key; expire idle keys periodically to bound total memory."],
+        text: [
+          "`best_streak_minutes` is the fixed window from the lesson: add the day entering, subtract the day leaving, O(n) time and O(1) space. Users with fewer than k days get None (no badge yet) instead of an exception, and a randomised test compares it with the brute-force O(n·k) sums.",
+          "The limiter takes an injectable `clock` (default `time.monotonic`, which never jumps backwards) and an optional `now`, so tests pass explicit timestamps and never sleep. `retry_after` gives the value for a 429 response's Retry-After header, which is what HTTP middleware needs.",
+          "Memory is O(limit) timestamps per active key, O(active keys × limit) in total: with limit 100 and 50,000 active keys that is 5 million timestamps, on the order of 150 MB in CPython. `prune_idle` removes keys with no events in the window (call it from a periodic task); beyond one process, move the same idea to Redis (lesson 4.4.2).",
+          "Run from services/ai: `python -m devatlas_ai.ratelimit` prints the output below, `pytest` runs the tests.",
+        ],
+        code: { lang: "python", file: "services/ai/devatlas_ai/streaks.py", code: `"""Best-week badge: fixed sliding window over daily study minutes."""
+
+
+def best_streak_minutes(daily_minutes: list[int], k: int = 7) -> int | None:
+    """Max total minutes over any k consecutive days, or None if there are fewer than k days.
+
+    O(n) time, O(1) extra space: each step adds the day entering and subtracts the day leaving.
+    """
+    if k <= 0:
+        raise ValueError("k must be >= 1")
+    if len(daily_minutes) < k:
+        return None                          # not enough history for the badge yet
+    window = best = sum(daily_minutes[:k])
+    for right in range(k, len(daily_minutes)):
+        window += daily_minutes[right] - daily_minutes[right - k]
+        best = max(best, window)
+    return best
+
+# ---- services/ai/devatlas_ai/ratelimit.py ----
+"""Sliding-window rate limiter with an injectable clock, ready to wrap in HTTP middleware."""
+import time
+from collections import deque
+from collections.abc import Callable
+
+
+class SlidingWindowLimiter:
+    """At most \`limit\` events per \`window\` seconds per key.
+
+    Memory: O(limit) timestamps per active key (one float each, plus deque overhead),
+    so O(active_keys * limit) in total. Call prune_idle() periodically to drop idle keys.
+    allow() is amortised O(1): each timestamp is appended once and popped at most once.
+    """
+
+    def __init__(self, limit: int, window: float,
+                 clock: Callable[[], float] = time.monotonic) -> None:
+        if limit < 1 or window <= 0:
+            raise ValueError("limit must be >= 1 and window > 0")
+        self.limit, self.window, self._clock = limit, window, clock
+        self._events: dict[str, deque[float]] = {}
+
+    def _expire(self, q: deque[float], now: float) -> None:
+        while q and q[0] <= now - self.window:     # shrink: drop timestamps outside (now-window, now]
+            q.popleft()
+
+    def allow(self, key: str, now: float | None = None) -> bool:
+        now = self._clock() if now is None else now
+        q = self._events.setdefault(key, deque())
+        self._expire(q, now)
+        if len(q) >= self.limit:
+            return False                            # rejected requests are not recorded
+        q.append(now)
+        return True
+
+    def retry_after(self, key: str, now: float | None = None) -> float:
+        """Seconds until the next request for key would be allowed (for a Retry-After header)."""
+        now = self._clock() if now is None else now
+        q = self._events.get(key)
+        if not q:
+            return 0.0
+        self._expire(q, now)
+        return 0.0 if len(q) < self.limit else q[0] + self.window - now
+
+    def prune_idle(self, now: float | None = None) -> int:
+        """Remove keys with no events inside the window. O(keys). Returns how many were removed."""
+        now = self._clock() if now is None else now
+        idle = [k for k, q in self._events.items() if not q or q[-1] <= now - self.window]
+        for k in idle:
+            del self._events[k]
+        return len(idle)
+
+    def active_keys(self) -> int:
+        return len(self._events)
+
+
+if __name__ == "__main__":
+    from devatlas_ai.streaks import best_streak_minutes
+    print(best_streak_minutes([30, 0, 45, 60, 20, 0, 90, 40, 10, 75]))
+    rl = SlidingWindowLimiter(limit=3, window=60)
+    print([rl.allow("asha", t) for t in [0, 10, 20, 30, 61, 75]], rl.retry_after("asha", 75))
+
+# ---- services/ai/tests/test_streaks.py ----
+import pytest
+
+from devatlas_ai.streaks import best_streak_minutes
+
+
+def brute(xs: list[int], k: int) -> int:
+    return max(sum(xs[i:i + k]) for i in range(len(xs) - k + 1))
+
+
+def test_best_week() -> None:
+    daily = [30, 0, 45, 60, 20, 0, 90, 40, 10, 75]
+    assert best_streak_minutes(daily) == 295 == brute(daily, 7)
+
+
+def test_edge_cases() -> None:
+    assert best_streak_minutes([10] * 6) is None            # fewer than 7 days: no badge
+    assert best_streak_minutes([5] * 7) == 35                # window is the whole list
+    assert best_streak_minutes([0, 9, 0], k=1) == 9
+    with pytest.raises(ValueError):
+        best_streak_minutes([1, 2], k=0)
+
+
+def test_matches_brute_force_on_random_input() -> None:
+    import random
+    rng = random.Random(7)
+    for _ in range(200):
+        xs = [rng.randint(0, 120) for _ in range(rng.randint(1, 40))]
+        k = rng.randint(1, len(xs))
+        assert best_streak_minutes(xs, k) == brute(xs, k)
+
+# ---- services/ai/tests/test_ratelimit.py ----
+import pytest
+
+from devatlas_ai.ratelimit import SlidingWindowLimiter
+
+
+def test_limit_and_window_with_fixed_times() -> None:
+    rl = SlidingWindowLimiter(limit=3, window=60)
+    assert [rl.allow("asha", t) for t in [0, 10, 20, 30]] == [True, True, True, False]
+    assert rl.retry_after("asha", 30) == 30                  # t=0 leaves the window at t=60
+    assert rl.allow("asha", 59.9) is False
+    assert rl.allow("asha", 60) is True                      # boundary: (0, 60] excludes t=0
+
+
+def test_keys_are_independent() -> None:
+    rl = SlidingWindowLimiter(limit=1, window=10)
+    assert rl.allow("a", 0) and rl.allow("b", 0)
+    assert not rl.allow("a", 5)
+
+
+def test_injected_clock_and_rejections_not_counted() -> None:
+    now = [0.0]
+    rl = SlidingWindowLimiter(limit=2, window=10, clock=lambda: now[0])
+    assert rl.allow("k") and rl.allow("k") and not rl.allow("k")
+    now[0] = 10.0
+    assert rl.allow("k")                                     # both earlier events expired
+
+
+def test_memory_is_bounded_per_key_and_idle_keys_pruned() -> None:
+    rl = SlidingWindowLimiter(limit=5, window=60)
+    for t in range(1000):
+        rl.allow("bot", t * 0.01)
+    assert len(rl._events["bot"]) == 5                       # O(limit) per key
+    rl.allow("human", 0)
+    assert rl.prune_idle(now=1000) == 2 and rl.active_keys() == 0
+
+
+def test_invalid_config() -> None:
+    with pytest.raises(ValueError):
+        SlidingWindowLimiter(limit=0, window=60)` },
+        output: "295\n[True, True, True, False, True, True] 5",
+        pitfalls: [
+          "Calling time.time() inside allow(): tests then need sleeps, and wall-clock adjustments can break the window. Inject the clock and use time.monotonic.",
+          "Recording rejected requests: a client that keeps retrying would never get back under the limit.",
+          "Never deleting idle keys: memory grows with every user or IP ever seen.",
+        ],
       },
     },
   },

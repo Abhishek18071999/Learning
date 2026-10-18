@@ -277,8 +277,93 @@ echo "deployed to $host"`,
       solution: {
         text: [
           "1) `adduser deploy && usermod -aG sudo deploy`. 2) Put your public key in /home/deploy/.ssh/authorized_keys (dir 700, file 600, owned by deploy). 3) In /etc/ssh/sshd_config set `PasswordAuthentication no` and `PermitRootLogin no` (some images also have files in /etc/ssh/sshd_config.d/ that override these). 4) `sudo sshd -t` then restart the SSH service (named ssh or sshd depending on the distro). 5) In a NEW terminal, test `ssh deploy@host` works and `ssh -o PubkeyAuthentication=no deploy@host` is refused, while keeping your original session open in case you locked yourself out.",
+          "harden_ssh.sh scripts steps 1 to 4 on the server. It writes a drop-in file named 00-hardening.conf because sshd keeps the first value it reads for most settings, and Ubuntu and Debian include sshd_config.d/*.conf in name order at the top of sshd_config. A 00- file beats a cloud image's 50-cloud-init.conf that sets PasswordAuthentication yes; a 99- file would lose. It checks the effective settings with `sshd -T` before reloading.",
+          "verify_ssh.sh runs on your machine. A refused password login shows `Permission denied (publickey)`: the server no longer even offers password. The output shown is from a test on Ubuntu 24.04 with OpenSSH 9.6 in a container without systemd, so sshd was restarted by hand. Before hardening the same checks showed `(publickey,password)` and root could log in with a key.",
         ],
-        pitfalls: ["Closing your only session before testing", "Wrong permissions on .ssh, which makes sshd silently ignore the key"],
+        code: { lang: "bash", file: "harden_ssh.sh", code: `#!/usr/bin/env bash
+# Harden SSH on a throwaway test server. Run as root ON THE SERVER, from a session
+# you keep open until verify_ssh.sh passes from a second terminal.
+# usage: sudo ./harden_ssh.sh <new-user> <public-key-file>
+set -euo pipefail
+
+user="\${1:?usage: $0 <new-user> <public-key-file>}"
+pubkey="\${2:?usage: $0 <new-user> <public-key-file>}"
+[[ $EUID -eq 0 ]] || { echo "error: run as root (sudo)" >&2; exit 1; }
+grep -qE '^(ssh-ed25519|ecdsa-sha2-nistp[0-9]+|ssh-rsa) ' "$pubkey" ||
+  { echo "error: $pubkey does not look like an SSH public key" >&2; exit 1; }
+
+echo "== 1. Non-root user with sudo"
+id "$user" >/dev/null 2>&1 || adduser --disabled-password --gecos "" "$user"
+usermod -aG sudo "$user"
+# sudo needs a password; SSH will not accept it, but sudo will ask for it.
+passwd -S "$user" | grep -q " P " || passwd "$user"
+
+echo "== 2. Install the public key (dir 700, file 600, owned by the user)"
+home=$(getent passwd "$user" | cut -d: -f6)
+install -d -m 700 -o "$user" -g "$user" "$home/.ssh"
+auth="$home/.ssh/authorized_keys"
+touch "$auth"
+grep -qxF "$(cat "$pubkey")" "$auth" || cat "$pubkey" >> "$auth"
+chown "$user:$user" "$auth" && chmod 600 "$auth"
+
+echo "== 3. Drop-in config (files in sshd_config.d are read first; first value wins)"
+grep -q '^Include /etc/ssh/sshd_config.d/\\*.conf' /etc/ssh/sshd_config ||
+  { echo "error: sshd_config has no Include line; edit it directly instead" >&2; exit 1; }
+cat > /etc/ssh/sshd_config.d/00-hardening.conf <<CONF
+PermitRootLogin no
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PubkeyAuthentication yes
+MaxAuthTries 3
+LoginGraceTime 30
+X11Forwarding no
+CONF
+
+echo "== 4. Validate before touching the running daemon"
+install -d -m 755 /run/sshd          # sshd -t needs its privilege separation dir
+sshd -t
+effective=$(sshd -T -C user="$user",host=test,addr=127.0.0.1)
+for want in "permitrootlogin no" "passwordauthentication no" \\
+            "kbdinteractiveauthentication no" "pubkeyauthentication yes"; do
+  grep -qx "$want" <<<"$effective" || { echo "error: effective config lacks '$want'" >&2; exit 1; }
+  echo "ok  $want"
+done
+
+echo "== 5. Reload (existing sessions stay open)"
+if [[ -d /run/systemd/system ]]; then
+  systemctl reload ssh 2>/dev/null || systemctl reload sshd   # Debian/Ubuntu vs RHEL name
+else
+  echo "no systemd here: restart sshd yourself"
+fi
+echo "Now, in a NEW terminal: ./verify_ssh.sh <host> $user"
+
+# ---- verify_ssh.sh ----
+#!/usr/bin/env bash
+# Run from YOUR machine in a NEW terminal while the root session stays open.
+# usage: ./verify_ssh.sh <host> [user] [port]     (KEY=path overrides the private key)
+set -uo pipefail   # no -e: failed logins are expected results here
+
+host="\${1:?usage: $0 <host> [user] [port]}"
+user="\${2:-deploy}"
+port="\${3:-22}"
+key="\${KEY:-$HOME/.ssh/id_ed25519}"
+opts=(-p "$port" -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new -o LogLevel=ERROR)
+fail=0
+
+out=$(ssh "\${opts[@]}" -i "$key" -o IdentitiesOnly=yes "$user@$host" 'echo "logged in as $(whoami)"' 2>&1)
+if [[ $out == "logged in as $user" ]]; then echo "PASS key login: $out"; else echo "FAIL key login: $out"; fail=1; fi
+
+# Ask for password auth only. A hardened server does not even offer it.
+out=$(ssh "\${opts[@]}" -o PubkeyAuthentication=no "$user@$host" true 2>&1)
+if [[ $out == *"Permission denied (publickey)"* ]]; then
+  echo "PASS password login refused: server offers publickey only"
+else echo "FAIL password login: $out"; fail=1; fi
+
+out=$(ssh "\${opts[@]}" -i "$key" -o IdentitiesOnly=yes "root@$host" true 2>&1)
+if [[ $out == *"Permission denied"* ]]; then echo "PASS root login refused"; else echo "FAIL root login: $out"; fail=1; fi
+exit "$fail"` },
+        output: "== 1. Non-root user with sudo\n== 2. Install the public key (dir 700, file 600, owned by the user)\n== 3. Drop-in config (files in sshd_config.d are read first; first value wins)\n== 4. Validate before touching the running daemon\nok  permitrootlogin no\nok  passwordauthentication no\nok  kbdinteractiveauthentication no\nok  pubkeyauthentication yes\n== 5. Reload (existing sessions stay open)\nno systemd here: restart sshd yourself\nNow, in a NEW terminal: ./verify_ssh.sh <host> deploy\n\nPASS key login: logged in as deploy\nPASS password login refused: server offers publickey only\nPASS root login refused",
+        pitfalls: ["Closing your only session before testing", "Wrong permissions on .ssh, which makes sshd silently ignore the key", "Naming the drop-in 99-hardening.conf, so an earlier file such as 50-cloud-init.conf wins and passwords stay enabled"],
       },
     },
     capstone: {

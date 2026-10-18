@@ -249,7 +249,48 @@ public sealed class LeaderboardCache(IServiceScopeFactory scopes)
       criteria: ["Results from 3 calls", "Correct explanation of each line"],
       hints: ["curl localhost:5000/ids (check the port printed by dotnet run)."],
       solution: {
-        text: ["singleton is identical across all 3 calls; scopedSame is true each call (same request scope) but the scoped id changes between calls; transientSame is always false."],
+        text: [
+          "Run it with `dotnet run`, then call `curl http://localhost:5000/ids` three times (use the port dotnet run prints). The GUIDs are random, but the pattern is always the same. A real run (ids shortened to 8 hex digits):",
+          "Call 1: `{\"singleton\":\"88929624\",\"scoped\":\"f2e39fbc\",\"scopedSame\":true,\"transient1\":\"b469e58d\",\"transient2\":\"602ddef5\",\"transientSame\":false}`",
+          "Call 2: `{\"singleton\":\"88929624\",\"scoped\":\"3a24811f\",\"scopedSame\":true,\"transient1\":\"33a73256\",\"transient2\":\"6e9e79a4\",\"transientSame\":false}`",
+          "Call 3: `{\"singleton\":\"88929624\",\"scoped\":\"8069dc9e\",\"scopedSame\":true,\"transient1\":\"9c8abbd7\",\"transient2\":\"116b1062\",\"transientSame\":false}`",
+          "Singleton: the same id on all 3 calls, because one instance is created on first use and kept for the app's lifetime.",
+          "Scoped: `scopedSame` is true inside each call (both parameters came from the same request scope), but the scoped id changes between calls, because every HTTP request gets a new scope.",
+          "Transient: `transientSame` is always false, and all ids are new each call, because the container builds a new instance for every resolution, even twice in one request.",
+        ],
+        code: {
+          lang: "csharp", file: "Program.cs",
+          code: `// dotnet new web -n LifetimeLab, then replace Program.cs with this file
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddSingleton<SingletonId>();   // one instance for the whole app
+builder.Services.AddScoped<ScopedId>();         // one instance per HTTP request
+builder.Services.AddTransient<TransientId>();   // a new instance every time it is resolved
+
+var app = builder.Build();
+
+app.MapGet("/ids", (SingletonId s, ScopedId sc1, ScopedId sc2, TransientId t1, TransientId t2) => new
+{
+    singleton = s.Short,
+    scoped = sc1.Short,
+    scopedSame = sc1.Id == sc2.Id,        // same request scope -> same instance
+    transient1 = t1.Short,
+    transient2 = t2.Short,
+    transientSame = t1.Id == t2.Id,       // two resolutions -> two instances
+});
+
+app.Run();
+
+abstract class IdHolder
+{
+    public Guid Id { get; } = Guid.NewGuid();
+    public string Short => Id.ToString()[..8];   // first 8 hex digits are enough to compare
+}
+sealed class SingletonId : IdHolder;
+sealed class ScopedId : IdHolder;
+sealed class TransientId : IdHolder;`,
+        },
+        pitfalls: ["Reading the singleton id in two separate `dotnet run` sessions and concluding it changes: it lives for one process, not forever", "Expecting scoped to mean 'per user' or 'per session': it means per request scope"],
       },
     },
     intermediate: {

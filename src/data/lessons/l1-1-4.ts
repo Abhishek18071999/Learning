@@ -320,7 +320,156 @@ assert paginate([1, 2], 5) == [[1, 2]]`,
       criteria: ["CI fails if tests fail", "Coverage report printed in CI", "--cov-fail-under set to a realistic number"],
       hints: ["`pytest --cov=devatlas_ai --cov-fail-under=80`"],
       solution: {
-        text: ["Set the threshold at the current level and raise it over time, so coverage can only go up. Review uncovered lines for anything important rather than chasing the number."],
+        text: [
+          "conftest.py holds the fixtures every module shares: sample `Article` objects for dedupe, and a `make_client` fixture that builds an httpx.AsyncClient on MockTransport so the feed tests never touch the network. `make_client` depends on `feed_handler`, so a test can override the fake server by redefining one fixture.",
+          "test_feeds.py covers per-feed errors, the empty case and the `devatlas-ingest` CLI (sys.argv and the HTTP boundary are patched, the formatting logic stays real). test_dedupe.py uses the shared `articles` fixture; test_tags.py and test_models.py come from the previous capstones.",
+          "`addopts` in pyproject.toml makes every `pytest` run measure coverage of the devatlas_ai package (with branch coverage), print missing lines and fail under 90%. The suite was at 95.6% when the threshold was set; raise it as coverage grows so it can only go up. The CI job installs the package with its dev extras, runs mypy, then pytest, and any failure fails the job.",
+        ],
+        code: {
+          lang: "python", file: "services/ai/tests/conftest.py",
+          code: `"""Fixtures shared by every test module in services/ai/tests."""
+from collections.abc import Callable
+from datetime import datetime
+
+import httpx
+import pytest
+
+from devatlas_ai.models import Article
+
+Handler = Callable[[httpx.Request], httpx.Response]
+
+
+@pytest.fixture
+def articles() -> list[Article]:
+    """Three articles: the second duplicates the first by title and is older."""
+    return [
+        Article("Rust 2.0", "https://a.dev/rust/?utm_source=x", datetime(2026, 10, 2, 10)),
+        Article("rust 2.0", "https://b.dev/other", datetime(2026, 10, 1, 10)),
+        Article("Python 4", "https://a.dev/py", datetime(2026, 10, 3, 10)),
+    ]
+
+
+@pytest.fixture
+def feed_handler() -> Handler:
+    """Fake feed server: URLs containing 'bad' fail with 500, others return a tiny RSS body."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "bad" in str(request.url):
+            return httpx.Response(500)
+        return httpx.Response(200, text="<rss/>")
+    return handler
+
+
+@pytest.fixture
+def make_client(feed_handler: Handler) -> Callable[[], httpx.AsyncClient]:
+    """Build an AsyncClient on MockTransport, so no test touches the network."""
+    return lambda: httpx.AsyncClient(transport=httpx.MockTransport(feed_handler))
+
+# ---- services/ai/tests/test_feeds.py ----
+import asyncio
+from collections.abc import Callable
+
+import httpx
+import pytest
+
+from devatlas_ai import feeds
+from devatlas_ai.feeds import fetch_all
+
+
+def test_fetch_all_reports_errors_per_feed(make_client: Callable[[], httpx.AsyncClient]) -> None:
+    results = asyncio.run(fetch_all(["https://ok.test/rss", "https://bad.test/rss"], client=make_client()))
+    assert results == {"https://ok.test/rss": "<rss/>", "https://bad.test/rss": "error: HTTPStatusError"}
+
+
+def test_fetch_all_with_no_urls(make_client: Callable[[], httpx.AsyncClient]) -> None:
+    assert asyncio.run(fetch_all([], client=make_client())) == {}
+
+
+def test_cli_prints_size_or_error(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    make_client: Callable[[], httpx.AsyncClient],
+) -> None:
+    real_fetch_all = feeds.fetch_all
+
+    async def fake_fetch_all(urls: list[str]) -> dict[str, str]:
+        return await real_fetch_all(urls, client=make_client())  # boundary: HTTP, faked
+
+    monkeypatch.setattr(feeds, "fetch_all", fake_fetch_all)
+    monkeypatch.setattr("sys.argv", ["devatlas-ingest", "https://ok.test/rss", "https://bad.test/rss"])
+    feeds.cli()
+    assert capsys.readouterr().out == "6\\thttps://ok.test/rss\\nerror: HTTPStatusError\\thttps://bad.test/rss\\n"
+
+# ---- services/ai/tests/test_dedupe.py ----
+import pytest
+
+from devatlas_ai.dedupe import dedupe, norm_url
+from devatlas_ai.models import Article
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("https://A.dev/x/?utm_source=t&id=3", "https://a.dev/x?id=3"),
+        ("https://a.dev/x/", "https://a.dev/x"),
+        ("https://a.dev/x#top", "https://a.dev/x"),
+    ],
+)
+def test_norm_url(raw: str, expected: str) -> None:
+    assert norm_url(raw) == expected
+
+
+def test_dedupe_keeps_earliest(articles: list[Article]) -> None:
+    assert [a.url for a in dedupe(articles)] == ["https://b.dev/other", "https://a.dev/py"]
+
+
+def test_dedupe_by_url(articles: list[Article]) -> None:
+    same_url = Article("Different title", "https://a.dev/py/?utm_medium=rss", articles[2].published_at)
+    assert len(dedupe([articles[2], same_url])) == 1
+
+# ---- services/ai/pyproject.toml (test settings) ----
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-cov>=5", "mypy>=1.10"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=devatlas_ai --cov-report=term-missing --cov-fail-under=90"
+
+[tool.coverage.run]
+branch = true
+
+[tool.mypy]
+strict = true
+files = ["src", "tests"]
+
+# ---- .github/workflows/ai-tests.yml ----
+name: ai-service tests
+on:
+  pull_request:
+    paths: ["services/ai/**", ".github/workflows/ai-tests.yml"]
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/ai
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: services/ai/pyproject.toml
+      - run: python -m pip install -e ".[dev]"
+      - run: mypy
+      # addopts in pyproject.toml adds --cov, prints the report and fails under 90%
+      - run: python -m pytest`,
+        },
+        output: "..................                                                       [100%]\n================================ tests coverage ================================\n_______________ coverage: platform linux, python 3.13.16-final-0 _______________\n\nName                          Stmts   Miss Branch BrPart  Cover   Missing\n-------------------------------------------------------------------------\nsrc/devatlas_ai/__init__.py       0      0      0      0   100%\nsrc/devatlas_ai/dedupe.py        19      0      4      0   100%\nsrc/devatlas_ai/feeds.py         24      1      4      1    93%   27\nsrc/devatlas_ai/models.py        53      2     12      2    94%   43, 44->exit, 73\nsrc/devatlas_ai/tags.py          15      0      6      0   100%\n-------------------------------------------------------------------------\nTOTAL                           111      3     26      3    96%\nRequired test coverage of 90% reached. Total coverage: 95.62%\n18 passed in 0.25s",
+        pitfalls: ["`--cov=.` instead of `--cov=devatlas_ai` counts the test files themselves and inflates the number", "Setting the threshold above the current coverage on day one, so the first CI run is red and people learn to ignore it", "Creating an AsyncClient in a fixture without closing it; here fetch_all only closes clients it created, and MockTransport holds no sockets"],
       },
     },
   },

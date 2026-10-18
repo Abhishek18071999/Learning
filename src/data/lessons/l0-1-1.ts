@@ -184,7 +184,59 @@ done` },
           "Prove it with curl -w or a synthetic check from that region, and with browser RUM timing data (Navigation Timing API).",
           "Fix 1 (low effort): put a CDN or edge proxy in front, so handshakes terminate near users and the edge keeps warm connections to your origin. Fix 2 (higher effort and cost): deploy the API in a second region with geo-routing; this also needs a data strategy (read replicas, or accepting cross-region writes).",
           "Also check quick wins: TLS 1.3, HTTP/2 and keep-alive so returning requests skip the handshakes.",
+          "latency_budget.py turns the round-trip count into numbers. With a 20 ms RTT the model gives 140 ms (the local users' 150 ms); with a 250 ms RTT and a cold TLS 1.2 connection it gives 1165 ms (the reported 1.2 s). The 40 ms of server work is 3% of the far user's wait. The last two rows are the fixes.",
+          "How to prove each claim: run phases.sh from the basic task in that region, so DNS, TCP, TLS and wait appear separately; pass two URLs on the same host to one curl command and the second request skips DNS, TCP and TLS because curl reuses the connection; the server log (or a Server-Timing header) confirms the 40 ms.",
         ],
+        code: { lang: "python", file: "latency_budget.py", code: `"""Latency budget for one HTTPS API call: where does a 1.2 s TTFB come from?
+
+Each phase costs whole round trips (RTTs). The server's own work (40 ms in the
+logs) is the only part that does not grow with distance.
+"""
+from dataclasses import dataclass
+
+SERVER_MS = 40  # what the server logs say each request takes
+
+
+@dataclass
+class Scenario:
+    name: str
+    rtt_ms: float          # round trip between the user and whatever terminates TLS
+    dns_rtts: float        # resolver round trips on a cache miss (0 when cached)
+    tcp_rtts: int          # TCP handshake (0 when the connection is reused)
+    tls_rtts: int          # TLS 1.2 = 2, TLS 1.3 = 1, reused = 0
+    origin_ms: float = 0   # extra edge-to-origin time when a CDN/edge proxies the call
+
+    def phases(self) -> dict[str, float]:
+        return {
+            "dns": self.dns_rtts * self.rtt_ms,
+            "tcp": self.tcp_rtts * self.rtt_ms,
+            "tls": self.tls_rtts * self.rtt_ms,
+            "request": 1 * self.rtt_ms + self.origin_ms,  # request out, first byte back
+            "server": SERVER_MS,
+        }
+
+
+SCENARIOS = [
+    Scenario("local user, cold, TLS 1.2", rtt_ms=20, dns_rtts=1, tcp_rtts=1, tls_rtts=2),
+    Scenario("far user, cold, TLS 1.2", rtt_ms=250, dns_rtts=0.5, tcp_rtts=1, tls_rtts=2),
+    Scenario("far user, cold, TLS 1.3", rtt_ms=250, dns_rtts=0.5, tcp_rtts=1, tls_rtts=1),
+    Scenario("far user, reused conn", rtt_ms=250, dns_rtts=0, tcp_rtts=0, tls_rtts=0),
+    # Fix 1: CDN edge 30 ms from the user, warm keep-alive pool from edge to origin.
+    Scenario("far user via CDN edge", rtt_ms=30, dns_rtts=0.5, tcp_rtts=1, tls_rtts=1, origin_ms=250),
+    # Fix 2: a second regional deployment 30 ms from the user (no long hop at all).
+    Scenario("far user, regional API", rtt_ms=30, dns_rtts=0.5, tcp_rtts=1, tls_rtts=1),
+]
+
+if __name__ == "__main__":
+    print(f"{'scenario':28} {'dns':>5} {'tcp':>5} {'tls':>5} {'req':>5} {'srv':>5} {'TTFB':>6}")
+    for s in SCENARIOS:
+        p = s.phases()
+        total = sum(p.values())
+        cells = " ".join(f"{v:5.0f}" for v in p.values())
+        print(f"{s.name:28} {cells} {total:6.0f}")
+    print(f"\\nserver share of the far cold call: {SERVER_MS / sum(SCENARIOS[1].phases().values()):.0%}")` },
+        output: "scenario                       dns   tcp   tls   req   srv   TTFB\nlocal user, cold, TLS 1.2       20    20    40    20    40    140\nfar user, cold, TLS 1.2        125   250   500   250    40   1165\nfar user, cold, TLS 1.3        125   250   250   250    40    915\nfar user, reused conn            0     0     0   250    40    290\nfar user via CDN edge           15    30    30   280    40    395\nfar user, regional API          15    30    30    30    40    145\n\nserver share of the far cold call: 3%",
+        pitfalls: ["Optimising server code when the server is 3% of the wait", "Forgetting that a CDN only helps if it keeps warm connections to the origin; a cold edge-to-origin hop still pays the long RTT"],
       },
     },
     challenge: {

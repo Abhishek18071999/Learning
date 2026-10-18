@@ -239,7 +239,45 @@ fi`,
         text: [
           "1. `df -h` confirms which filesystem is full. 2. `du -xh --max-depth=1 <mount> | sort -h` finds the biggest top-level folder; repeat one level deeper. 3. `find <dir> -type f -size +100M` lists the large files. 4. Check if a process still holds a deleted file open with `lsof +L1`: deleted-but-open files keep using disk until the process restarts, a classic surprise in real incidents.",
           "Prevention: log rotation (logrotate), disk alerts at 80%, and size limits on temp directories.",
+          "Set up the incident with `mkdir -p ~/.cache/thumbnails/old/x && fallocate -l 500M ~/.cache/thumbnails/old/x/core.12345`, then run `./find_disk_hog.sh ~`. The script follows the same path as a human: df, then du one level at a time into the biggest child, then find for files over 100 MB, then lsof +L1 for deleted files that are still open.",
+          "Incident note. Symptom: / at 98%, writes failing. Cause: a 500 MB core dump under ~/.cache/thumbnails/old/x. Fix: confirm nothing needs it, delete it, re-run df. Prevention: as above, plus a size limit or cleanup job for cache directories.",
         ],
+        code: { lang: "bash", file: "find_disk_hog.sh", code: `#!/usr/bin/env bash
+# Find what is eating a filesystem, from broad (df) to narrow (du, find, lsof).
+# usage: ./find_disk_hog.sh [start-dir] [min-file-size]   e.g. ./find_disk_hog.sh ~ 100M
+set -euo pipefail
+
+start="\${1:-$HOME}"
+min_size="\${2:-100M}"
+[[ -d "$start" ]] || { echo "error: $start is not a directory" >&2; exit 2; }
+
+echo "== 1. Which filesystem is full?"
+df -h "$start"
+
+echo; echo "== 2. Drill down: biggest child at each level (-x stays on this filesystem)"
+dir="$start"
+while true; do
+  du -xh --max-depth=1 "$dir" 2>/dev/null | sort -h | tail -n 4
+  # biggest child directory (last line of du is the directory itself, so skip it)
+  next=$(du -xk --max-depth=1 "$dir" 2>/dev/null | sort -n | tail -n 2 | head -n 1 | cut -f2-)
+  [[ "$next" != "$dir" && -n "$next" ]] || break
+  echo "   -> $next"
+  dir="$next"
+done
+
+echo; echo "== 3. Largest files over $min_size under $start"
+find "$start" -xdev -type f -size +"$min_size" -printf '%s\\t%TY-%Tm-%Td %TH:%TM\\t%p\\n' 2>/dev/null |
+  sort -rn | head -n 10 |
+  awk -F'\\t' '{ printf "%8.0f MB  %s  %s\\n", $1/1024/1024, $2, $3 }'
+
+echo; echo "== 4. Deleted files still held open by a process (space not freed yet)"
+if command -v lsof >/dev/null 2>&1; then
+  # NLINK 0 = deleted. Ignore anonymous memfd regions; they are not on this disk.
+  lsof -nP +L1 2>/dev/null | awk 'NR==1 || ($7 > 100*1024*1024 && $0 !~ /memfd:/)' || true
+else
+  echo "lsof not installed (apt install lsof)"
+fi` },
+        pitfalls: ["Running du without -x, so it also walks other mounted filesystems and blames the wrong disk", "Deleting a log a process still has open: the space is not freed until the process restarts or reopens the file"],
       },
     },
     capstone: {

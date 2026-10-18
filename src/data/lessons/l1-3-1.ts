@@ -275,8 +275,56 @@ public sealed class Course(string title)
       hints: ["Array elements are variables you can modify in place; List indexers return copies."],
       solution: {
         text: [
-          "`array[0].Inc()` mutates the element in place, because an array element is a storage location. `list[0].Inc()` calls Inc on a copy returned by the indexer, so the list is unchanged (for field assignment like `list[0].Value = 5` the compiler refuses with CS1612). The fix: avoid mutable structs. Make it `readonly struct` with a method returning a new value, or use a class.",
+          "`array[0].Inc()` mutates the element in place, because an array element is a storage location (a variable). `list[0].Inc()` calls Inc on a copy returned by the List indexer, so the list still holds 0. Assigning a field through the indexer (`list[0].Value = 5`) does not even compile: error CS1612, because the compiler can see the change would be lost.",
+          "The copy-out, change, write-back dance works but is easy to forget. The real fix is to avoid mutable structs: a `readonly record struct` whose Inc returns a new value (the caller must store it, so nothing is silently lost), or a class, where the list holds a reference and every access reaches the same object.",
         ],
+        code: {
+          lang: "csharp", file: "Program.cs",
+          code: `// Part 1: a mutable struct, the thing to avoid
+var array = new Counter[] { new() };
+var list = new List<Counter> { new() };
+
+array[0].Inc();            // array element is a variable: mutated in place
+list[0].Inc();             // indexer returns a COPY; Inc() changes the copy
+// list[0].Value = 5;      // error CS1612: cannot modify the return value because it is not a variable
+
+Console.WriteLine($"array[0].Value = {array[0].Value}");
+Console.WriteLine($"list[0].Value  = {list[0].Value}");
+
+var copy = list[0];        // the workaround: copy out, change, write back
+copy.Inc();
+list[0] = copy;
+Console.WriteLine($"after write-back, list[0].Value = {list[0].Value}");
+
+// Part 2: fix A, an immutable readonly struct whose methods return new values
+var fixedList = new List<SafeCounter> { new(0) };
+fixedList[0] = fixedList[0].Inc();       // nothing to lose: the new value must be stored
+Console.WriteLine($"readonly struct: {fixedList[0].Value}");
+
+// Part 3: fix B, a class (reference type): the list holds a reference to one object
+var refList = new List<RefCounter> { new() };
+refList[0].Inc();
+Console.WriteLine($"class: {refList[0].Value}");
+
+struct Counter
+{
+    public int Value;
+    public void Inc() => Value++;
+}
+
+readonly record struct SafeCounter(int Value)
+{
+    public SafeCounter Inc() => this with { Value = Value + 1 };
+}
+
+sealed class RefCounter
+{
+    public int Value { get; private set; }
+    public void Inc() => Value++;
+}`,
+        },
+        output: "array[0].Value = 1\nlist[0].Value  = 0\nafter write-back, list[0].Value = 1\nreadonly struct: 1\nclass: 1",
+        pitfalls: ["The same silent copy happens with a struct in a property, a dictionary value, a foreach variable or a readonly field", "Concluding that structs are bad: small immutable structs (DateTime, Guid, a Money value) are fine and avoid heap allocations"],
       },
     },
     challenge: {

@@ -332,7 +332,162 @@ assert count_breaks("catsanddog", {"cat", "cats", "and", "sand", "dog"}) == 2`,
       criteria: ["Plan respects the time budget", "Similarity in [0, 1] with tests", "Documented complexity"],
       hints: ["Normalise whitespace before comparing code answers."],
       solution: {
-        text: ["Normalise answers (strip, collapse whitespace), compute edit distance, and map to a score; thresholds like ≥ 0.9 'almost there' make friendly feedback without an LLM call."],
+        text: [
+          "`weekly_plan` is the lesson's 0/1 knapsack on typed `PlanLesson` values: dp[i][w] is the best value from the first i lessons within w minutes. It keeps the full table, O(n × minutes) time and memory (70 lessons × 600 minutes is 42,000 cells), so it can walk back and reconstruct the chosen lessons. A randomised test compares it with brute force over all subsets and checks the budget and that no lesson is used twice.",
+          "`similarity` collapses all whitespace first, so spacing and indentation do not cost points, then returns 1 - edit_distance / max(len). Two empty answers are defined as 1.0, which also avoids dividing by zero. Edit distance uses two rows: O(len(a) × len(b)) time and O(len(b)) memory, and answers are capped at 2,000 characters so one comparison never exceeds 4 million cells.",
+          "`answer_hint` turns the score into friendly feedback (1.0 correct, 0.9 or more 'almost there', 0.6 or more 'on the right track') without an LLM call. Tune the thresholds on real answers: a short wrong answer can score surprisingly high against a short model solution. Run from services/ai: `python -m devatlas_ai.planning` prints the output below, `pytest` runs the tests.",
+        ],
+        code: { lang: "python", file: "services/ai/devatlas_ai/planning.py", code: `"""Weekly plan (0/1 knapsack) and answer similarity (edit distance) for the AI service."""
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class PlanLesson:
+    id: str
+    minutes: int
+    value: int
+
+
+def weekly_plan(lessons: list[PlanLesson], minutes: int) -> tuple[int, list[PlanLesson]]:
+    """Most valuable set of lessons that fits in \`minutes\`. Returns (total value, lessons in input order).
+
+    dp[i][w] = best value using the first i lessons within w minutes.
+    Transition: skip lesson i (dp[i-1][w]) or take it if it fits (dp[i-1][w-cost] + value).
+    O(n * minutes) time and memory; the full table is kept to reconstruct the choice.
+    """
+    if minutes < 0 or any(x.minutes <= 0 or x.value < 0 for x in lessons):
+        raise ValueError("budget must be >= 0, lesson minutes > 0 and values >= 0")
+    n = len(lessons)
+    dp = [[0] * (minutes + 1) for _ in range(n + 1)]
+    for i, lesson in enumerate(lessons, start=1):
+        for w in range(minutes + 1):
+            dp[i][w] = dp[i - 1][w]
+            if lesson.minutes <= w:
+                dp[i][w] = max(dp[i][w], dp[i - 1][w - lesson.minutes] + lesson.value)
+    chosen, w = [], minutes
+    for i in range(n, 0, -1):                       # walk back: a changed value means "taken"
+        if dp[i][w] != dp[i - 1][w]:
+            chosen.append(lessons[i - 1])
+            w -= lessons[i - 1].minutes
+    return dp[n][minutes], chosen[::-1]
+
+
+def edit_distance(a: str, b: str) -> int:
+    """Levenshtein distance with two rows: O(len(a) * len(b)) time, O(len(b)) memory."""
+    prev = list(range(len(b) + 1))
+    for i in range(1, len(a) + 1):
+        cur = [i] + [0] * len(b)
+        for j in range(1, len(b) + 1):
+            if a[i - 1] == b[j - 1]:
+                cur[j] = prev[j - 1]
+            else:
+                cur[j] = 1 + min(prev[j], cur[j - 1], prev[j - 1])
+        prev = cur
+    return prev[-1]
+
+
+MAX_ANSWER_CHARS = 2_000            # bounds the DP at 4 million cells per comparison
+
+
+def normalise_code(text: str) -> str:
+    """Collapse every run of whitespace to one space so formatting does not cost points."""
+    return " ".join(text.split())
+
+
+def similarity(a: str, b: str) -> float:
+    """1 - edit_distance / max(len), in [0, 1]; 1.0 means identical after normalising."""
+    a, b = normalise_code(a), normalise_code(b)
+    if len(a) > MAX_ANSWER_CHARS or len(b) > MAX_ANSWER_CHARS:
+        raise ValueError("answer too long for similarity scoring")
+    longest = max(len(a), len(b))
+    if longest == 0:
+        return 1.0                                   # both empty: identical
+    return 1 - edit_distance(a, b) / longest
+
+
+def answer_hint(answer: str, model_solution: str) -> str:
+    score = similarity(answer, model_solution)
+    if score == 1.0:
+        return "Correct"
+    if score >= 0.9:
+        return "Almost there: check small details like spelling or punctuation"
+    if score >= 0.6:
+        return "On the right track"
+    return "Not quite: compare your approach with the lesson example"
+
+
+if __name__ == "__main__":
+    catalog = [PlanLesson("SQL indexes", 75, 9), PlanLesson("Docker", 75, 8), PlanLesson("RAG", 90, 10),
+               PlanLesson("Git PRs", 50, 4), PlanLesson("Tries", 50, 3), PlanLesson("HTTP", 60, 6)]
+    value, plan = weekly_plan(catalog, 240)
+    print(value, [x.id for x in plan], sum(x.minutes for x in plan))
+    model = "git commit -m 'fix'"
+    for answer in ["git commit -m 'fix'", "git   comit -m 'fix'", "git add .", ""]:
+        print(f"{answer!r:24} {similarity(answer, model):.2f}  {answer_hint(answer, model)}")
+
+# ---- services/ai/tests/test_planning.py ----
+import itertools
+import random
+
+import pytest
+
+from devatlas_ai.planning import PlanLesson, answer_hint, edit_distance, similarity, weekly_plan
+
+
+def brute_best(lessons: list[PlanLesson], budget: int) -> int:
+    return max(sum(x.value for x in c) for r in range(len(lessons) + 1)
+               for c in itertools.combinations(lessons, r) if sum(x.minutes for x in c) <= budget)
+
+
+def test_plan_is_optimal_and_respects_budget() -> None:
+    rng = random.Random(5)
+    for _ in range(100):
+        lessons = [PlanLesson(f"l{i}", rng.randint(10, 90), rng.randint(0, 10)) for i in range(8)]
+        budget = rng.randint(0, 300)
+        value, plan = weekly_plan(lessons, budget)
+        assert sum(x.minutes for x in plan) <= budget
+        assert value == sum(x.value for x in plan) == brute_best(lessons, budget)
+        assert len(set(plan)) == len(plan)                    # each lesson at most once (0/1)
+
+
+def test_plan_edge_cases() -> None:
+    assert weekly_plan([], 600) == (0, [])
+    assert weekly_plan([PlanLesson("long", 700, 10)], 600) == (0, [])
+    one = PlanLesson("exact", 600, 3)
+    assert weekly_plan([one], 600) == (3, [one])
+    with pytest.raises(ValueError):
+        weekly_plan([PlanLesson("bad", 0, 1)], 60)
+
+
+def test_similarity_range_and_symmetry() -> None:
+    rng = random.Random(9)
+    for _ in range(200):
+        a = "".join(rng.choice("ab c") for _ in range(rng.randint(0, 12)))
+        b = "".join(rng.choice("ab c") for _ in range(rng.randint(0, 12)))
+        s = similarity(a, b)
+        assert 0.0 <= s <= 1.0 and s == similarity(b, a)
+
+
+def test_similarity_values() -> None:
+    assert similarity("", "") == 1.0
+    assert similarity("abc", "") == 0.0
+    assert similarity("abc", "xyz") == 0.0
+    assert similarity("for x  in\\n xs:", "for x in xs:") == 1.0  # whitespace normalised
+    assert similarity("kitten", "sitting") == pytest.approx(1 - 3 / 7)
+    assert edit_distance("git comit", "git commit") == 1
+
+
+def test_hints_and_length_limit() -> None:
+    assert answer_hint("print(x)", "print(x)") == "Correct"
+    assert answer_hint("git comit -m 'fix'", "git commit -m 'fix'").startswith("Almost there")
+    with pytest.raises(ValueError):
+        similarity("x" * 2_001, "x")` },
+        output: "27 ['SQL indexes', 'Docker', 'RAG'] 240\n\"git commit -m 'fix'\"    1.00  Correct\n\"git   comit -m 'fix'\"   0.95  Almost there: check small details like spelling or punctuation\n'git add .'              0.26  Not quite: compare your approach with the lesson example\n''                       0.00  Not quite: compare your approach with the lesson example",
+        pitfalls: [
+          "Dividing by max(len) without handling two empty strings: ZeroDivisionError.",
+          "Comparing raw code: a learner who indents with 4 spaces instead of 2 gets a low score for a correct answer.",
+          "Iterating w upward over a 1D array for 0/1 knapsack: a lesson can be taken twice. The 2D table avoids that and allows reconstruction.",
+        ],
       },
     },
   },

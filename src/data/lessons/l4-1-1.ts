@@ -343,6 +343,7 @@ group.MapDelete("/{id}", Results<NoContent, NotFound> (string id, ILessonStore s
           code: `using System.Net;
 using System.Net.Http.Json;
 using Microsoft.AspNetCore.Mvc.Testing;
+using DevAtlas.Api.Features.Lessons;
 
 public class LessonApiTests(WebApplicationFactory<Program> factory) : IClassFixture<WebApplicationFactory<Program>>
 {

@@ -212,7 +212,55 @@ indent_size = 4`,
       criteria: ["All six tools report versions", "Node installed via nvm/fnm (or Volta), not a global installer", "Docker can run `docker run hello-world`"],
       hints: ["On Windows, do Node/Python inside WSL."],
       solution: {
-        text: ["Expected: git --version, code --version, docker --version, node -v (v22.x), python3 --version (3.12.x), dotnet --version (8.0.x). `docker run hello-world` should print 'Hello from Docker!'. If Docker fails on Linux with a permission error, add your user to the docker group (`sudo usermod -aG docker $USER`, then log out and in) and understand that this group is effectively root-equivalent."],
+        text: [
+          "Expected: git --version, code --version, docker --version, node -v (v22.x), python3 --version (3.12.x), dotnet --version (8.0.x). `docker run hello-world` should print 'Hello from Docker!'. If Docker fails on Linux with a permission error, add your user to the docker group (`sudo usermod -aG docker $USER`, then log out and in) and understand that this group is effectively root-equivalent.",
+          "check_setup.sh records every version and flags what is wrong: Node not installed through nvm, fnm or Volta, the wrong Node or Python version, no .NET 8 SDK, or Docker unable to run hello-world. When Docker fails it prints the daemon's error line, such as a permission error or a registry rate limit. It checks `dotnet --list-sdks` rather than `dotnet --version`, because a newer SDK installed alongside 8.0 is fine. Keep the report: `./check_setup.sh | tee setup-report.txt`.",
+        ],
+        code: { lang: "bash", file: "check_setup.sh", code: `#!/usr/bin/env bash
+# Record the version of every tool the course needs and flag what is missing or wrong.
+# usage: ./check_setup.sh | tee setup-report.txt
+set -uo pipefail          # no -e: keep checking after a failure, report everything
+
+problems=0
+ok()   { printf 'ok    %-8s %s\\n' "$1" "$2"; }
+bad()  { printf 'FIX   %-8s %s\\n' "$1" "$2"; problems=$((problems + 1)); }
+
+version_of() { "$@" 2>&1 | head -n 1; }
+
+for tool in git code docker; do
+  if command -v "$tool" >/dev/null 2>&1; then ok "$tool" "$(version_of "$tool" --version)"
+  else bad "$tool" "not on PATH"; fi
+done
+
+if command -v node >/dev/null 2>&1; then
+  v=$(node -v); where=$(command -v node)
+  if [[ $v == v22.* ]]; then ok node "$v"; else bad node "$v (want v22.x: nvm install 22 && nvm use 22)"; fi
+  case "$where" in
+    */.nvm/*|*/fnm*/*|*/.volta/*) ok node "from a version manager: $where" ;;
+    *) bad node "$where is not from nvm/fnm/Volta" ;;
+  esac
+else bad node "not on PATH (install nvm, then: nvm install 22)"; fi
+
+if command -v python3 >/dev/null 2>&1; then
+  v=$(python3 --version)
+  if [[ $v == "Python 3.12."* ]]; then ok python3 "$v"; else bad python3 "$v (want 3.12.x)"; fi
+else bad python3 "not on PATH"; fi
+
+if command -v dotnet >/dev/null 2>&1; then
+  sdks=$(dotnet --list-sdks 2>/dev/null)
+  if grep -q '^8\\.0\\.' <<<"$sdks"; then ok dotnet "SDKs: $(cut -d' ' -f1 <<<"$sdks" | paste -sd' ' -)"
+  else bad dotnet "no 8.0 SDK installed (found: \${sdks:-none})"; fi
+else bad dotnet "not on PATH"; fi
+
+if command -v docker >/dev/null 2>&1; then
+  out=$(docker run --rm hello-world 2>&1)
+  if grep -q "Hello from Docker!" <<<"$out"; then ok docker "hello-world ran"
+  else bad docker "hello-world failed: $(grep -m1 -iE 'error|denied|cannot' <<<"$out")"; fi
+fi
+
+echo
+if (( problems )); then echo "$problems item(s) to fix"; exit 1; fi
+echo "all tools ready"` },
       },
     },
     intermediate: {
@@ -221,7 +269,51 @@ indent_size = 4`,
       criteria: ["Clean clone installs identically", "You captured and explained the npm ci error"],
       hints: ["Change a dependency's version range in package.json by hand."],
       solution: {
-        text: ["npm ci refuses to install when package.json and package-lock.json are out of sync, with an error explaining that they do not match. That failure is a feature: it stops CI from silently installing something nobody tested. Fix it by running npm install locally and committing the updated lock file."],
+        text: [
+          "npm ci refuses to install when package.json and package-lock.json are out of sync, with an error explaining that they do not match. That failure is a feature: it stops CI from silently installing something nobody tested. Fix it by running npm install locally and committing the updated lock file.",
+          "repro_test.sh runs the whole experiment with two small, exactly pinned dependencies: commit with the lock file, clone, npm ci, compare the dependency trees, then edit package.json by hand. The output is from npm 10.9; other npm versions word the error differently, but they always refuse.",
+        ],
+        code: { lang: "bash", file: "repro_test.sh", code: `#!/usr/bin/env bash
+# Prove a lock file makes installs reproducible, then watch npm ci refuse a drifted package.json.
+set -euo pipefail
+export GIT_AUTHOR_NAME="Asha" GIT_AUTHOR_EMAIL="asha@example.com"
+export GIT_COMMITTER_NAME="Asha" GIT_COMMITTER_EMAIL="asha@example.com"
+
+rm -rf repro-lab && mkdir repro-lab && cd repro-lab
+mkdir original && cd original
+git init -q -b main
+npm init -y >/dev/null
+npm install --silent ms@2.1.3 kleur@4.1.5      # two small deps; writes package-lock.json
+printf 'node_modules/\\n' > .gitignore
+git add . && git commit -qm "Add project with lock file"
+npm ls --all > ../original-tree.txt
+cd ..
+
+echo "== 1. clean clone + npm ci"
+git clone -q original clone && cd clone
+npm ci --silent
+npm ls --all > ../clone-tree.txt
+cd ..
+# compare everything except the first line (it contains the folder path)
+if diff <(tail -n +2 original-tree.txt) <(tail -n +2 clone-tree.txt); then
+  echo "identical dependency tree:"; tail -n +2 clone-tree.txt | sed '/^$/d'
+fi
+
+echo "== 2. change package.json by hand, leave the lock file alone"
+cd clone
+sed -i.bak 's/"kleur": "\\^4.1.5"/"kleur": "^3.0.0"/' package.json && rm package.json.bak
+grep '"kleur"' package.json
+set +e
+npm ci 2>&1 | grep -E '^npm (error|ERR!) (code|.npm ci.|Invalid|Missing)'
+status=\${PIPESTATUS[0]}
+set -e
+echo "npm ci exit code: $status"
+
+echo "== 3. the fix: let npm update the lock file, commit both, ci works again"
+npm install --silent
+git commit -qam "Downgrade kleur to 3.x"
+npm ci --silent && npm ls kleur | tail -n +2` },
+        output: "== 1. clean clone + npm ci\nidentical dependency tree:\n+-- kleur@4.1.5\n`-- ms@2.1.3\n== 2. change package.json by hand, leave the lock file alone\n    \"kleur\": \"^3.0.0\",\nnpm error code EUSAGE\nnpm error `npm ci` can only install packages when your package.json and package-lock.json or npm-shrinkwrap.json are in sync. Please update your lock file with `npm install` before continuing.\nnpm error Invalid: lock file's kleur@4.1.5 does not satisfy kleur@3.0.3\nnpm ci exit code: 1\n== 3. the fix: let npm update the lock file, commit both, ci works again\n`-- kleur@3.0.3",
       },
     },
     challenge: {
@@ -253,7 +345,109 @@ indent_size = 4`,
       criteria: ["All version files committed", "Dev container opens and runs setup.sh", "README setup section tested on a clean clone"],
       hints: ["Ask a friend to follow your README; watch where they get stuck."],
       solution: {
-        text: ["The test of success is a clean clone on another machine: if a friend can run the project in under 15 minutes following only the README, your setup is good."],
+        text: [
+          "The test of success is a clean clone on another machine: if a friend can run the project in under 15 minutes following only the README, your setup is good.",
+          "check-pins.sh compares each runtime on PATH with its pin and checks that .env has every key from .env.example. For .NET it simply runs `dotnet --version` in the repo, which fails when no installed SDK satisfies global.json. The dev container runs it after setup.sh, so a wrong pin shows up on the first open.",
+        ],
+        code: { lang: "bash", file: "scripts/check-pins.sh", code: `#!/usr/bin/env bash
+# Compare the runtimes on PATH with the versions this repo pins, and .env with .env.example.
+set -uo pipefail
+cd "$(dirname "$0")/.." || exit 2
+fail=0
+report() {  # name, pinned, found, ok?
+  if [[ $4 == yes ]]; then printf 'ok    %-7s pinned %-10s found %s\\n' "$1" "$2" "$3"
+  else printf 'FIX   %-7s pinned %-10s found %s\\n' "$1" "$2" "$3"; fail=1; fi
+}
+
+want=$(tr -d ' v\\n' < .nvmrc)
+have=$(node -v 2>/dev/null | tr -d v) || have="missing"
+[[ $have == "$want".* ]] && m=yes || m=no; report node "$want" "$have" "$m"
+
+want=$(tr -d ' \\n' < .python-version)
+have=$(python3 -c 'import platform; print(platform.python_version())' 2>/dev/null) || have="missing"
+[[ $have == "$want".* ]] && m=yes || m=no; report python "$want" "$have" "$m"
+
+# dotnet itself reads global.json: it fails if no installed SDK satisfies the pin.
+want=$(grep -oE '"version": *"[^"]+"' global.json | cut -d'"' -f4)
+if have=$(dotnet --version 2>/dev/null); then m=yes; else have="no SDK matching global.json"; m=no; fi
+report dotnet "$want" "$have" "$m"
+
+if [[ -f .env ]]; then
+  missing=$(comm -23 <(grep -oE '^[A-Z_]+=' .env.example | sort) <(grep -oE '^[A-Z_]+=' .env | sort) | tr -d = | paste -sd' ' -)
+  [[ -z $missing ]] && m=yes || m=no; report .env "all keys" "\${missing:+missing }\${missing:-all keys}" "$m"
+else
+  report .env "present" "missing (cp .env.example .env)" no
+fi
+exit "$fail"
+
+# ---- .nvmrc ----
+22
+
+# ---- .python-version ----
+3.12
+
+# ---- global.json ----
+{
+  "sdk": { "version": "8.0.100", "rollForward": "latestFeature" }
+}
+
+# ---- .env.example ----
+# Copy to .env (gitignored) and fill in real values. Never commit .env.
+DATABASE_URL=postgresql://devatlas:devatlas@localhost:5432/devatlas
+API_PORT=8000
+WEB_PORT=5173
+LOG_LEVEL=info
+# Leave empty until Phase 7; get your own key, never share one.
+ANTHROPIC_API_KEY=
+
+# ---- .devcontainer/devcontainer.json ----
+{
+  "name": "devatlas",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": { "version": "22" },
+    "ghcr.io/devcontainers/features/python:1": { "version": "3.12" },
+    "ghcr.io/devcontainers/features/dotnet:2": { "version": "8.0" },
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+  },
+  "forwardPorts": [5173, 8000],
+  "postCreateCommand": "cp -n .env.example .env; ./scripts/setup.sh && ./scripts/check-pins.sh",
+  "remoteUser": "vscode",
+  "customizations": {
+    "vscode": {
+      "extensions": ["ms-python.python", "dbaeumer.vscode-eslint", "ms-dotnettools.csdevkit", "EditorConfig.EditorConfig"]
+    }
+  }
+}
+
+# ---- .editorconfig (same as the hands-on section) ----
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+indent_style = space
+indent_size = 2
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.{py,cs}]
+indent_size = 4
+
+# ---- README.md (section) ----
+## Setup in 5 minutes
+
+**Option A: dev container (recommended).** Install Docker and VS Code with the Dev Containers
+extension, open this folder, choose "Reopen in Container". The container installs Node 22,
+Python 3.12 and .NET 8, copies \`.env.example\` to \`.env\`, then runs \`scripts/setup.sh\` and
+\`scripts/check-pins.sh\`.
+
+**Option B: on your machine.**
+1. \`nvm install\` (reads .nvmrc), \`pyenv install --skip-existing\` (reads .python-version),
+   and a .NET 8 SDK (global.json accepts 8.0.100 or any newer 8.0 feature band).
+2. \`cp .env.example .env\` and fill in values.
+3. \`./scripts/setup.sh && ./scripts/check-pins.sh\`: every line should start with \`ok\`.` },
+        pitfalls: ["Pinning an exact patch version (22.11.0) in .nvmrc, so everyone must install that exact build; the major version is usually enough for apps", "Leaving real secrets in .env.example"],
       },
     },
   },

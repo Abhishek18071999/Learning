@@ -86,30 +86,35 @@ CREATE TABLE courses (
 
 CREATE TABLE lessons (
   id        VARCHAR(16) PRIMARY KEY,                  -- natural key like '5.1.3'
-  course_id BIGINT NOT NULL REFERENCES courses(id),
+  course_id BIGINT NOT NULL,
   position  INT NOT NULL,
   title     VARCHAR(200) NOT NULL,
-  UNIQUE (course_id, position)
+  UNIQUE (course_id, position),
+  FOREIGN KEY (course_id) REFERENCES courses(id)
 );
 
 CREATE TABLE enrollments (                            -- many-to-many with attributes
-  user_id          BIGINT NOT NULL REFERENCES users(id),
-  course_id        BIGINT NOT NULL REFERENCES courses(id),
+  user_id          BIGINT NOT NULL,
+  course_id        BIGINT NOT NULL,
   enrolled_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   price_paid_cents INT NOT NULL,                      -- historical fact, intentionally copied
-  PRIMARY KEY (user_id, course_id)
+  PRIMARY KEY (user_id, course_id),
+  FOREIGN KEY (user_id) REFERENCES users(id),
+  FOREIGN KEY (course_id) REFERENCES courses(id)
 );
 
 CREATE TABLE quiz_attempts (                          -- one row per attempt, not score1..score10
   id         BIGINT PRIMARY KEY AUTO_INCREMENT,
-  user_id    BIGINT NOT NULL REFERENCES users(id),
-  lesson_id  VARCHAR(16) NOT NULL REFERENCES lessons(id),
+  user_id    BIGINT NOT NULL,
+  lesson_id  VARCHAR(16) NOT NULL,
   score      DECIMAL(4,3) NOT NULL CHECK (score BETWEEN 0 AND 1),
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id),
+  FOREIGN KEY (lesson_id) REFERENCES lessons(id),
   INDEX idx_attempts_user_time (user_id, created_at)  -- PostgreSQL: CREATE INDEX separately
 );`,
       },
-      notes: ["Inline INDEX inside CREATE TABLE is MySQL syntax; in PostgreSQL write CREATE INDEX … separately. Money is stored as integer cents (or DECIMAL), never FLOAT."],
+      notes: ["Foreign keys are written as table-level FOREIGN KEY clauses because MySQL 8.0 and 8.4 parse but silently ignore a column-level `REFERENCES` (no constraint is created); table-level clauses work in both databases. Inline INDEX inside CREATE TABLE is MySQL syntax; in PostgreSQL write CREATE INDEX … separately. Money is stored as integer cents (or DECIMAL), never FLOAT."],
     },
     {
       title: "Queries that were painful before are now simple",
