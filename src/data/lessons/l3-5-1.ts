@@ -389,7 +389,73 @@ await browser.close();`,
       criteria: ["Before/after Lighthouse and RUM numbers", "Root cause identified", "One change per measurable improvement"],
       hints: ["Lab data (Lighthouse) and field data (real users) can disagree; explain why."],
       solution: {
-        text: ["Common high-impact fixes: preloading the LCP image and serving it as AVIF/WebP at the right size; adding width/height to images; splitting a large route bundle; deferring third-party scripts. Field data varies by device and network, so prioritise by p75 field values."],
+        text: [
+          "Method: a demo landing page (v0) with the classic problems, a 3.4 MB PNG hero loaded with loading=lazy and no dimensions, plus a promo banner injected 800 ms after load. I measured Lighthouse 13.5 mobile (devtools throttling, Chromium 141, two runs each) after each single change, so every improvement is tied to one edit. The change list below is the exact diff between v0 and v5; v1 to v5 each add one of these edits.",
+          "Root causes. LCP: the hero is the LCP element, it is a huge PNG, and lazy-loading delays discovery. CLS: the image has no width/height, and the banner is inserted above the heading with no reserved space. Fixes in order: (1) resize and re-encode the hero as WebP (3.4 MB to 0.36 MB): LCP 19.4 s to 3.2 s. (2) width/height on the img: CLS 0.076 to 0.046. (3) drop loading=lazy, add fetchpriority=high: no measurable change on this tiny page (LCP stayed 3.2 s), so keep it only because it is correct for an LCP image. (4) reserve 4.5rem for the banner slot: CLS 0.046 to 0. (5) srcset/sizes with an 800 px variant for phones: LCP 3.2 s to 2.0 s, performance 93 to 99.",
+          "Honest limits. These are lab numbers from a local server on a simulated slow phone; the page is synthetic. The web-vitals snippet from the hands-on is on the page and posts beacons that the server logs (I saw LCP, INP and CLS lines arrive), but I did not complete a scripted field run, so there are no RUM p75 numbers here. In a real audit, collect field data first and prioritise by p75; lab and field can disagree because field users have different devices, caches and networks.",
+        ],
+        code: {
+          lang: "html",
+          file: "v0.html to v5.html (diff) + lighthouse commands",
+          code: `<!-- file: v5.html (final page) -->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="DevAtlas landing page">
+  <title>DevAtlas</title>
+  <style>
+    body { margin: 0; font: 1rem/1.6 system-ui, sans-serif; color: #13141c; }
+    main { max-width: 60rem; margin: auto; padding: 1rem; }
+    .hero { width: 100%; height: auto; display: block; }
+    .promo { background: #fff4c2; padding: 1rem; }
+    .promo-slot { min-height: 4.5rem; } .promo { margin: 0; box-sizing: border-box; height: 4.5rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <div id="promo-slot" class="promo-slot"></div>
+    <h1>Learn full-stack, AI and DevOps engineering</h1>
+    <img class="hero" src="hero-1200.webp" srcset="hero-800.webp 800w, hero-1200.webp 1200w" sizes="(max-width: 60rem) calc(100vw - 2rem), 58rem" alt="DevAtlas dashboard showing lesson progress" width="1200" height="675" fetchpriority="high">
+    <p>Structured lessons with hands-on projects, quizzes and a capstone in every phase.</p>
+    <a href="/signup">Start learning</a>
+  </main>
+  <script type="module">
+    import { onCLS, onINP, onLCP } from "./web-vitals.js";
+    const send = (m) => navigator.sendBeacon("/api/vitals", JSON.stringify({ name: m.name, value: m.value, rating: m.rating, page: location.pathname }));
+    onLCP(send); onINP(send); onCLS(send);
+    // Promo banner arrives after a (simulated) API call
+    setTimeout(() => {
+      const p = Object.assign(document.createElement("p"), { className: "promo", textContent: "Phase 3 is live: React, CSS and web security." });
+      document.querySelector("#promo-slot").append(p);
+    }, 800);
+  </script>
+</body>
+</html>
+
+# diff v0.html v5.html (the five changes)
+13c13
+<     /*SLOT:css*/
+---
+>     .promo-slot { min-height: 4.5rem; } .promo { margin: 0; box-sizing: border-box; height: 4.5rem; }
+20c20
+<     <img class="hero" src="hero.png" alt="DevAtlas dashboard showing lesson progress" loading="lazy">
+---
+>     <img class="hero" src="hero-1200.webp" srcset="hero-800.webp 800w, hero-1200.webp 1200w" sizes="(max-width: 60rem) calc(100vw - 2rem), 58rem" alt="DevAtlas dashboard showing lesson progress" width="1200" height="675" fetchpriority="high">`,
+        },
+        output: `$ lighthouse http://localhost:4351/vN.html --only-categories=performance --throttling-method=devtools   (mobile, two runs)
+v0 baseline        perf 66  LCP 19.4 s  CLS 0.076
+v1 WebP hero       perf 90  LCP 3.4 s   CLS 0.076
+v2 width/height   perf 92  LCP 3.2 s   CLS 0.046
+v3 no lazy+prio    perf 93  LCP 3.2 s   CLS 0.046
+v4 banner space    perf 93  LCP 3.2 s   CLS 0
+v5 srcset          perf 99  LCP 2.0 s   CLS 0`,
+        pitfalls: [
+          "Changing several things at once, so you cannot say which one helped",
+          "Reading one Lighthouse run as truth: variance is real, repeat and compare the same settings",
+          "Lazy-loading the LCP image, which delays the very element you are measuring",
+        ],
       },
     },
     capstone: {
@@ -398,7 +464,151 @@ await browser.close();`,
       criteria: ["Mozilla Observatory grade A or better on a deployed preview", "CORS rejects unknown origins (tested)", "Vitals visible in logs"],
       hints: ["Test CORS with curl -H 'Origin: https://evil.example' and inspect the response headers."],
       solution: {
-        text: ["Security headers plus correct CORS cost a few lines of config and remove whole attack classes; vitals reporting turns performance from opinion into data."],
+        text: [
+          "Four pieces. (1) nginx: HTTP only redirects to HTTPS; the HTTPS server adds the security headers through one shared snippet included in every location (an add_header inside a location silently drops server-level ones), hides the nginx version, caches hashed /assets/ forever and sends index.html with no-cache. The CSP hash in the snippet is the hash of the build's inline theme script from the intermediate tier; recompute it when that script changes. (2) CORS: the API reads its allow-list from configuration (production only app.devatlas.dev, development adds http://localhost:5173), never AllowAnyOrigin with credentials. (3) Vitals: the page sends web-vitals beacons to POST /api/vitals; the endpoint accepts only LCP, INP and CLS, bounds the numbers and page length, and logs one structured line. (4) Markdown: sanitise with DOMPurify as in the hands-on Answer component.",
+          "Verified. ASP.NET Core on net9.0 and curl: the two allowed origins get Access-Control-Allow-Origin echoed back, https://evil.example gets none (the browser would block reading the response), and its preflight gets no allow headers at all. In the Production environment http://localhost:5173 is not allowed. A valid beacon returned 204 and was logged as 'web-vital LCP=1834.2 rating=good page=/lessons/3.5.1'; a malformed one returned 400. nginx 1.29 in Docker with a throw-away local CA: HTTP answered 301, HTTPS (HTTP/2) returned the CSP, HSTS, nosniff, X-Frame-Options, Referrer-Policy, Permissions-Policy and Cross-Origin headers, and no Server version.",
+          "Not verified: a Mozilla Observatory grade. The scanner needs a public hostname and I could not reach one from this sandbox, so run it against your deployed preview and report the real grade. The vitals endpoint writes to the application log only; ship those logs to your log system to make them visible.",
+        ],
+        code: {
+          lang: "csharp",
+          file: "Program.cs + appsettings + nginx config + cors-test.sh",
+          code: `// file: api/Program.cs
+using System.Text.Json;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// Allowed origins come from configuration: appsettings.json for prod, appsettings.Development.json for dev
+string[] origins = builder.Configuration.GetSection("Cors:Origins").Get<string[]>() ?? [];
+builder.Services.AddCors(options => options.AddPolicy("frontend", policy => policy
+    .WithOrigins(origins)                                   // explicit allow-list, never AllowAnyOrigin
+    .WithMethods("GET", "POST", "PUT", "DELETE")
+    .WithHeaders("Content-Type", "Authorization")
+    .AllowCredentials()
+    .SetPreflightMaxAge(TimeSpan.FromMinutes(10))));
+
+var app = builder.Build();
+app.UseCors("frontend");
+
+app.MapGet("/api/lessons", () => new[] { new { id = "3.5.1", title = "XSS, CORS, CSP and Core Web Vitals" } });
+
+// Web Vitals beacons (sendBeacon posts text/plain, so read the body ourselves and validate it)
+string[] allowedMetrics = ["LCP", "INP", "CLS"];
+app.MapPost("/api/vitals", async (HttpRequest request, ILogger<Program> logger) =>
+{
+    VitalReport? report;
+    try { report = await JsonSerializer.DeserializeAsync<VitalReport>(request.Body, JsonSerializerOptions.Web); }
+    catch (JsonException) { return Results.BadRequest(); }
+    if (report?.Name is null || !allowedMetrics.Contains(report.Name) || report.Value is < 0 or > 600_000 || report.Page is not { Length: <= 200 })
+        return Results.BadRequest();
+    logger.LogInformation("web-vital {Name}={Value} rating={Rating} page={Page}", report.Name, report.Value, report.Rating, report.Page);
+    return Results.NoContent();
+});
+
+app.Run();
+
+record VitalReport(string? Name, double Value, string? Rating, string? Page);
+
+// file: api/appsettings.json
+{
+  "Logging": { "LogLevel": { "Default": "Information", "Microsoft.AspNetCore": "Warning" } },
+  "AllowedHosts": "*",
+  "Cors": { "Origins": [ "https://app.devatlas.dev" ] }
+}
+
+// file: api/appsettings.Development.json
+{
+  "Cors": { "Origins": [ "https://app.devatlas.dev", "http://localhost:5173" ] }
+}
+
+# file: nginx/devatlas.conf
+server_tokens off;                                        # no nginx version in responses
+
+server {
+    listen 80;
+    server_name _;
+    return 301 https://$host$request_uri;                 # HTTP only redirects, straight to HTTPS
+}
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name _;
+    ssl_certificate     /etc/nginx/certs/server.crt;
+    ssl_certificate_key /etc/nginx/certs/server.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    root /usr/share/nginx/html;
+
+    location /assets/ {                                   # hashed file names: cache for a year
+        include /etc/nginx/snippets/security-headers.conf;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        try_files $uri =404;
+    }
+
+    location / {                                          # SPA: unknown paths serve index.html
+        include /etc/nginx/snippets/security-headers.conf;
+        add_header Cache-Control "no-cache" always;
+        try_files $uri /index.html;
+    }
+}
+
+# file: nginx/security-headers.conf
+# Included in every location: an add_header inside a location drops all server-level add_header lines
+add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-bdyznYulzSGHB3rRO5uV1nvlyFAP4xEFMksag9Ti9zA='; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://api.devatlas.dev; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests" always;
+add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
+add_header X-Content-Type-Options "nosniff" always;
+add_header X-Frame-Options "DENY" always;
+add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+add_header Cross-Origin-Resource-Policy "same-origin" always;
+add_header Cross-Origin-Opener-Policy "same-origin" always;
+
+# file: cors-test.sh (API running with ASPNETCORE_ENVIRONMENT=Development on :5051)
+#!/bin/sh
+# CORS and vitals checks against the running API (dev environment on :5051)
+API=http://localhost:5051
+for origin in https://app.devatlas.dev http://localhost:5173 https://evil.example; do
+  echo "== GET from $origin"
+  curl -s -o /dev/null -D - -H "Origin: $origin" $API/api/lessons | grep -iE '^(HTTP|access-control)' | tr -d '\\r'
+done
+echo "== preflight PUT from https://evil.example"
+curl -s -o /dev/null -D - -X OPTIONS -H "Origin: https://evil.example" -H "Access-Control-Request-Method: PUT" \\
+  -H "Access-Control-Request-Headers: content-type" $API/api/lessons | grep -iE '^(HTTP|access-control)' | tr -d '\\r'
+echo "== preflight PUT from https://app.devatlas.dev"
+curl -s -o /dev/null -D - -X OPTIONS -H "Origin: https://app.devatlas.dev" -H "Access-Control-Request-Method: PUT" \\
+  -H "Access-Control-Request-Headers: content-type" $API/api/lessons | grep -iE '^(HTTP|access-control)' | tr -d '\\r'
+echo "== vitals beacon"
+curl -s -o /dev/null -w "%{http_code}\\n" -H "Content-Type: text/plain" -d '{"name":"LCP","value":1834.2,"rating":"good","page":"/lessons/3.5.1"}' $API/api/vitals
+curl -s -o /dev/null -w "%{http_code}\\n" -d '{"name":"<script>","value":1}' $API/api/vitals`,
+        },
+        output: `$ ./cors-test.sh
+== GET from https://app.devatlas.dev
+HTTP/1.1 200 OK
+Access-Control-Allow-Credentials: true
+Access-Control-Allow-Origin: https://app.devatlas.dev
+== GET from http://localhost:5173
+HTTP/1.1 200 OK
+Access-Control-Allow-Credentials: true
+Access-Control-Allow-Origin: http://localhost:5173
+== GET from https://evil.example
+HTTP/1.1 200 OK
+== preflight PUT from https://evil.example
+HTTP/1.1 204 No Content
+== preflight PUT from https://app.devatlas.dev
+HTTP/1.1 204 No Content
+Access-Control-Allow-Credentials: true
+Access-Control-Allow-Headers: Content-Type,Authorization
+Access-Control-Allow-Methods: GET,POST,PUT,DELETE
+Access-Control-Allow-Origin: https://app.devatlas.dev
+Access-Control-Max-Age: 600
+== vitals beacon
+204
+400`,
+        pitfalls: [
+          "Treating CORS as protection for the API: curl and other servers ignore it, so authentication and authorisation still apply",
+          "Putting add_header in a location block without re-including the shared headers",
+          "Shipping the local-development origin in production configuration",
+        ],
       },
     },
   },

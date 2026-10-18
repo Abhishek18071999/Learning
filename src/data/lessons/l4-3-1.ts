@@ -448,7 +448,194 @@ mod tests {
       criteria: ["Pool shared in state", "Migrations via sqlx-cli or sqlx::migrate!", "Unique constraint on url, conflict → 409"],
       hints: ["sqlx::query_as!(…) checks queries at compile time against DATABASE_URL (or offline metadata)."],
       solution: {
-        text: ["State becomes { db: PgPool }. Each handler runs a query with bound parameters; a unique-violation error (code 23505) maps to a new AppError::Conflict variant returning 409. Compile-time checked queries catch typos in SQL during cargo build."],
+        text: [
+          "State becomes { db: PgPool }, and the handler signatures are the same as before, apart from ids becoming i64 because PostgreSQL has no unsigned integers. Each handler runs a query with bound parameters ($1, $2), so there is no string-built SQL. A unique violation (SQLSTATE 23505) is detected with `is_unique_violation()` in a `From<sqlx::Error> for AppError` impl, becomes AppError::Conflict and returns 409. Any other database error is logged and returned as a generic 500, so SQL details never reach the client.",
+          "`query_as!` checks each SQL string and its column types against the real schema at compile time, which is why DATABASE_URL must point at a migrated database during `cargo build` (or you commit offline metadata with `cargo sqlx prepare`). `sqlx::migrate!()` embeds ./migrations in the binary and applies them at startup, tracked in the _sqlx_migrations table. For several replicas, run the migrations as a separate deploy step instead.",
+          "The tests use `#[sqlx::test]`, which creates a fresh database per test from DATABASE_URL and applies the migrations, then drive the router with oneshot as in the lesson. They cover create, get, list, the 409 on a duplicate url (constraint name items_url_key) and the 404. Verified against PostgreSQL 16 with sqlx 0.9.0, axum 0.8.9; clippy is clean.",
+        ],
+        code: {
+          lang: "rust", file: "migrations + src/main.rs",
+          code: `// cargo add sqlx --features runtime-tokio,postgres,macros,migrate   (sqlx 0.9.0)
+// ---- migrations/20261018000000_create_items.sql ----
+// CREATE TABLE items (
+//     id    BIGINT PRIMARY KEY,
+//     title TEXT   NOT NULL CHECK (btrim(title) <> ''),
+//     url   TEXT   NOT NULL,
+//     topic TEXT   NOT NULL,
+//     CONSTRAINT items_url_key UNIQUE (url)
+// );
+// CREATE INDEX items_topic_id_idx ON items (topic, id DESC);   -- list by topic, newest first
+
+// ---- src/main.rs (DATABASE_URL must point at a migrated database at compile time, or use cargo sqlx prepare for offline builds) ----
+use axum::{
+    extract::{Path, Query, State},
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    routing::get,
+    Json, Router,
+};
+use serde::{Deserialize, Serialize};
+use sqlx::{postgres::PgPoolOptions, PgPool};
+
+// PostgreSQL has no unsigned integers, so ids are i64 (BIGINT) end to end.
+#[derive(Clone, Serialize, Deserialize)]
+struct NewsItem {
+    id: i64,
+    title: String,
+    url: String,
+    topic: String,
+}
+
+#[derive(Clone)]
+struct AppState {
+    db: PgPool, // a pool is an Arc inside: cloning per request is cheap
+}
+
+enum AppError {
+    NotFound(i64),
+    Invalid(String),
+    Conflict(String),
+    Database(sqlx::Error),
+}
+
+impl From<sqlx::Error> for AppError {
+    fn from(e: sqlx::Error) -> Self {
+        match &e {
+            // 23505 unique_violation: duplicate id (primary key) or duplicate url
+            sqlx::Error::Database(db) if db.is_unique_violation() => {
+                AppError::Conflict(format!("item already exists ({})", db.constraint().unwrap_or("unique")))
+            }
+            _ => AppError::Database(e),
+        }
+    }
+}
+
+impl IntoResponse for AppError {
+    fn into_response(self) -> Response {
+        let (status, message) = match self {
+            AppError::NotFound(id) => (StatusCode::NOT_FOUND, format!("news item {id} not found")),
+            AppError::Invalid(msg) => (StatusCode::UNPROCESSABLE_ENTITY, msg),
+            AppError::Conflict(msg) => (StatusCode::CONFLICT, msg),
+            AppError::Database(e) => {
+                eprintln!("database error: {e}"); // details in logs, not in the response
+                (StatusCode::INTERNAL_SERVER_ERROR, "internal error".to_string())
+            }
+        };
+        (status, Json(serde_json::json!({ "error": message }))).into_response()
+    }
+}
+
+#[derive(Deserialize)]
+struct ListParams {
+    topic: Option<String>,
+    limit: Option<i64>,
+}
+
+async fn list_items(State(state): State<AppState>, Query(p): Query<ListParams>) -> Result<Json<Vec<NewsItem>>, AppError> {
+    let limit = p.limit.unwrap_or(20);
+    if !(1..=100).contains(&limit) {
+        return Err(AppError::Invalid("limit must be between 1 and 100".into()));
+    }
+    // query_as! checks this SQL and the column types against the schema at compile time
+    let items = sqlx::query_as!(
+        NewsItem,
+        "SELECT id, title, url, topic FROM items WHERE ($1::text IS NULL OR topic = $1) ORDER BY id DESC LIMIT $2",
+        p.topic,
+        limit
+    )
+    .fetch_all(&state.db)
+    .await?;
+    Ok(Json(items))
+}
+
+async fn get_item(State(state): State<AppState>, Path(id): Path<i64>) -> Result<Json<NewsItem>, AppError> {
+    sqlx::query_as!(NewsItem, "SELECT id, title, url, topic FROM items WHERE id = $1", id)
+        .fetch_optional(&state.db)
+        .await?
+        .map(Json)
+        .ok_or(AppError::NotFound(id))
+}
+
+async fn create_item(State(state): State<AppState>, Json(item): Json<NewsItem>) -> Result<(StatusCode, Json<NewsItem>), AppError> {
+    if item.title.trim().is_empty() {
+        return Err(AppError::Invalid("title is required".into()));
+    }
+    let saved = sqlx::query_as!(
+        NewsItem,
+        "INSERT INTO items (id, title, url, topic) VALUES ($1, $2, $3, $4) RETURNING id, title, url, topic",
+        item.id,
+        item.title,
+        item.url,
+        item.topic
+    )
+    .fetch_one(&state.db)
+    .await?; // unique violation -> AppError::Conflict via From
+    Ok((StatusCode::CREATED, Json(saved)))
+}
+
+fn app(state: AppState) -> Router {
+    Router::new()
+        .route("/health", get(|| async { "ok" }))
+        .route("/items", get(list_items).post(create_item))
+        .route("/items/{id}", get(get_item))
+        .with_state(state)
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let url = std::env::var("DATABASE_URL")?; // e.g. postgres://news:...@localhost/news (never hard-coded)
+    let db = PgPoolOptions::new().max_connections(10).connect(&url).await?;
+    sqlx::migrate!().run(&db).await?; // applies ./migrations once; tracked in _sqlx_migrations
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
+    println!("listening on {}", listener.local_addr()?);
+    axum::serve(listener, app(AppState { db }))
+        .with_graceful_shutdown(async { tokio::signal::ctrl_c().await.ok(); })
+        .await?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::Request;
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    async fn send(pool: &PgPool, req: Request<Body>) -> (StatusCode, String) {
+        let res = app(AppState { db: pool.clone() }).oneshot(req).await.unwrap();
+        let status = res.status();
+        let body = res.into_body().collect().await.unwrap().to_bytes();
+        (status, String::from_utf8(body.to_vec()).unwrap())
+    }
+
+    fn post(json: &str) -> Request<Body> {
+        Request::post("/items").header("content-type", "application/json").body(Body::from(json.to_string())).unwrap()
+    }
+
+    // #[sqlx::test] creates a fresh database per test (from DATABASE_URL) and applies ./migrations
+    #[sqlx::test]
+    async fn create_get_list_and_conflict(pool: PgPool) {
+        let item = r#"{"id":1,"title":"Rust 2024 edition","url":"https://example.com/r","topic":"rust"}"#;
+        assert_eq!(send(&pool, post(item)).await.0, StatusCode::CREATED);
+        let (status, body) = send(&pool, Request::get("/items/1").body(Body::empty()).unwrap()).await;
+        assert_eq!((status, body.as_str()), (StatusCode::OK, item));
+
+        let same_url = r#"{"id":2,"title":"Copy","url":"https://example.com/r","topic":"rust"}"#;
+        assert_eq!(send(&pool, post(same_url)).await, (StatusCode::CONFLICT, r#"{"error":"item already exists (items_url_key)"}"#.into()));
+
+        let (_, list) = send(&pool, Request::get("/items?topic=rust").body(Body::empty()).unwrap()).await;
+        assert_eq!(list, format!("[{item}]"));
+    }
+
+    #[sqlx::test]
+    async fn missing_item_is_404(pool: PgPool) {
+        let (status, body) = send(&pool, Request::get("/items/42").body(Body::empty()).unwrap()).await;
+        assert_eq!((status, body.as_str()), (StatusCode::NOT_FOUND, r#"{"error":"news item 42 not found"}"#));
+    }
+}`,
+        },
+        output: "$ DATABASE_URL=postgres://...@localhost/news cargo test -q\n\nrunning 2 tests\n..\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
       },
     },
     capstone: {

@@ -3923,7 +3923,7 @@ export const lessonMeta: LessonMeta[] = [
     "Vitals visible in logs"
    ]
   },
-  "codeSamples": 8,
+  "codeSamples": 10,
   "file": "l3-5-1.ts"
  },
  {
@@ -4477,7 +4477,7 @@ export const lessonMeta: LessonMeta[] = [
     "Docker image under 50 MB (e.g. distroless or debian-slim runtime stage)"
    ]
   },
-  "codeSamples": 7,
+  "codeSamples": 8,
   "file": "l4-3-1.ts"
  },
  {
@@ -5342,7 +5342,7 @@ export const lessonMeta: LessonMeta[] = [
     "Restore test running on a schedule"
    ]
   },
-  "codeSamples": 6,
+  "codeSamples": 7,
   "file": "l5-4-1.ts"
  },
  {

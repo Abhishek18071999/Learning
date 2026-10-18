@@ -328,6 +328,66 @@ jobs:
       solution: {
         text: [
           "tenant_id keeps each company's queries on one shard (good for reporting and isolation) but the 30% tenant creates a hotspot; mitigate by placing it on its own shard or sub-sharding it by user. user_id spreads load evenly but makes per-tenant reports cross-shard. lesson_id concentrates popular lessons (hotspots) and breaks user-centric queries. Recommendation: tenant-based placement with a lookup table (tenant → shard) so big tenants can be moved or split, using a platform such as Vitess or Citus rather than hand-rolled routing.",
+          "The script simulates 200,000 progress events for 5,000 tenants (one whale with 30%) over 8 shards and measures the busiest shard against the mean. hash(tenant_id) puts the whale and its neighbours on one shard at 38% of all traffic (3.1x the mean). hash(user_id) is perfectly even (1.01x) but every per-tenant report fans out to all 8 shards. hash(lesson_id) is worst: a long tail of popular lessons gives one shard 58%.",
+          "The recommended design is a directory table (tenant_id → shard) for normal tenants, with the whale sub-sharded by user_id across four dedicated shards. The busiest shard drops to 17.8% (1.4x the mean), every normal tenant's report still touches exactly one shard, and only the whale's report fans out to 4 shards. Migration path: start with the directory pointing every tenant at shard 0, move tenants one at a time (copy, verify, flip the directory row, delete), and move the whale last.",
+          "Results are from a seeded simulation, so they are reproducible, but real activity distributions differ: measure yours before choosing.",
+        ],
+        code: {
+          lang: "python",
+          file: "shard_key.py",
+          code: `"""Compare shard keys for DevAtlas B2B progress data: 5,000 tenants, the largest has 30% of all activity."""
+import random
+import zlib
+from collections import Counter
+
+SHARDS, TENANTS, EVENTS, LESSONS = 8, 5000, 200_000, 400
+rnd = random.Random(7)
+
+# Activity model: tenant 1 is the whale (30%); the other 4,999 follow a mild long tail.
+weights = [0.0] + [1 / (t ** 0.6) for t in range(2, TENANTS + 1)]
+tail = sum(weights)
+weights[0] = tail * 0.30 / 0.70
+tenants = rnd.choices(range(1, TENANTS + 1), weights=weights, k=EVENTS)
+users_per_tenant = lambda t: 20_000 if t == 1 else 5 + (t * 37) % 400   # whale has 20k users
+events = [(t, rnd.randrange(users_per_tenant(t)), min(int(rnd.paretovariate(1.2)), LESSONS) - 1) for t in tenants]
+
+def shard_of(key) -> int:
+    return zlib.crc32(str(key).encode()) % SHARDS     # stable hash, unlike Python's hash()
+
+def report(name: str, placement) -> None:
+    load = Counter(placement(t, u, l) for t, u, l in events)
+    loads = [load.get(s, 0) for s in range(SHARDS)]
+    mean = EVENTS / SHARDS
+    print(f"{name:<34} max/mean {max(loads) / mean:4.2f}   busiest shard {max(loads) / EVENTS:5.1%}   "
+          f"per shard: {[round(x / EVENTS * 100) for x in loads]}")
+
+def cross_shard(name: str, key_of) -> None:
+    """'All progress for tenant 1234' touches how many shards?"""
+    shards = {placement for t, u, l in events if t == 1234 for placement in [key_of(t, u, l)]}
+    print(f"  {name:<32} shards touched by one tenant's report: {len(shards)} of {SHARDS}")
+
+print(f"{EVENTS:,} events, {SHARDS} shards, whale tenant share {sum(1 for t,_,_ in events if t == 1) / EVENTS:.1%}")
+report("hash(tenant_id)", lambda t, u, l: shard_of(t))
+report("hash(user_id) (unique per tenant)", lambda t, u, l: shard_of((t, u)))
+report("hash(lesson_id)", lambda t, u, l: shard_of(l))
+
+# Recommended: directory (tenant -> shard), the whale gets sub-sharded by user across 4 dedicated shards
+directory = {t: shard_of(t) % 4 + 4 for t in range(1, TENANTS + 1)}   # normal tenants share shards 4-7
+def directory_placement(t: int, u: int, l: int) -> int:
+    return shard_of((t, u)) % 4 if t == 1 else directory[t]           # whale: shards 0-3 by user
+report("directory + whale sub-sharded", directory_placement)
+
+print("\\nCross-shard cost of a per-tenant report (tenant 1234):")
+cross_shard("hash(tenant_id)", lambda t, u, l: shard_of(t))
+cross_shard("hash(user_id)", lambda t, u, l: shard_of((t, u)))
+cross_shard("directory + whale sub-sharded", directory_placement)
+whale_shards = {directory_placement(t, u, l) for t, u, l in events if t == 1}
+print(f"  whale report touches {len(whale_shards)} shards (fan out + merge), all other tenants touch 1")`,
+        },
+        output: "200,000 events, 8 shards, whale tenant share 30.1%\nhash(tenant_id)                    max/mean 3.07   busiest shard 38.4%   per shard: [9, 8, 9, 9, 9, 9, 9, 38]\nhash(user_id) (unique per tenant)  max/mean 1.01   busiest shard 12.6%   per shard: [12, 13, 12, 13, 12, 12, 13, 13]\nhash(lesson_id)                    max/mean 4.60   busiest shard 57.5%   per shard: [4, 58, 2, 6, 2, 9, 3, 17]\ndirectory + whale sub-sharded      max/mean 1.43   busiest shard 17.8%   per shard: [8, 7, 8, 8, 17, 18, 17, 17]\n\nCross-shard cost of a per-tenant report (tenant 1234):\n  hash(tenant_id)                  shards touched by one tenant's report: 1 of 8\n  hash(user_id)                    shards touched by one tenant's report: 8 of 8\n  directory + whale sub-sharded    shards touched by one tenant's report: 1 of 8\n  whale report touches 4 shards (fan out + merge), all other tenants touch 1",
+        pitfalls: [
+          "Python's built-in hash() for routing: it changes between processes. Use a stable hash such as crc32 or the platform's own",
+          "Hash-sharding by tenant with no directory: you can never move or split one tenant without resharding everything",
         ],
       },
     },
