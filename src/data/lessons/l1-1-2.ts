@@ -354,7 +354,182 @@ Report(CsvFormatter(), PrintDelivery()).run("scores.csv", [{"user": 1, "score": 
       criteria: ["No raw dicts crossing module boundaries", "mypy passes", "Tests for validation errors"],
       hints: ["Convert to/from dicts only at the edges (JSON in, JSON out)."],
       solution: {
-        text: ["Typed models at module boundaries are what make the later FastAPI service straightforward: Pydantic request models can map directly onto them."],
+        text: [
+          "Typed models at module boundaries are what make the later FastAPI service straightforward: Pydantic request models can map directly onto them.",
+          "models.py holds frozen dataclasses that validate in __post_init__, so an invalid Lesson, Chunk or QuizResult cannot exist. Lesson reuses `normalise` and `add_tag` from tags.py; because it is frozen, `with_tag` returns a new Lesson via `dataclasses.replace`.",
+          "The dedupe code from lesson 1.1.1 now takes and returns `Article` objects. The only place a raw dict is read is `Article.from_dict`, the JSON edge. Run with `pytest -q && mypy` from services/ai (the skeleton from the previous capstone).",
+        ],
+        code: {
+          lang: "python", file: "services/ai/devatlas_ai/models.py",
+          code: `"""Typed domain models. Raw dicts are converted here, at the edge, and nowhere else."""
+import re
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
+from typing import Any, Protocol
+
+from devatlas_ai.tags import add_tag, normalise
+
+LESSON_ID = re.compile(r"^\\d+\\.\\d+\\.\\d+$")
+
+
+@dataclass(frozen=True)
+class Lesson:
+    id: str
+    title: str
+    minutes: int
+    tags: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not LESSON_ID.match(self.id):
+            raise ValueError(f"lesson id must look like 1.2.3, got {self.id!r}")
+        if not self.title.strip():
+            raise ValueError(f"lesson {self.id}: title must not be empty")
+        if self.minutes <= 0:
+            raise ValueError(f"lesson {self.id}: minutes must be > 0")
+        # frozen: assign the cleaned tags through object.__setattr__
+        object.__setattr__(self, "tags", tuple(normalise(self.tags)))
+
+    def with_tag(self, tag: str) -> "Lesson":
+        """Return a copy with one more tag; the original is unchanged."""
+        return replace(self, tags=tuple(add_tag(tag.strip().lower(), list(self.tags))))
+
+
+@dataclass(frozen=True)
+class Chunk:
+    """A slice of lesson text, the unit the AI service will embed and search."""
+    lesson_id: str
+    index: int
+    text: str
+
+    def __post_init__(self) -> None:
+        if self.index < 0:
+            raise ValueError("chunk index must be >= 0")
+        if not self.text.strip():
+            raise ValueError(f"chunk {self.lesson_id}#{self.index} is empty")
+
+
+@dataclass(frozen=True)
+class QuizResult:
+    user_id: int
+    lesson_id: str
+    score: float  # 0.0 .. 1.0
+    taken_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+    def __post_init__(self) -> None:
+        if not 0.0 <= self.score <= 1.0:
+            raise ValueError(f"score must be between 0 and 1, got {self.score}")
+
+    @property
+    def passed(self) -> bool:
+        return self.score >= 0.67
+
+
+@dataclass(frozen=True)
+class Article:
+    title: str
+    url: str
+    published_at: datetime
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> "Article":
+        """The only place a raw article dict is read (JSON in)."""
+        return cls(str(raw["title"]), str(raw["url"]), datetime.fromisoformat(raw["published_at"]))
+
+
+class Notifier(Protocol):
+    def send(self, to: str, text: str) -> None: ...
+
+# ---- services/ai/devatlas_ai/dedupe.py ----
+from collections.abc import Iterable
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+from devatlas_ai.models import Article
+
+
+def norm_url(url: str) -> str:
+    p = urlsplit(url.strip())
+    query = urlencode([(k, v) for k, v in parse_qsl(p.query) if not k.startswith("utm_")])
+    return urlunsplit((p.scheme.lower(), p.netloc.lower(), p.path.rstrip("/"), query, ""))
+
+
+def dedupe(articles: Iterable[Article]) -> list[Article]:
+    """Keep the earliest article per normalised URL or case-insensitive title."""
+    seen_urls: set[str] = set()
+    seen_titles: set[str] = set()
+    out: list[Article] = []
+    for a in sorted(articles, key=lambda a: a.published_at):
+        u, t = norm_url(a.url), a.title.strip().lower()
+        if u in seen_urls or t in seen_titles:
+            continue
+        seen_urls.add(u)
+        seen_titles.add(t)
+        out.append(a)
+    return out
+
+# ---- services/ai/tests/test_models.py ----
+from datetime import datetime
+
+import pytest
+
+from devatlas_ai.dedupe import dedupe
+from devatlas_ai.models import Article, Chunk, Lesson, Notifier, QuizResult
+
+
+def test_lesson_normalises_tags_and_with_tag_returns_copy() -> None:
+    lesson = Lesson("1.1.2", "OOP", 65, tags=(" Python", "python", "OOP"))
+    assert lesson.tags == ("python", "oop")
+    tagged = lesson.with_tag("Protocols")
+    assert tagged.tags == ("python", "oop", "protocols")
+    assert lesson.tags == ("python", "oop")
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"id": "one", "title": "x", "minutes": 5}, "lesson id"),
+        ({"id": "1.1.1", "title": "  ", "minutes": 5}, "title"),
+        ({"id": "1.1.1", "title": "x", "minutes": 0}, "minutes"),
+    ],
+)
+def test_lesson_validation(kwargs: dict[str, object], message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        Lesson(**kwargs)  # type: ignore[arg-type]
+
+
+def test_chunk_and_quiz_validation() -> None:
+    with pytest.raises(ValueError, match="empty"):
+        Chunk("1.1.1", 0, "   ")
+    with pytest.raises(ValueError, match="between 0 and 1"):
+        QuizResult(7, "1.1.1", 80)
+    assert QuizResult(7, "1.1.1", 0.8).passed
+
+
+def test_dedupe_works_on_models() -> None:
+    raw = [
+        {"title": "Rust 2.0", "url": "https://a.dev/rust/?utm_source=x", "published_at": "2026-10-02T10:00:00"},
+        {"title": "rust 2.0", "url": "https://b.dev/other", "published_at": "2026-10-01T10:00:00"},
+        {"title": "Python 4", "url": "https://a.dev/py", "published_at": "2026-10-03T10:00:00"},
+    ]
+    result = dedupe(Article.from_dict(r) for r in raw)
+    assert [a.url for a in result] == ["https://b.dev/other", "https://a.dev/py"]
+    assert result[0].published_at == datetime(2026, 10, 1, 10)
+
+
+def test_fake_satisfies_notifier() -> None:
+    class FakeNotifier:
+        def __init__(self) -> None:
+            self.sent: list[tuple[str, str]] = []
+
+        def send(self, to: str, text: str) -> None:
+            self.sent.append((to, text))
+
+    fake = FakeNotifier()
+    notifier: Notifier = fake  # mypy checks the structural match here
+    notifier.send("a@x.dev", "hi")
+    assert fake.sent == [("a@x.dev", "hi")]`,
+        },
+        output: "...........                                                              [100%]\n11 passed in 0.07s\nSuccess: no issues found in 6 source files",
+        pitfalls: ["Assigning `self.tags = ...` in __post_init__ of a frozen dataclass raises FrozenInstanceError; use object.__setattr__ or normalise before constructing", "Using `list[str]` for tags on a frozen dataclass: the object is 'frozen' but the list can still be mutated, and the instance is no longer hashable", "Calling `from_dict` deep in business logic instead of at the edge, which brings raw dicts back"],
       },
     },
   },
