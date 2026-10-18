@@ -3,6 +3,7 @@ import { allTopics, isReady, resourcesForLesson, sectionById, sections } from ".
 import { lessonById } from "../data/lessons";
 import type { ResourceSection, ResourceTopic } from "../types";
 import { Badge, Empty } from "../components/ui";
+import { rich } from "../lib/rich";
 
 // Curated links only: the best repo or article, a video (Hindi first) and a practice link per topic,
 // plus a few revision lines. The learning itself happens on the linked pages and in the lessons.
@@ -77,7 +78,7 @@ function SectionView({ section, courseId, q }: { section: ResourceSection; cours
         </h1>
         <p className="lede">{section.tagline}</p>
       </header>
-      <nav className="filters" aria-label="Resource sections">
+      <nav className="filters res-sections" aria-label="Resource sections">
         {sections.map((s) => (
           <a key={s.id} aria-current={s.id === section.id ? "page" : undefined} className={`filter-pill ${s.id === section.id ? "on" : ""}`} href={`#/resources?s=${s.id}`}>
             {s.icon} {s.title}
@@ -136,7 +137,7 @@ export function TopicCard({ topic, n }: { topic: ResourceTopic; n?: number }) {
           {topic.revision.length > 0 && (
             <ul className="cheat">
               {topic.revision.map((r, i) => (
-                <li key={i}>{r}</li>
+                <li key={i}>{rich(r)}</li>
               ))}
             </ul>
           )}
