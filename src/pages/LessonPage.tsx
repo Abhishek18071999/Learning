@@ -464,7 +464,7 @@ function Task({ task, hwKey }: { task: HomeworkTask; hwKey: string }) {
           {task.solution.text.map((t, i) => (
             <p key={i}>{rich(t)}</p>
           ))}
-          {task.solution.code && <Code sample={task.solution.code} />}
+          {task.solution.code && <Code sample={task.solution.code} output={task.solution.output} />}
           {task.solution.pitfalls && (
             <>
               <div className="criteria-title">Mistakes most people make here</div>

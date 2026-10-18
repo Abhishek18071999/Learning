@@ -163,7 +163,7 @@ if __name__ == "__main__":
     else:
         system, user, ids = built
         print(user)
-        # answer = complete(system, user, max_tokens=400, temperature=0)  # your llm.py from 7.1.1`,
+        # answer = complete(system, user, max_tokens=2000, effort="low")  # your llm.py from 7.1.1`,
       },
       notes: ["Returning early when retrieval finds nothing saves cost and prevents the model from answering from memory.", "The 'not instructions' line is a first defence against prompt injection hidden in documents; it is not sufficient alone (see best practices)."],
     },
@@ -293,6 +293,40 @@ print("hit@1", hit_at(1), "hit@3", hit_at(3))` },
           "Split the answer into sentences, extract citation numbers, reject any number outside the source list, then compute overlap between the sentence's content words and the cited source. Below a threshold → flag for review.",
           "An LLM judge can check entailment better, but it is itself fallible: calibrate it against human-labelled examples before trusting its scores.",
         ],
+        code: { lang: "python", file: "rag/verify.py", code: `import re
+
+STOP = {"the", "a", "an", "to", "of", "and", "or", "is", "it", "you", "use", "in", "on", "for", "with", "then", "that", "this", "be"}
+CITE = re.compile(r"\\[(\\d+)\\]")
+
+def words(text: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z0-9-]+", text.lower()) if w not in STOP and len(w) > 2}
+
+def verify(answer: str, sources: list[str], threshold: float = 0.5) -> list[dict]:
+    """Return one finding per sentence that cites a missing source or is weakly supported."""
+    findings = []
+    for sentence in re.split(r"(?<=[.!?])\\s+", answer.strip()):
+        cited = [int(n) for n in CITE.findall(sentence)]
+        claim = words(CITE.sub("", sentence))
+        for n in cited:
+            if not 1 <= n <= len(sources):
+                findings.append({"sentence": sentence, "problem": f"cites [{n}], which does not exist"})
+                continue
+            support = len(claim & words(sources[n - 1])) / max(len(claim), 1)
+            if support < threshold:
+                findings.append({"sentence": sentence, "problem": f"weak support from [{n}] ({support:.0%})"})
+    return findings
+
+sources = [
+    "A conflict happens when both branches change the same lines. Edit the file, remove the markers, "
+    "then git add and git commit. Use git merge --abort to cancel.",
+]
+answer = ("Run git merge --abort to cancel the merge [1]. "
+          "Conflicts are caused by cosmic rays in the CPU cache [1]. "
+          "You can also squash everything first [2].")
+for f in verify(answer, sources):
+    print(f"- {f['problem']}: {f['sentence']}")` },
+        output: "- weak support from [1] (0%): Conflicts are caused by cosmic rays in the CPU cache [1].\n- cites [2], which does not exist: You can also squash everything first [2].",
+        pitfalls: ["Keyword overlap gives false alarms for correct paraphrases and misses claims that reuse source words with the opposite meaning ('do NOT use --force'). Use it as a cheap first filter, not a verdict."],
       },
     },
     capstone: {
@@ -301,7 +335,109 @@ print("hit@1", hit_at(1), "hit@3", hit_at(3))` },
       criteria: ["Endpoint returns citations that link to lessons", "Graceful 'not found' path", "Eval script in CI that fails if hit@3 drops below a threshold you choose"],
       hints: ["Keep ingestion as a separate script/job, not part of the request path."],
       solution: {
-        text: ["Split into ingest.py (job), retrieve.py, prompt.py and api.py. The CI eval guards against silent quality regressions when someone changes chunking or the model, the same way unit tests guard code."],
+        text: [
+          "Split into ingest.py (job), retrieve.py, answer.py (prompt) and api.py. The LLM is injected with FastAPI's `Depends`, so tests override it with a fake and never hit the network.",
+          "The CI eval guards against silent quality regressions when someone changes chunking or the model, the same way unit tests guard code. Swap the TF-IDF retriever for the pgvector query once Postgres is in your Compose stack; the API and tests do not change.",
+        ],
+        code: { lang: "python", file: "services/ai/api.py", code: `import logging
+
+from fastapi import Depends, FastAPI
+from pydantic import BaseModel, Field
+
+from answer import build_prompt
+from retrieve import retrieve
+
+log = logging.getLogger("devatlas.ask")
+app = FastAPI(title="DevAtlas AI")
+NOT_FOUND = "I couldn't find that in the course notes."
+
+
+class AskIn(BaseModel):
+    question: str = Field(min_length=3, max_length=500)
+
+
+class Citation(BaseModel):
+    id: str
+    title: str
+    url: str
+
+
+class AskOut(BaseModel):
+    answer: str
+    citations: list[Citation]
+    retrieval_scores: list[float]
+
+
+def get_llm():
+    from llm import complete          # services/ai/llm.py from lesson 7.1.1
+    return complete
+
+
+@app.post("/ask", response_model=AskOut)
+def ask(body: AskIn, llm=Depends(get_llm)) -> AskOut:
+    hits = retrieve(body.question, k=3)
+    scores = [round(s, 3) for _, s in hits]
+    built = build_prompt(body.question)
+    if built is None:
+        log.info("ask not_found q=%r", body.question)
+        return AskOut(answer=NOT_FOUND, citations=[], retrieval_scores=scores)
+    system, user, ids = built
+    text = llm(system, user, max_tokens=2000, effort="low")
+    citations = [Citation(id=c.id, title=c.heading, url=f"/#/lesson/{c.source}") for c, _ in hits]
+    log.info("ask q=%r ids=%s", body.question, ids)
+    return AskOut(answer=text, citations=citations, retrieval_scores=scores)
+
+# ---- services/ai/test_api.py ----
+from fastapi.testclient import TestClient
+
+from api import app, get_llm
+
+calls = []
+def fake_llm(system, user, **kw):
+    calls.append(user)
+    return "Run git merge --abort [1]."
+
+app.dependency_overrides[get_llm] = lambda: fake_llm
+client = TestClient(app)
+
+
+def test_answers_with_citations():
+    r = client.post("/ask", json={"question": "how do I cancel a merge with conflicts?"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["citations"][0]["id"] == "git.md#0"
+    assert "<source" in calls[-1]
+
+
+def test_refuses_without_calling_llm_when_nothing_matches():
+    before = len(calls)
+    r = client.post("/ask", json={"question": "best pizza in Naples?"})
+    assert r.json()["answer"].startswith("I couldn't find")
+    assert len(calls) == before
+
+
+def test_validates_input():
+    assert client.post("/ask", json={"question": ""}).status_code == 422
+
+# ---- services/ai/eval_retrieval.py ----
+"""Run in CI: python eval_retrieval.py  (exits 1 if hit@3 falls below the threshold)."""
+import sys
+
+from retrieve import retrieve
+
+GOLDEN = [  # (question, chunk id that must be retrieved)
+    ("how do I cancel a merge with conflicts?", "git.md#0"),
+    ("undo a commit I already pushed", "git.md#1"),
+    ("why is my docker build cache not reused?", "docker.md#0"),
+    ("make my runtime image smaller", "docker.md#1"),
+]
+THRESHOLD = 0.75
+
+hits = sum(any(c.id == want for c, _ in retrieve(q, k=3)) for q, want in GOLDEN)
+score = hits / len(GOLDEN)
+print(f"hit@3 = {score:.2f} ({hits}/{len(GOLDEN)})")
+sys.exit(0 if score >= THRESHOLD else 1)` },
+        output: "pytest: 3 passed\npython eval_retrieval.py → hit@3 = 1.00 (4/4)",
       },
     },
   },
@@ -311,5 +447,5 @@ print("hit@1", hit_at(1), "hit@3", hit_at(3))` },
     { label: "Anthropic: Contextual Retrieval", url: "https://www.anthropic.com/news/contextual-retrieval" },
     { label: "OWASP Top 10 for LLM Applications", url: "https://genai.owasp.org/llm-top-10/" },
   ],
-  nextPreview: "Next: Docker in depth. You will package the AI service into a small, secure image that builds in seconds thanks to layer caching.",
+  nextPreview: "Next: hybrid search, reranking and RAG evaluation. You will combine keyword and vector search, rerank the results, and measure retrieval quality with recall@k and MRR.",
 };

@@ -56,7 +56,7 @@ export interface HomeworkTask {
   brief: Rich[];
   criteria: string[];
   hints: string[];
-  solution: { text: Rich[]; code?: CodeSample; pitfalls?: string[] };
+  solution: { text: Rich[]; code?: CodeSample; output?: string; pitfalls?: string[] };
 }
 
 export interface Lesson {

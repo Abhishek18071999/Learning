@@ -27,7 +27,7 @@ export const lesson: Lesson = {
     ],
     precise: [
       "Text is split into **tokens** and each token is mapped to an **embedding** vector. A **transformer** processes all context tokens through many layers. In each layer, **self-attention** lets every token compute how relevant each earlier token is and blend in their information. The final layer produces a score (logit) for every token in the vocabulary; a softmax turns scores into probabilities.",
-      "Generation is a loop: pick the next token from that distribution, append it, run again. **Temperature** rescales the scores before sampling: near 0 almost always picks the top token; higher values flatten the distribution. **Top-p** limits sampling to the smallest set of tokens whose probabilities add up to p.",
+      "Generation is a loop: pick the next token from that distribution, append it, run again. **Temperature** rescales the scores before sampling: near 0 almost always picks the top token; higher values flatten the distribution. **Top-p** limits sampling to the smallest set of tokens whose probabilities add up to p. Many APIs expose these settings; current Claude models manage sampling themselves and expose an **effort** setting (how much the model thinks before answering) instead.",
       "Models are trained in stages: **pre-training** on large text corpora (learn language and knowledge patterns), then **post-training** (instruction tuning, reinforcement learning from human or AI feedback) to follow instructions and be helpful and safe.",
       "Consequences engineers must design for: knowledge has a **training cutoff**; facts not in the context may be **hallucinated**; cost and latency scale with **tokens**; output is **probabilistic**.",
     ],
@@ -105,20 +105,24 @@ import os
 from anthropic import Anthropic
 
 client = Anthropic()  # reads ANTHROPIC_API_KEY from the environment
-model = os.environ.get("MODEL", "claude-sonnet-5-5")  # check the docs for current model names
+model = os.environ.get("MODEL", "claude-opus-5-5")  # model IDs change: check the models page
 
 msg = client.messages.create(
     model=model,
-    max_tokens=300,          # hard cap on output length (and cost)
-    temperature=0.2,         # low: factual, repeatable tasks
+    max_tokens=2000,                   # cap on output, INCLUDING the model's thinking
+    output_config={"effort": "low"},   # low | medium | high | xhigh | max
     system="You are a concise senior engineer. If unsure, say so.",
     messages=[{"role": "user", "content": "Explain DNS TTL in two sentences."}],
 )
-print(msg.content[0].text)
-print("input tokens:", msg.usage.input_tokens, "output tokens:", msg.usage.output_tokens)`,
+answer = "".join(b.text for b in msg.content if b.type == "text")  # skip thinking blocks
+print(answer)
+print("stop:", msg.stop_reason, "| in:", msg.usage.input_tokens, "| out:", msg.usage.output_tokens)`,
       },
+      output: "TTL is how long a resolver may cache a DNS record. Lower it a day before a migration so the change propagates quickly.\nstop: end_turn | in: 32 | out: 41",
       notes: [
-        "The shape is the same across providers: a system instruction, a list of messages, a model name, max output tokens and sampling settings. Check your provider's docs for current model IDs and prices, which change frequently.",
+        "The shape is the same across providers: a system instruction, a list of messages, a model name and a max output length. Model IDs and prices change often, so read them from config, not code.",
+        "**No `temperature` here, on purpose.** Current Claude models (Opus 5.5, Sonnet 5.5, Haiku 5.5) think adaptively and reject non-default `temperature`/`top_p`/`top_k` with a 400; the 1.x Python SDK no longer even accepts the argument. You steer depth, latency and cost with `effort` instead. Temperature is still a real setting on many other providers and on open models you run yourself (Ollama, vLLM), so the concept above still matters.",
+        "Read `content` by block type, not `content[0]`: a response can start with a `thinking` block before the text. Thinking tokens count toward `max_tokens` and are billed as output, so leave headroom.",
         "Log `usage` on every call. Token counts are your cost and latency metrics.",
       ],
     },
@@ -126,15 +130,18 @@ print("input tokens:", msg.usage.input_tokens, "output tokens:", msg.usage.outpu
       title: "Estimate cost before you ship",
       code: {
         lang: "python",
+        file: "cost.py",
         code: `def monthly_cost(requests_per_day: int, in_tokens: int, out_tokens: int,
                  usd_per_m_in: float, usd_per_m_out: float) -> float:
     per_req = in_tokens / 1e6 * usd_per_m_in + out_tokens / 1e6 * usd_per_m_out
     return per_req * requests_per_day * 30
 
-# Example with ILLUSTRATIVE prices; use your provider's current price sheet.
-print(round(monthly_cost(20_000, 3_000, 400, 3.0, 15.0), 2))  # → 9000.0 USD/month`,
+# Anthropic list prices per million tokens (Oct 2026). Always re-check the pricing page.
+print(round(monthly_cost(20_000, 3_000, 400, 4.00, 20.00)))  # Opus 5.5
+print(round(monthly_cost(20_000, 3_000, 400, 0.10, 0.50)))   # Haiku 5.5`,
       },
-      notes: ["Here 3,000 input tokens (mostly a long system prompt plus retrieved docs) dominate. Shorter prompts, prompt caching, or a smaller model for simple requests can cut this a lot."],
+      output: "12000\n300",
+      notes: ["Same traffic, 40× price difference. That is why model routing (homework challenge) is one of the biggest levers in production AI. Here 3,000 input tokens (mostly a long system prompt plus retrieved docs) dominate. Shorter prompts, prompt caching, or a smaller model for simple requests can cut this a lot."],
     },
   ],
   companies: [
@@ -145,7 +152,7 @@ print(round(monthly_cost(20_000, 3_000, 400, 3.0, 15.0), 2))  # → 9000.0 USD/m
   ],
   mistakes: [
     { mistake: "Treating the LLM as a database of facts", why: "It answers confidently", wrong: "Invented policies, prices, APIs and citations", fix: "Provide the facts in context (RAG) and instruct it to answer only from them and say 'I don't know'" },
-    { mistake: "High temperature for factual or structured tasks", why: "Default settings or 'more creative is better'", wrong: "Inconsistent answers and broken JSON", fix: "Low temperature for extraction/classification; use structured output features" },
+    { mistake: "Relying on sampling settings for reliable structured output", why: "Old tutorials say 'set temperature to 0 for JSON'", wrong: "Occasional broken JSON in production; on current Claude models the temperature argument is rejected outright", fix: "Use structured outputs (a JSON schema) and validate; where a provider exposes temperature, keep it low for extraction" },
     { mistake: "Ignoring token costs", why: "The prototype had 10 users", wrong: "Bills grow with traffic × prompt size; long histories explode cost", fix: "Measure usage per call, trim context, cache prefixes, route to smaller models" },
     { mistake: "Hardcoding API keys", why: "Quick to test", wrong: "Keys leak via Git or client-side code and get abused within hours", fix: "Environment variables locally, a secret manager in the cloud, and call LLMs only from your backend" },
     { mistake: "No max_tokens or timeout", why: "Defaults seem fine", wrong: "Runaway responses, slow requests, unpredictable cost", fix: "Set max_tokens, timeouts and retries with backoff" },
@@ -158,16 +165,16 @@ print(round(monthly_cost(20_000, 3_000, 400, 3.0, 15.0), 2))  # → 9000.0 USD/m
   ],
   interview: [
     { q: "How does an LLM generate text?", a: "It tokenises input, embeds tokens, runs them through stacked transformer layers using self-attention, and outputs a probability distribution over the next token. It samples one token (controlled by temperature/top-p), appends it, and repeats until a stop condition or the max token limit." },
-    { q: "Why do LLMs hallucinate, and how do you reduce it?", a: "They are trained to produce plausible continuations, not verified facts, so when the context lacks the answer they may produce something plausible but false. Reduce it with retrieval grounding, instructions to cite sources and refuse when unsupported, lower temperature, structured outputs, and evaluation." },
+    { q: "Why do LLMs hallucinate, and how do you reduce it?", a: "They are trained to produce plausible continuations, not verified facts, so when the context lacks the answer they may produce something plausible but false. Reduce it with retrieval grounding, instructions to cite sources and refuse when unsupported, structured outputs, low temperature where the provider supports it, and evaluation." },
     { q: "What drives LLM cost and latency?", a: "Token counts: input tokens (system prompt, history, retrieved docs) and output tokens, plus model size. Output tokens are generated sequentially, so long outputs add latency. Levers: shorter context, caching, smaller models for easy tasks, max_tokens limits and streaming." },
   ],
   quickCheck: [
     {
       kind: "mcq",
       prompt: "You need the same JSON extraction result every time. Which setting helps most?",
-      options: ["Temperature 1.5", "Temperature near 0 plus structured output", "Larger max_tokens", "A longer system prompt"],
+      options: ["Temperature 1.5", "Structured outputs with a JSON schema, then validation", "Larger max_tokens", "A longer system prompt"],
       answer: 1,
-      explanation: "Low temperature reduces randomness; structured output/JSON modes enforce the format. Neither guarantees perfection, so still validate.",
+      explanation: "Structured outputs constrain the response to your schema. On providers that expose temperature, a low value also reduces variation (current Claude models do not accept it at all). Still validate the content.",
     },
     {
       kind: "mcq",
@@ -188,7 +195,7 @@ print(round(monthly_cost(20_000, 3_000, 400, 3.0, 15.0), 2))  # → 9000.0 USD/m
     "LLM = next-token predictor: tokens → embeddings → transformer → probabilities → sample.",
     "Attention lets each token use information from other tokens in context.",
     "Context window = prompt + output tokens.",
-    "Temperature low = deterministic; high = diverse (and riskier).",
+    "Temperature low = deterministic; high = diverse. Current Claude models take `effort` instead.",
     "Cost ∝ input tokens + output tokens (output usually pricier).",
     "Hallucination: plausible ≠ true. Ground with RAG, ask for citations, allow 'I don't know'.",
     "Keys on the server only. Validate model output.",
@@ -197,44 +204,202 @@ print(round(monthly_cost(20_000, 3_000, 400, 3.0, 15.0), 2))  # → 9000.0 USD/m
   homework: {
     basic: {
       title: "Token detective",
-      brief: ["Count tokens for 10 texts: short English, long English, code, JSON, Hindi or another non-Latin script, and a URL. Record characters per token and explain the differences."],
+      brief: ["Count tokens for 8 to 10 texts: short English, long English, code, pretty and compact JSON, Hindi or another non-Latin script, a URL and a UUID. Record characters per token and explain the differences."],
       criteria: ["Table of text type, characters, tokens, chars/token", "Two insights about cost implications"],
-      hints: ["Try the same sentence in two languages."],
+      hints: ["Try the same sentence in two languages.", "For exact Claude counts, call `client.messages.count_tokens(model=..., messages=[...])` and read `.input_tokens`; it is free and not billed as a message."],
       solution: {
         text: [
-          "Typical findings: plain English is the most token-efficient; code and JSON spend tokens on punctuation and whitespace; many non-Latin scripts take several times more tokens for the same meaning; URLs and IDs tokenise poorly.",
-          "Implications: compact formats (e.g. fewer JSON keys, no pretty-printing) in prompts save cost; multilingual products should budget more tokens for some languages.",
+          "Typical findings: plain English is the most token-efficient (about 4 to 5 chars/token); code and pretty JSON spend tokens on punctuation and whitespace; many non-Latin scripts take several times more tokens for the same meaning; URLs and UUIDs tokenise poorly (close to 1 to 2 chars/token).",
+          "Implications: compact formats (fewer JSON keys, no pretty-printing) in prompts save cost; multilingual products should budget more tokens for some languages; never paste raw IDs or logs into prompts when a summary will do.",
         ],
+        code: { lang: "python", file: "token_detective.py", code: `import tiktoken
+
+enc = tiktoken.get_encoding("cl100k_base")
+samples = {
+    "short English": "Ship small changes often.",
+    "long English": "Continuous delivery means every change that passes the pipeline can be released to users safely and quickly.",
+    "Python code": "def area(r: float) -> float:\\n    return 3.14159 * r * r",
+    "JSON (pretty)": '{\\n  "user_id": 42,\\n  "roles": ["admin", "editor"]\\n}',
+    "JSON (compact)": '{"user_id":42,"roles":["admin","editor"]}',
+    "Hindi": "निरंतर डिलीवरी का मतलब है छोटे बदलाव बार-बार भेजना।",
+    "URL": "https://devatlas.example.com/lessons/7.1.1?ref=newsletter&utm_source=x",
+    "UUID": "3f2b8c1e-9a4d-4e7f-b1c2-5d6e7f8a9b0c",
+}
+print(f"{'type':16} {'chars':>5} {'tokens':>6} {'chars/token':>11}")
+for name, text in samples.items():
+    n = len(enc.encode(text))
+    print(f"{name:16} {len(text):5} {n:6} {len(text) / n:11.2f}")` },
+        pitfalls: ["tiktoken is OpenAI's tokenizer. Claude uses a different one, so use `count_tokens` for Claude budgets; the *relative* differences between text types hold across tokenizers."],
       },
     },
     intermediate: {
-      title: "Temperature experiment",
-      brief: ["Call a model 5 times each at temperature 0 and 1 with the same creative prompt and the same factual prompt. Measure how many distinct answers you get and note any factual errors."],
-      criteria: ["20 calls logged with temperature and output", "Distinct-answer counts", "Conclusion on when to use each setting"],
-      hints: ["Use a set of normalised outputs to count distinct answers.", "If you have no API key, use a free local model via Ollama, or reason with the temperature.py simulation."],
+      title: "Sampling experiment",
+      brief: ["Measure how temperature changes variety and correctness. Sample 5 times at temperature 0 and 1 for a factual prompt and a creative prompt, count distinct answers, then estimate the factual error rate at temperature 1 over 10,000 samples. Optional: repeat with a local open model via Ollama (`options: {\"temperature\": 0}`)."],
+      criteria: ["Distinct-answer counts for all four combinations", "Error rate measured, not guessed", "Conclusion on when to use each setting"],
+      hints: ["Temperature 0 means greedy decoding: always pick the top token.", "Seed your random generator so the experiment is repeatable."],
       solution: {
-        text: ["Expect temperature 0 to give identical or near-identical outputs (not always perfectly identical, because of provider-side non-determinism), and temperature 1 to vary. Factual prompts should use low temperature; creative tasks can use higher values."],
+        text: ["At temperature 0 both prompts give one answer every time. At 1.0 the creative prompt varies (good) and the factual prompt is wrong about 7% of the time (bad): that is exactly the softmax probability of the non-top tokens. Real models can still vary slightly at temperature 0 because of provider-side batching and floating-point non-determinism."],
+        code: { lang: "python", file: "sampling_experiment.py", code: `import math, random
+
+# Toy next-token scores (logits). Real models produce these for ~100k tokens.
+FACTUAL = {"Paris": 5.0, "Lyon": 2.0, "London": 1.0, "Marseille": 0.5}   # "The capital of France is"
+CREATIVE = {"moonlit": 2.0, "silver": 1.8, "quiet": 1.7, "electric": 1.5, "ancient": 1.4}  # "A ___ city"
+
+def sample(scores: dict[str, float], temperature: float, rng: random.Random) -> str:
+    if temperature == 0:
+        return max(scores, key=scores.get)          # greedy: always the top token
+    exps = {k: math.exp(v / temperature) for k, v in scores.items()}
+    r = rng.random() * sum(exps.values())
+    for token, weight in exps.items():
+        r -= weight
+        if r <= 0:
+            return token
+    return token
+
+rng = random.Random(7)
+for name, scores in [("factual", FACTUAL), ("creative", CREATIVE)]:
+    for t in (0, 1.0):
+        runs = [sample(scores, t, rng) for _ in range(5)]
+        print(f"{name:8} t={t}: {len(set(runs))} distinct  {runs}")
+
+wrong = sum(sample(FACTUAL, 1.0, rng) != "Paris" for _ in range(10_000))
+print(f"factual error rate at t=1.0: {wrong / 100:.1f}%")` },
+        output: "factual  t=0: 1 distinct  ['Paris', 'Paris', 'Paris', 'Paris', 'Paris']\nfactual  t=1.0: 1 distinct  ['Paris', 'Paris', 'Paris', 'Paris', 'Paris']\ncreative t=0: 1 distinct  ['moonlit', 'moonlit', 'moonlit', 'moonlit', 'moonlit']\ncreative t=1.0: 3 distinct  ['silver', 'moonlit', 'quiet', 'moonlit', 'silver']\nfactual error rate at t=1.0: 7.4%",
+        pitfalls: ["Five samples hide a 7% error rate completely: the factual run at t=1.0 looks perfect. Small manual tests miss rare failures; that is why teams run evals on hundreds of cases."],
       },
     },
     challenge: {
       title: "Cost-aware model router",
-      brief: ["Design (and optionally code) a router that sends a request to a small or large model based on task type and input length, with a fallback to the large model when the small model's output fails validation. Estimate monthly savings for 50k requests/day using illustrative prices."],
-      criteria: ["Routing rules explicit", "Validation-triggered fallback", "Cost estimate with stated assumptions"],
-      hints: ["Classification and extraction are good small-model tasks.", "Count fallback rate in the cost model."],
+      brief: ["Code a router that sends a request to a small or large model based on task type and input length, with a fallback to the large model when the small model's output fails validation. Estimate monthly cost for 50k requests/day with and without routing."],
+      criteria: ["Routing rules explicit", "Validation-triggered fallback, tested with a fake model", "Cost estimate with stated assumptions"],
+      hints: ["Classification and extraction are good small-model tasks.", "Count the fallback rate in the cost model: those requests pay twice."],
       solution: {
         text: [
-          "Rule example: classify/extract/short summaries → small model; multi-step reasoning, long documents, code generation → large model. Validate small-model output (JSON schema, allowed labels); on failure, retry on the large model.",
-          "Cost = small_share × small_cost + (fallback_rate × small_share + large_share) × large_cost. Even with a 10% fallback rate, routing 70% of traffic to a model that is ~10× cheaper typically cuts spend by more than half. State that real numbers require your provider's current pricing and an eval of quality.",
+          "Route classify/extract/short summaries to the small model, everything else (multi-step reasoning, long documents, code generation) to the large one. Validate small-model output (allowed labels, JSON schema); on failure, retry on the large model.",
+          "The result is instructive: the small model is 40× cheaper, yet total savings are only 35%, because the 30% of large-model requests are longer and dominate the bill. Always model the traffic mix before promising savings, and confirm quality with an eval.",
         ],
+        code: { lang: "python", file: "router.py", code: `import json
+
+# USD per million tokens (input, output). Anthropic list prices, Oct 2026; re-check before budgeting.
+PRICES = {"claude-haiku-5-5": (0.10, 0.50), "claude-opus-5-5": (4.00, 20.00)}
+SMALL, LARGE = "claude-haiku-5-5", "claude-opus-5-5"
+SMALL_TASKS = {"classify", "extract", "short_summary"}
+
+def route(task: str, input_tokens: int) -> str:
+    return SMALL if task in SMALL_TASKS and input_tokens <= 20_000 else LARGE
+
+def handle(task: str, text: str, call, validate) -> tuple[str, str]:
+    """call(model, text) -> str. Falls back to the large model when validation fails."""
+    model = route(task, len(text) // 4)            # ~4 chars per token is enough for routing
+    out = call(model, text)
+    if model == SMALL and not validate(out):
+        model, out = LARGE, call(LARGE, text)
+    return model, out
+
+def cost(model: str, tokens_in: int, tokens_out: int) -> float:
+    p_in, p_out = PRICES[model]
+    return tokens_in / 1e6 * p_in + tokens_out / 1e6 * p_out
+
+# Demo with a fake model: the small one returns an invalid label once.
+answers = iter(["urgent!!", "billing"])
+def fake_call(model, text): return next(answers) if model == SMALL else "billing"
+labels = {"billing", "bug", "feature", "other"}
+print(handle("classify", "I was charged twice", fake_call, lambda s: s in labels))
+
+# Monthly estimate: 50k requests/day, 70% small-model tasks, 10% of those fall back.
+day, small_share, fallback = 50_000, 0.70, 0.10
+small_req, large_req = (1_500, 150), (4_000, 800)    # (input, output) tokens per request
+all_large = day * 30 * (small_share * cost(LARGE, *small_req) + (1 - small_share) * cost(LARGE, *large_req))
+routed = day * 30 * (small_share * cost(SMALL, *small_req)
+                     + small_share * fallback * cost(LARGE, *small_req)
+                     + (1 - small_share) * cost(LARGE, *large_req))
+print(f"all large: \${all_large:,.0f}/month | routed: \${routed:,.0f}/month | saved {1 - routed / all_large:.0%}")` },
+        output: "('claude-opus-5-5', 'billing')\nall large: $23,850/month | routed: $15,581/month | saved 35%",
       },
     },
     capstone: {
       title: "DevAtlas step 8: LLM client wrapper",
-      brief: ["In services/ai, create `llm.py` with one function `complete(system, user, *, max_tokens, temperature)` that reads the key and model name from environment variables, sets a timeout, logs token usage, and raises a clear error if the key is missing."],
-      criteria: ["No secrets in code", "Usage logged per call", "Unit test with the client mocked"],
-      hints: ["Inject the client so tests can pass a fake one."],
+      brief: ["In services/ai, create `llm.py` with one function `complete(system, user, *, max_tokens, effort)` that reads the key and model name from environment variables, sets a timeout and retries, logs token usage, warns on truncation, and raises a clear error if the key is missing."],
+      criteria: ["No secrets in code", "Usage logged per call", "Unit tests with the client faked (no network)"],
+      hints: ["Inject the client so tests can pass a fake one.", "Return only text blocks; skip thinking blocks."],
       solution: {
-        text: ["Wrap the SDK behind your own function so the rest of DevAtlas never imports the provider directly. Swapping providers or adding caching later then touches one file."],
+        text: ["Wrap the SDK behind your own function so the rest of DevAtlas never imports the provider directly. Swapping providers, adding caching or adding cost limits later then touches one file. The tests use a tiny fake object with the same shape as the SDK response, so they run offline in milliseconds."],
+        code: { lang: "python", file: "services/ai/llm.py", code: `"""services/ai/llm.py: the only module in DevAtlas that talks to the model provider."""
+import logging
+import os
+
+from anthropic import Anthropic
+
+log = logging.getLogger("devatlas.llm")
+_client: Anthropic | None = None
+
+
+class LLMConfigError(RuntimeError):
+    pass
+
+
+def _default_client() -> Anthropic:
+    global _client
+    if _client is None:
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            raise LLMConfigError("ANTHROPIC_API_KEY is not set (use .env locally, a secret manager in prod)")
+        _client = Anthropic(timeout=30.0, max_retries=3)   # SDK retries 429/5xx with backoff
+    return _client
+
+
+def complete(system: str, user: str, *, max_tokens: int = 2000, effort: str = "low", client=None) -> str:
+    client = client or _default_client()
+    model = os.environ.get("DEVATLAS_MODEL", "claude-opus-5-5")
+    msg = client.messages.create(
+        model=model,
+        max_tokens=max_tokens,
+        output_config={"effort": effort},
+        system=system,
+        messages=[{"role": "user", "content": user}],
+    )
+    log.info("llm model=%s in=%d out=%d stop=%s",
+             model, msg.usage.input_tokens, msg.usage.output_tokens, msg.stop_reason)
+    if msg.stop_reason == "max_tokens":
+        log.warning("llm output truncated at max_tokens=%d", max_tokens)
+    return "".join(b.text for b in msg.content if b.type == "text")
+
+# ---- services/ai/test_llm.py ----
+import logging
+from types import SimpleNamespace as NS
+
+import pytest
+
+import llm
+
+
+class FakeMessages:
+    def __init__(self):
+        self.calls = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        return NS(
+            content=[NS(type="thinking", thinking=""), NS(type="text", text="Hello")],
+            usage=NS(input_tokens=12, output_tokens=3),
+            stop_reason="end_turn",
+        )
+
+
+def test_complete_returns_text_and_logs_usage(caplog):
+    fake = NS(messages=FakeMessages())
+    with caplog.at_level(logging.INFO, logger="devatlas.llm"):
+        assert llm.complete("sys", "hi", client=fake) == "Hello"
+    call = fake.messages.calls[0]
+    assert call["output_config"] == {"effort": "low"} and "temperature" not in call
+    assert "in=12 out=3" in caplog.text
+
+
+def test_missing_key_is_a_clear_error(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(llm, "_client", None)
+    with pytest.raises(llm.LLMConfigError, match="ANTHROPIC_API_KEY"):
+        llm.complete("sys", "hi")` },
+        output: "2 passed",
       },
     },
   },
@@ -244,5 +409,5 @@ print(round(monthly_cost(20_000, 3_000, 400, 3.0, 15.0), 2))  # → 9000.0 USD/m
     { label: "OpenAI tiktoken (GitHub)", url: "https://github.com/openai/tiktoken" },
     { label: "Hugging Face LLM course", url: "https://huggingface.co/learn/llm-course" },
   ],
-  nextPreview: "Next: RAG end to end. You will build an 'Ask the course' tutor that answers from DevAtlas lesson notes with citations, and learn why most RAG failures are retrieval failures.",
+  nextPreview: "Next: prompt engineering that works in production. You will turn a vague prompt into a structured, testable one and measure the difference.",
 };
