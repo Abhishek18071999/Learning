@@ -474,9 +474,97 @@ Use pgvector with an HNSW index, plus PostgreSQL full-text search for hybrid ret
       hints: ["Outline: hook (the problem) → context → approach → results → lessons → next steps."],
       solution: {
         text: [
-          "Outline example. Title: 'My RAG tutor answered confidently and wrongly. Here is the eval that caught it.' 1) The bug: correct-sounding but ungrounded answers. 2) Building a golden set from student questions. 3) Measuring recall@3 and groundedness; calibrating the judge against my own labels (kappa 0.57 at first). 4) Hybrid search and reranking: recall@3 from 0.8 to 0.9. 5) Running it in CI. 6) What I would do with more data.",
-          "Posts like this are often what interviewers remember and ask about.",
+          "The post follows the outline: the hook is a specific wrong answer, then what failed first (prompt tweaks tested on five questions), the golden set, measured results in a table (recall@3 0.80 → 0.86 → 0.90, judge agreement kappa 0.57 → 0.78), the CI gate, the trade-offs accepted (latency, an ageing golden set, an imperfect judge) and what the author would do differently. About 880 words, with a code excerpt and a results table.",
+          "Use your own numbers and keep the measurement notes for each, because readers (and interviewers) will ask. Publish it on your blog or a developer platform, set the canonical URL if you cross-post, and link it from the README and your GitHub profile, as the last line says. Posts like this are often what interviewers remember and ask about.",
         ],
+        code: {
+          lang: "markdown",
+          file: "posts/rag-evals.md",
+          code: `---
+title: "My RAG tutor answered confidently and wrongly. Here is the eval that caught it."
+date: 2026-10-18
+tags: [rag, evals, python, ci]
+canonical_url: https://asha.dev/rag-evals
+---
+
+# My RAG tutor answered confidently and wrongly. Here is the eval that caught it.
+
+DevAtlas, my learning platform, has an "Ask the course" tutor: a student types a question, the service retrieves lesson chunks with pgvector and an LLM answers with citations. In week two a student asked why their Docker build reinstalled every dependency after a one-line change. The tutor gave a fluent, friendly answer about clearing the pip cache. It was wrong. The real cause, \`COPY . .\` before \`pip install\`, is the first worked example in lesson 9.1.1, and the tutor had cited that lesson.
+
+The citation made it worse. The answer looked grounded, and I had no way to know how often this happened.
+
+## What I tried first (and why it failed)
+
+My first fix was the prompt: "Answer only from the provided context; if unsure, say so." I tested it on five questions I remembered and it seemed better. A week later a different student hit the same class of bug on a SQL question. Five hand-picked questions told me nothing about the other hundreds.
+
+So I stopped tweaking and started measuring.
+
+## Building a golden set
+
+I exported 3 weeks of real questions (about 900), removed duplicates and anything with personal details, and picked 120 that covered every phase of the course. For each one I wrote down which lesson chunks a correct answer needs. That took two evenings, and it was the most valuable work in the whole project.
+
+The eval has two parts:
+
+1. **Retrieval: recall@3.** Does at least one of the expected chunks appear in the top three results? If retrieval misses, the model is answering from its own memory, which is exactly how the pip-cache answer happened.
+2. **Answer quality: groundedness.** Does every claim in the answer come from the retrieved chunks? I used an LLM as the judge, with a short rubric and a 0/1 verdict.
+
+\`\`\`python
+from typing import Callable
+
+Retriever = Callable[[str], list[str]]          # question -> ranked chunk ids
+
+
+def recall_at_k(golden: list[dict], retrieve: Retriever, k: int = 3) -> float:
+    """Share of questions where at least one expected chunk is in the top k."""
+    hits = sum(bool(set(retrieve(q["question"])[:k]) & set(q["expected_chunks"])) for q in golden)
+    return hits / len(golden)
+
+
+def test_retrieval_does_not_regress() -> None:
+    golden = load_golden("evals/golden.jsonl")    # 120 real student questions
+    assert recall_at_k(golden, hybrid_retrieve) >= 0.88
+\`\`\`
+
+(Excerpt: \`load_golden\` and \`hybrid_retrieve\` live in the repository.)
+
+## The first numbers were humbling
+
+Pure vector search scored **0.80 recall@3**. One question in five reached the model without the chunk that answered it. The failures had a pattern: questions using exact terms ("\`ON CONFLICT\`", "\`--no-cache\`", "HNSW") lost to chunks that were merely about the same topic. Embeddings capture meaning well and exact tokens badly.
+
+The judge had its own problem. I labelled 60 answers myself and compared: Cohen's kappa was **0.57**, only moderate agreement. The judge was lenient with answers that cited the right lesson but said something the lesson does not. In other words, the judge made the same mistake as my students: it trusted citations. I rewrote the rubric to require quoting the supporting sentence for each claim, and agreement rose to **0.78** on the same 60 answers. I would not have trusted any groundedness number before that calibration.
+
+## What worked
+
+**Hybrid search.** I added PostgreSQL full-text search next to pgvector and merged the two ranked lists with reciprocal rank fusion. No new infrastructure: it is one more index in the database I already run.
+
+**Reranking the top 20.** A cross-encoder re-scores the 20 merged candidates and keeps the best 5.
+
+| Setup | recall@3 | p95 retrieval latency |
+|---|---|---|
+| Vector only | 0.80 | 35 ms |
+| Hybrid (vector + full text, RRF) | 0.86 | 48 ms |
+| Hybrid + rerank | 0.90 | 190 ms |
+
+Groundedness (with the calibrated judge) went from 0.83 to 0.94. The Docker question now retrieves the right chunk first and the answer names \`COPY . .\` as the cause.
+
+## Running it in CI
+
+The eval runs on every pull request that touches retrieval, prompts or chunking, and fails the build if recall@3 drops below 0.88. Retrieval-only evals take 40 seconds and cost nothing. The judged groundedness eval calls a paid model, so it runs nightly instead, at about $0.60 per run. It has already caught one regression: a chunking change that split code blocks from their explanations dropped recall@3 to 0.84 before it was merged.
+
+## Trade-offs I accepted
+
+- **Latency.** Reranking adds ~140 ms to every question. Time to first token is dominated by the LLM (about 2 s), so students do not notice, but on a faster model I would reconsider.
+- **The golden set ages.** New lessons are not in it. I now add five questions per new lesson, which is a chore I will occasionally skip.
+- **An LLM judge is still a model.** A kappa of 0.78 is substantial, not perfect: it still disagreed with me on 7 of the 60 labelled answers. I treat its score as a trend, not a verdict, and still read 10 random answers every week.
+
+## What I would do differently
+
+I would build the golden set before writing the first prompt. Every hour I spent on prompt wording before I could measure was guesswork. And I would log retrieval scores from day one; the questions that failed were visible in those scores long before a student reported one.
+
+Next, I want to test whether skipping the reranker when the top result is clearly ahead keeps recall at 0.90 while saving most of that latency.
+
+*The code, eval set format and CI workflow are in the [DevAtlas repository](https://github.com/asha-dev/devatlas/tree/main/services/ai/evals). This post is linked from the project README and my GitHub profile.*`,
+        },
       },
     },
     capstone: {

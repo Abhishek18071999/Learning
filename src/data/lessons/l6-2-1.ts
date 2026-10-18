@@ -241,8 +241,56 @@ print(dashboard_read_model[9])        # one key lookup instead of several JOINs`
       hints: ["Good extraction candidates have different scaling or technology needs (e.g. the AI service)."],
       solution: {
         text: [
-          "Learning (lessons, progress; publishes LessonCompleted), Assessment (quizzes, attempts; publishes QuizSubmitted), Billing (purchases, invoices; publishes PurchaseCompleted, consumes nothing from Learning), Community (comments, badges; consumes LessonCompleted), Content (lesson documents; publishes LessonPublished), News (articles; publishes NewsIngested). First extraction: the AI/News pipeline, already in Python/Rust with different scaling (LLM latency, scheduled ingestion), which is exactly why DevAtlas starts with those as separate services.",
+          "Eight contexts, each with exactly one writer for its data. Events are past-tense facts; the interaction table shows which links must stay synchronous because a user is waiting.",
+          "The first extraction is the AI tutor (already a separate Python service in DevAtlas) because it differs on scaling, technology, cost and failure modes, and its interface is narrow. News is second. Learning, Assessment and Community stay together because one page touches all three.",
         ],
+        code: {
+          lang: "markdown",
+          file: "docs/bounded-contexts.md",
+          code: `# DevAtlas bounded contexts
+
+Status: draft for review · Scope: today's modular monolith (ASP.NET Core API) plus the AI and news services
+
+## Contexts, data ownership and events
+
+| Context | Owns (only this context writes it) | Store | Publishes | Consumes |
+|---|---|---|---|---|
+| **Identity** | users, roles, refresh tokens, login audit | MySQL \`identity_*\` tables | \`UserRegistered\`, \`UserDeleted\` | none |
+| **Learning** | enrollments, lesson progress, streaks | MySQL \`learning_*\` tables | \`LessonStarted\`, \`LessonCompleted\`, \`StreakBroken\` | \`UserDeleted\`, \`QuizSubmitted\`, \`PurchaseCompleted\` |
+| **Assessment** | quizzes, attempts, homework grades | MySQL \`assessment_*\` tables | \`QuizSubmitted\`, \`HomeworkGraded\` | \`LessonPublished\` (to build the question pool) |
+| **Content** | lesson documents, versions, media | MongoDB \`lessons\` collection | \`LessonPublished\`, \`LessonRetired\` | none |
+| **Billing** | plans, purchases, invoices, refunds | MySQL \`billing_*\` tables + payment provider | \`PurchaseCompleted\`, \`RefundIssued\` | \`UserDeleted\` |
+| **Community** | comments, badges, leaderboard | MySQL \`community_*\` tables, Redis leaderboard | \`CommentPosted\`, \`BadgeAwarded\` | \`LessonCompleted\`, \`QuizSubmitted\`, \`UserDeleted\` |
+| **News** | feeds, articles, topic tags, digests | MongoDB \`news\` collection | \`NewsIngested\`, \`DigestPublished\` | none |
+| **AI Tutor** | lesson chunks + embeddings, answer logs, eval runs | PostgreSQL + pgvector | \`TutorAnswered\` | \`LessonPublished\`, \`LessonRetired\`, \`NewsIngested\` |
+
+Rules that follow from the table:
+
+- No context reads another context's tables. Learning asks Content for a lesson through \`content/api.py\` (in process) or \`GET /v1/lessons/{id}\`; it never queries the \`lessons\` collection directly.
+- Events are past-tense facts with an id, a \`schema_version\` and the minimum data consumers need, for example \`LessonCompleted {event_id, schema_version: 1, user_id, lesson_id, score, completed_at}\`.
+- \`UserDeleted\` is the only event every context must handle (GDPR erasure within 30 days).
+
+## Interaction map (sync vs async)
+
+| From → To | Style | Why |
+|---|---|---|
+| Learning → Content (get lesson) | sync, in process | the page cannot render without it |
+| Learning → Community (award badge) | async event \`LessonCompleted\` | badges may lag a few seconds; Learning must not fail if Community does |
+| Billing → Learning (unlock course) | async event \`PurchaseCompleted\` | payment webhooks retry; the handler is idempotent on \`purchase_id\` |
+| Content → AI Tutor (re-embed lesson) | async event \`LessonPublished\` | embedding 80 lessons takes ~4 minutes and calls a paid API |
+| Web → AI Tutor (\`/ask\`) | sync HTTP, streamed | the learner is waiting for the answer |
+
+## First extraction candidate: AI Tutor
+
+It is already a separate FastAPI service, and it should stay the first and only extraction for now because it differs from the rest on every axis that justifies a service boundary:
+
+1. **Different scaling profile.** An \`/ask\` request holds a connection for 2 to 6 s waiting for the LLM, while a typical API request finishes in 30 ms. Sharing a process would let 200 concurrent tutor sessions exhaust the API's thread pool.
+2. **Different technology.** The embedding, retrieval and evaluation tooling is Python; the API is C#.
+3. **Different cost and failure modes.** It calls a paid LLM provider; rate limits or outages there must degrade only the tutor ("Tutor is busy, try again"), not lessons or progress.
+4. **Narrow interface.** It needs \`LessonPublished\` events in and one \`/ask\` endpoint out, so the boundary is cheap to keep stable.
+
+**Second candidate (later): News**, because ingestion is a scheduled batch job (Rust) with no user-facing latency requirement. **Not candidates:** Learning, Assessment and Community share requests and data so tightly (one lesson page touches all three) that splitting them would turn in-process calls into network calls with no autonomy gain for a team of our size.`,
+        },
       },
     },
     intermediate: {
@@ -296,7 +344,103 @@ assert handle_lesson_completed({"user_id": 1, "lesson_id": "6.2.1", "score": 0.9
       criteria: ["Every service justified", "Events catalogue with producers/consumers", "Diagram renders on GitHub"],
       hints: ["Reuse the Mermaid architecture from the capstone page and extend it."],
       solution: {
-        text: ["Interviewers and new teammates read this first; it shows you can reason about trade-offs, not just write code."],
+        text: [
+          "The document justifies every service (including why the core stays a monolith), gives each piece of data exactly one owner, chooses sync or async per interaction with its failure behaviour, and lists every event with producers and consumers. The Mermaid diagram uses only standard `flowchart` syntax and was rendered with mermaid-cli to check it parses.",
+          "Interviewers and new teammates read this first; it shows you can reason about trade-offs, not just write code. Keep the ADR table current: when a decision changes, add a new ADR that supersedes the old one and update this page.",
+        ],
+        code: {
+          lang: "markdown",
+          file: "docs/architecture.md",
+          code: `# DevAtlas architecture
+
+Last reviewed: 2026-10-18 · Owners: platform team · Decisions: [docs/adr](adr/)
+
+DevAtlas is a **modular monolith plus two specialised services**. One team of 4 to 6 engineers owns everything, so we split only where scaling, technology or failure isolation forces it.
+
+## Context diagram
+
+\`\`\`mermaid
+flowchart LR
+  learner([Learner browser]) -->|HTTPS| cdn[CDN + React SPA]
+  cdn -->|REST + JWT| api[ASP.NET Core API<br/>modular monolith]
+  cdn -->|/ask, streamed| ai[FastAPI AI service]
+  api --> mysql[(MySQL<br/>users, progress, billing)]
+  api --> mongo[(MongoDB<br/>lessons, news)]
+  api -->|outbox| bus{{Redis Streams<br/>event bus}}
+  bus --> ai
+  ai --> pg[(PostgreSQL + pgvector<br/>chunks, embeddings)]
+  ai -->|HTTPS| llm[LLM provider]
+  cron[Daily scheduler] --> ingester[Rust news ingester]
+  ingester --> mongo
+  ingester -->|NewsIngested| bus
+  pay[Payment provider] -->|webhook| api
+\`\`\`
+
+## Services and why each exists
+
+| Service | Separate? | Why |
+|---|---|---|
+| ASP.NET Core API (Identity, Learning, Assessment, Content, Billing, Community modules) | **No, one deployable** | These modules share most requests (one lesson page touches Learning, Assessment and Community). In-process calls keep p95 at 45 ms and let us refactor across modules in one PR. Boundaries are enforced by architecture tests (ADR-0005). |
+| FastAPI AI service | **Yes** | Python ML tooling; requests hold connections for 2 to 6 s on the LLM; paid-provider outages and rate limits must not affect lessons or progress (ADR-0002). |
+| Rust news ingester | **Yes** | Scheduled batch job, CPU-bound RSS/HTML parsing of ~400 feeds in under 90 s; no user-facing traffic; can crash and retry without anyone noticing (ADR-0004). |
+| React SPA | **Yes** (static files) | Served from a CDN; deploys independently of the API. |
+
+## Data ownership
+
+| Data | Owner | Store | Other readers get it via |
+|---|---|---|---|
+| users, roles, refresh tokens | API · Identity | MySQL \`identity_*\` | JWT claims; \`GET /v1/me\` |
+| enrollments, progress, streaks | API · Learning | MySQL \`learning_*\` | \`LessonCompleted\` events; \`GET /v1/me/progress\` |
+| quizzes, attempts | API · Assessment | MySQL \`assessment_*\` | \`QuizSubmitted\` events |
+| purchases, invoices | API · Billing | MySQL \`billing_*\` | \`PurchaseCompleted\` events |
+| lesson documents | API · Content | MongoDB \`lessons\` | \`GET /v1/lessons/{id}\`; \`LessonPublished\` events |
+| articles, digests | News ingester | MongoDB \`news\` | \`GET /v1/news\`; \`NewsIngested\` events |
+| chunks, embeddings, eval runs | AI service | PostgreSQL + pgvector | nobody; only the AI service queries it |
+
+No service or module writes to a store it does not own, and there are no cross-module JOINs.
+
+## Communication
+
+| Interaction | Style | Reason | Failure behaviour |
+|---|---|---|---|
+| SPA → API (lessons, progress) | sync REST | user is waiting | 3 s timeout, retry GETs once |
+| SPA → AI service \`/ask\` | sync HTTP, streamed tokens | user is waiting; first token target p95 < 3 s | "Tutor is busy" message; lesson page unaffected |
+| Learning → Community (badges, leaderboard) | async, in-process event | badges may lag; Learning must not fail | handler errors logged and retried |
+| Content → AI (re-embed lesson) | async, Redis Streams | embedding takes minutes and costs money | consumer group retries; DLQ after 5 attempts |
+| Payment provider → Billing | async webhook | provider retries for 3 days | idempotent on \`purchase_id\` |
+| Ingester → AI (summarise + tag) | async, Redis Streams | batch, no latency need | backlog drains on next run |
+
+Events leave the API through a transactional **outbox** table polled every 500 ms, so a committed change always produces its event (at-least-once). Every consumer is idempotent on \`event_id\`.
+
+## Events catalogue
+
+| Event (v1) | Producer | Consumers | Key fields |
+|---|---|---|---|
+| \`UserRegistered\` | Identity | Learning, Community | user_id, registered_at |
+| \`UserDeleted\` | Identity | all modules, AI service | user_id, requested_at (erase within 30 days) |
+| \`LessonPublished\` | Content | AI service, Assessment | lesson_id, version, published_at |
+| \`LessonCompleted\` | Learning | Community | user_id, lesson_id, score, completed_at |
+| \`QuizSubmitted\` | Assessment | Learning, Community | user_id, quiz_id, score_ratio |
+| \`PurchaseCompleted\` | Billing | Learning | purchase_id, user_id, plan |
+| \`NewsIngested\` | News ingester | AI service | article_id, source, published_at |
+
+All events carry \`event_id\`, \`schema_version\` and \`occurred_at\`. Changes are additive; renames go through the consumers-first rollout in ADR-0006.
+
+## Decisions that led here
+
+| ADR | Decision | Status |
+|---|---|---|
+| 0001 | Start as a modular monolith | Accepted |
+| 0002 | Run the AI tutor as a separate Python service | Accepted |
+| 0003 | Ports and adapters for external integrations (LLM, email, payments) | Accepted |
+| 0004 | News ingester in Rust as a scheduled job | Accepted |
+| 0005 | Enforce module boundaries with architecture tests in CI | Accepted |
+| 0006 | Outbox + Redis Streams for events; revisit Kafka above 2,000 events/s | Accepted |
+
+## When we would split further
+
+Extract a module from the API only when one of these becomes true: a second team owns it and is blocked by shared releases; it needs to scale 10× differently from the rest; or its failures keep taking down unrelated features. Billing is the most likely first candidate because of PCI scope.`,
+        },
       },
     },
   },

@@ -383,7 +383,92 @@ metrics) is added with decorators. Internal code (repositories for our own DB) u
       criteria: ["Dependency rule enforced (project references or architecture tests)", "Use cases unit-tested with fakes", "ADR committed"],
       hints: [".NET: NetArchTest or ArchUnitNET can assert 'Domain should not depend on Microsoft.EntityFrameworkCore'. Python: import-linter."],
       solution: {
-        text: ["Automated architecture tests keep the structure from eroding as the team grows, the same way unit tests protect behaviour."],
+        text: [
+          "Python AI service layout: `devatlas_ai/domain` (pure rules: `Scorer`, `McqScorer`, `PASS_MARK`), `devatlas_ai/application` (ports such as `ProgressRepository` and `Notifier`, plus the `CompleteLesson` use case), `devatlas_ai/infrastructure` (adapters, e.g. `PostgresProgress` wrapping psycopg) and `devatlas_ai/api` (thin FastAPI routes that only translate HTTP to a use-case call). The .NET API gets the same four rings as projects, with the inward-only project references from the hands-on.",
+          "The test below enforces the dependency rule with **grimp**, the import-graph library that import-linter is built on: it builds the real import graph (including third-party packages) and asserts that domain and application never reach FastAPI, pydantic, psycopg, SQLAlchemy, Redis, httpx or an LLM SDK, even indirectly, and that no inner ring imports an outer one. The same test file unit-tests the use case with fakes, so it runs in milliseconds with no database. In CI you can express the same rules as an import-linter `layers` contract and run `lint-imports`; on the .NET side NetArchTest or ArchUnitNET asserts that `DevAtlas.Domain` does not depend on `Microsoft.EntityFrameworkCore`.",
+          "To prove the test bites, add `from devatlas_ai.infrastructure.postgres_progress import PostgresProgress` to `domain/grading.py`: it then fails with `devatlas_ai.domain reaches psycopg: devatlas_ai.domain.grading -> devatlas_ai.infrastructure.postgres_progress -> psycopg`, showing the whole chain to fix.",
+          "Commit `docs/adr/0004-clean-core.md` next to the challenge's ADR: it records the four rings, the rule that ports live in the application layer, and that this test is the enforcement. Automated architecture tests keep the structure from eroding as the team grows, the same way unit tests protect behaviour.",
+        ],
+        code: {
+          lang: "python",
+          file: "tests/test_architecture.py",
+          code: `"""Architecture + use-case tests for the DevAtlas AI service clean core.
+
+Layout: devatlas_ai/{domain, application, infrastructure, api}. Dependencies must point inward:
+api -> application -> domain, infrastructure -> application/domain. Run: pytest -q
+"""
+import grimp
+import pytest
+
+from devatlas_ai.application.complete_lesson import CompleteLesson
+from devatlas_ai.domain.grading import McqScorer, Scorer
+
+FRAMEWORKS = ["fastapi", "pydantic", "psycopg", "sqlalchemy", "redis", "anthropic", "httpx"]
+INNER_LAYERS = ["devatlas_ai.domain", "devatlas_ai.application"]
+# (importer, must not reach) pairs for the dependency rule inside our own package
+INWARD_ONLY = [
+    ("devatlas_ai.domain", "devatlas_ai.application"),
+    ("devatlas_ai.domain", "devatlas_ai.infrastructure"),
+    ("devatlas_ai.domain", "devatlas_ai.api"),
+    ("devatlas_ai.application", "devatlas_ai.infrastructure"),
+    ("devatlas_ai.application", "devatlas_ai.api"),
+]
+
+
+@pytest.fixture(scope="module")
+def graph() -> grimp.ImportGraph:
+    return grimp.build_graph("devatlas_ai", include_external_packages=True)
+
+
+@pytest.mark.parametrize("layer", INNER_LAYERS)
+def test_inner_layers_import_no_frameworks(graph: grimp.ImportGraph, layer: str) -> None:
+    for framework in FRAMEWORKS:
+        if framework not in graph.modules:  # not imported anywhere in the service
+            continue
+        chain = graph.find_shortest_chain(importer=layer, imported=framework, as_packages=True)
+        assert chain is None, f"{layer} reaches {framework}: {' -> '.join(chain)}"
+
+
+@pytest.mark.parametrize(("importer", "imported"), INWARD_ONLY)
+def test_dependencies_point_inward(graph: grimp.ImportGraph, importer: str, imported: str) -> None:
+    chain = graph.find_shortest_chain(importer=importer, imported=imported, as_packages=True)
+    assert chain is None, f"dependency rule broken: {' -> '.join(chain)}"
+
+
+# ---- use case tested with fakes: no database, no SMTP, microseconds ----
+class FakeLessons:
+    def __init__(self, scorers: dict[str, Scorer]) -> None:
+        self.scorers = scorers
+
+    def scorer_for(self, lesson_id: str) -> Scorer:
+        return self.scorers[lesson_id]
+
+
+class FakeProgress:
+    def __init__(self) -> None:
+        self.rows: list[tuple[int, str, float]] = []
+
+    def save(self, user_id: int, lesson_id: str, score: float) -> None:
+        self.rows.append((user_id, lesson_id, score))
+
+
+class FakeNotifier:
+    def __init__(self) -> None:
+        self.sent: list[tuple[int, str]] = []
+
+    def congratulate(self, user_id: int, lesson_id: str) -> None:
+        self.sent.append((user_id, lesson_id))
+
+
+@pytest.mark.parametrize(("answers", "congratulated"), [(["b", "c", "a"], True), (["b", "c", "x"], False)])
+def test_complete_lesson(answers: list[str], congratulated: bool) -> None:
+    progress, notifier = FakeProgress(), FakeNotifier()
+    use_case = CompleteLesson(FakeLessons({"6.1.1": McqScorer(("b", "c", "a"))}), progress, notifier)
+    score = use_case(7, "6.1.1", answers)
+    assert progress.rows == [(7, "6.1.1", score)]
+    assert (notifier.sent == [(7, "6.1.1")]) is congratulated`,
+        },
+        output: "$ python -m pytest -q\n.........                                                                [100%]\n9 passed",
       },
     },
   },

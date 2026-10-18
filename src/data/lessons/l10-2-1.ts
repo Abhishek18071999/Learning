@@ -535,9 +535,100 @@ print("ben is #", rank("ben"), "| unknown user:", rank("zoe"))`,
       ],
       solution: {
         text: [
-          "Completed result for the conflict story: 'The spike showed pgvector met our targets (recall@3 0.90, p95 18 ms), we kept one database, and my teammate wrote ADR-003 with me; we revisit if we pass 5M vectors.' It shows influence through data rather than authority, and a good relationship afterwards.",
-          "Recording yourself reveals filler words and rambling quickly; most people cut their answers by a third after one listen.",
+          "Six stories cover all ten themes, and every one passes the lesson's checker unchanged: all four STAR parts, a number in each result, and 'I' in each action. The conflict story now ends with a measurable result and a good relationship: influence through data rather than authority.",
+          "The extra loop at the end is not part of the checker: it estimates how long the written notes take to read aloud at about 150 words per minute. The notes take about 30 seconds; when you tell a story you add context and detail, so aim for 90 to 120 seconds and time yourself. Recording yourself reveals filler words and rambling quickly; most people cut their answers by a third after one listen.",
         ],
+        code: {
+          lang: "python",
+          file: "stories.py",
+          code: `"""My completed STAR story bank. The checker below is unchanged from the lesson."""
+STORIES = [
+    {
+        "title": "Rolled back a bad release and fixed our alerting",
+        "themes": ["incident", "ownership", "learning from failure"],
+        "situation": "Release 1.6.0 broke quiz grading for 18% of students during an evening peak.",
+        "task": "I was on call and had to restore grading, then stop it happening again.",
+        "action": "I traced errors to a version mismatch, rolled back in 8 minutes, led a blameless "
+                  "postmortem and added burn-rate alerts and contract tests.",
+        "result": "Errors returned to baseline in 47 minutes total; the next two schema changes shipped "
+                  "with zero failed requests.",
+    },
+    {
+        "title": "Disagreed about adding a vector database",
+        "themes": ["conflict", "influence", "technical decision"],
+        "situation": "A teammate wanted a separate vector database for the AI tutor.",
+        "task": "Decide quickly without damaging the relationship.",
+        "action": "I proposed a one-day spike measuring pgvector against our recall and latency targets.",
+        "result": "The spike showed pgvector met our targets (recall@3 0.90, p95 18 ms), we kept one "
+                  "database, and my teammate and I wrote ADR-003 together; we revisit above 5M vectors.",
+    },
+    {
+        "title": "Shipped the school launch on time by cutting scope",
+        "themes": ["deadline", "ownership"],
+        "situation": "A partner school was sending 50,000 students on the first day of term, 3 weeks away, "
+                     "and the class dashboard was only half built.",
+        "task": "I owned the launch checklist and had to get a working product out by the date.",
+        "action": "I listed every feature with the school, agreed that CSV export and charts could wait, "
+                  "load tested the remaining flows at 6x expected peak and pre-scaled the API the night before.",
+        "result": "We launched on day 1 with p95 latency of 210 ms and zero downtime; the two deferred "
+                  "features shipped 12 days later.",
+    },
+    {
+        "title": "My migration locked the progress table",
+        "themes": ["failure", "learning from failure"],
+        "situation": "I added a NOT NULL column with a default to the 40M-row progress table during the day.",
+        "task": "Recover quickly and make sure no migration could do that again.",
+        "action": "I spotted the lock in the database dashboard, killed the migration, and posted an update "
+                  "in the incident channel. Then I rewrote it as add-nullable, backfill in batches, then "
+                  "constrain, and I added a CI check that flags table-locking DDL.",
+        "result": "Progress saves failed for 12 minutes; since the CI check landed, 30 migrations have "
+                  "shipped without a lock longer than 1 second.",
+    },
+    {
+        "title": "Turned 'make the tutor better' into a measurable goal",
+        "themes": ["ambiguity", "technical decision"],
+        "situation": "Product asked us to 'make the AI tutor better' with no definition of better.",
+        "task": "I had to decide what to work on and show progress within one quarter.",
+        "action": "I read 200 rated conversations, grouped the complaints, and found most were wrong or "
+                  "missing sources. I proposed recall@3 and groundedness as the goals and built a "
+                  "120-question eval set to measure them.",
+        "result": "Recall@3 rose from 0.80 to 0.90 and thumbs-down ratings fell from 14% to 6% in 8 weeks.",
+    },
+    {
+        "title": "Coached a junior engineer through their first on-call week",
+        "themes": ["mentoring", "influence"],
+        "situation": "A new graduate on the team was anxious about joining the on-call rotation.",
+        "task": "Help them become confident without taking incidents away from them.",
+        "action": "I paired with them on 3 practice incidents using last year's postmortems, wrote a one-page "
+                  "runbook with them, and I stayed as their backup instead of the primary.",
+        "result": "They resolved 4 real alerts alone that week, and their runbook is now used by all 6 "
+                  "engineers on the rotation.",
+    },
+]
+THEMES = {"incident", "conflict", "ownership", "failure", "learning from failure", "influence",
+          "ambiguity", "mentoring", "technical decision", "deadline"}
+
+
+def check(story: dict) -> list[str]:
+    problems = [f"missing {k}" for k in ("situation", "task", "action", "result") if not story.get(k)]
+    if story.get("result") and not any(ch.isdigit() for ch in story["result"]):
+        problems.append("result has no measurable outcome")
+    if story.get("action") and " we " in f" {story['action'].lower()} " and " i " not in f" {story['action'].lower()} ":
+        problems.append("action says 'we' but never 'I': what did YOU do?")
+    return problems
+
+
+covered = {t for s in STORIES for t in s["themes"]}
+for s in STORIES:
+    print(f"{s['title']}: {check(s) or 'ready'}")
+print("themes still uncovered:", sorted(THEMES - covered))
+
+# Extra (not part of the checker): spoken length at ~150 words per minute, aim for under 2 minutes.
+for s in STORIES:
+    words = sum(len(s[k].split()) for k in ("situation", "task", "action", "result"))
+    print(f"{words:4} words ≈ {words / 150 * 60:3.0f} s  {s['title']}")`,
+        },
+        output: "Rolled back a bad release and fixed our alerting: ready\nDisagreed about adding a vector database: ready\nShipped the school launch on time by cutting scope: ready\nMy migration locked the progress table: ready\nTurned 'make the tutor better' into a measurable goal: ready\nCoached a junior engineer through their first on-call week: ready\nthemes still uncovered: []\n  68 words ≈  27 s  Rolled back a bad release and fixed our alerting\n  59 words ≈  24 s  Disagreed about adding a vector database\n  93 words ≈  37 s  Shipped the school launch on time by cutting scope\n  90 words ≈  36 s  My migration locked the progress table\n  78 words ≈  31 s  Turned 'make the tutor better' into a measurable goal\n  72 words ≈  29 s  Coached a junior engineer through their first on-call week",
       },
     },
     capstone: {

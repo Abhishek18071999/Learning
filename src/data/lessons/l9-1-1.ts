@@ -226,7 +226,44 @@ volumes:
       criteria: ["Table with size and timings for both", "Explanation of each difference"],
       hints: ["`time docker build ...` and `docker images`. Use `--no-cache` for cold builds."],
       solution: {
-        text: ["Expect the production image to be several times smaller (slim base, no build tools) and rebuilds after code changes to take seconds because dependency layers are cached. Exact numbers vary by machine and versions."],
+        text: [
+          "The script builds each Dockerfile cold (`--no-cache`), makes a one-line change to `app/main.py`, rebuilds, and reads the image size from `docker image inspect`. The output below is one run on a Linux host with Docker 29.8 and BuildKit (`requirements.txt` pinned `fastapi[standard]==0.146.0`); your numbers will differ, the ratios will not.",
+          "**Size: 1,782 MB vs 314 MB.** `python:3.12` ships compilers, headers and hundreds of Debian packages; `python:3.12-slim` does not, and the multi-stage build copies only the virtual env into the runtime. `docker images` also showed what a registry transfers (CONTENT SIZE): 462 MB vs 72.3 MB.",
+          "**Cold build: 78 s vs 53 s.** Both download the same packages from PyPI; the naive build also does more work in a much larger base. **Rebuild after a code change: 23.7 s vs 2.1 s.** The naive `COPY . /app` comes before `pip install`, so any edit invalidates the install layer and everything is reinstalled. The production file copies `requirements.txt` first, so the install layer stays CACHED and only the final `COPY app` runs.",
+          "The production image also runs as a non-root user (`appuser`) and uses exec-form `CMD`, which the size and timing table does not show but a security review will.",
+        ],
+        code: {
+          lang: "bash",
+          file: "measure.sh",
+          code: `#!/usr/bin/env bash
+# Build the naive and the production image, then print size, cold build and rebuild times.
+set -euo pipefail
+
+timed() {                                   # run a command quietly, print elapsed seconds
+  local start=$EPOCHREALTIME
+  "$@" > /dev/null 2>&1
+  awk -v s="$start" -v e="$EPOCHREALTIME" 'BEGIN { printf "%.1f", e - s }'
+}
+
+printf "%-12s %10s %10s %14s\\n" image size_MB cold_s rebuild_s
+for variant in naive prod; do
+  file=Dockerfile; [ "$variant" = naive ] && file=Dockerfile.naive
+  tag="devatlas-ai:$variant"
+  cold=$(timed docker build --no-cache -f "$file" -t "$tag" .)
+  echo "# touched $(date +%s%N)" >> app/main.py      # one-line code change
+  rebuild=$(timed docker build -f "$file" -t "$tag" .)
+  sed -i '$ d' app/main.py                           # undo it
+  size=$(docker image inspect "$tag" --format '{{.Size}}')
+  printf "%-12s %10d %10s %14s\\n" "$variant" $((size / 1000000)) "$cold" "$rebuild"
+done
+
+docker run -d --rm --name ai-check -p 8080:8000 -e APP_ENV=local devatlas-ai:prod > /dev/null
+sleep 3
+curl -s localhost:8080/health; echo
+docker exec ai-check id -un
+docker stop ai-check > /dev/null`,
+        },
+        output: "$ ./measure.sh\nimage           size_MB     cold_s      rebuild_s\nnaive              1782       78.3           23.7\nprod                314       53.3            2.1\n{\"status\":\"ok\",\"env\":\"local\"}\nappuser",
       },
     },
     intermediate: {
@@ -261,7 +298,35 @@ CMD ["node", "src/server.js"]`,
       criteria: ["Before/after scan summaries", "Changes justified (base image, removed packages, updates)", "App still works"],
       hints: ["Compare python:3.12 vs python:3.12-slim vs a distroless option."],
       solution: {
-        text: ["Most findings come from OS packages in the base image. Moving to a slim or distroless base and rebuilding on the latest patch release typically removes the majority. Remaining ones: update dependencies, or document why an unfixed CVE is not exploitable in your context."],
+        text: [
+          "Scanned with Trivy 0.76.0 on 2026-10-18 (vulnerability databases change daily, so re-run rather than trusting these counts). Baseline `python:3.12` (the naive image): 374 HIGH/CRITICAL, 17 of them CRITICAL. Switching to `python:3.12-slim` with a multi-stage build: 44 HIGH, 0 CRITICAL, an 88% reduction. None of the 44 had a Debian fix yet (status `affected` or `fix_deferred`), so `apt-get upgrade` would not help; they sit in util-linux, login, mount, ncurses and perl-base, which the app never uses.",
+          "The hardened image below goes distroless: `gcr.io/distroless/python3-debian13` has no shell, no package manager, no util-linux tools or perl, and runs as uid 65532. Dependencies are installed with `pip install --target` in a `python:3.13-slim` build stage (same Python minor version as the runtime) and only `fastapi` and `uvicorn` are installed instead of `fastapi[standard]`. Result: 26 HIGH, 0 CRITICAL, 115 MB instead of 314 MB, healthcheck `healthy`, and `docker exec … sh` fails because there is no shell.",
+          "Be honest about what the numbers mean: 20 of the remaining 26 findings are CPython CVEs reported against Debian's python3.13 packages. The slim image runs a CPython built from source in `/usr/local`, which Trivy's OS scan does not see, so its 44 is not directly comparable. Document each remaining CVE as fixed-when-available or not exploitable (for example, no untrusted input reaches the affected module), and rebuild weekly so patches land automatically.",
+        ],
+        code: {
+          lang: "dockerfile",
+          file: "Dockerfile.hardened",
+          code: `# syntax=docker/dockerfile:1
+# Hardened image: same app, distroless runtime (no shell, no package manager, no apt/perl/util-linux).
+
+# ---- build stage: Python 3.13 to match the distroless runtime's interpreter ----
+FROM python:3.13-slim AS build
+WORKDIR /app
+COPY requirements.runtime.txt .
+RUN pip install --no-cache-dir --target /deps -r requirements.runtime.txt
+
+# ---- runtime stage: Debian 13 distroless with Python 3.13, runs as uid 65532 ----
+FROM gcr.io/distroless/python3-debian13:nonroot AS runtime
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONPATH=/deps
+WORKDIR /app
+COPY --from=build /deps /deps
+COPY app ./app
+EXPOSE 8000
+HEALTHCHECK --interval=30s --timeout=3s CMD ["/usr/bin/python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+# The base image's ENTRYPOINT is the Python interpreter, so CMD holds only its arguments.
+CMD ["-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]`,
+        },
+        output: "$ for img in naive prod hardened; do\n>   docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy image --quiet \\\n>     --severity HIGH,CRITICAL devatlas-ai:$img | grep -E \"^devatlas-ai|^Total\"\n> done\ndevatlas-ai:naive (debian 13.7)\nTotal: 374 (HIGH: 357, CRITICAL: 17)\ndevatlas-ai:prod (debian 13.7)\nTotal: 44 (HIGH: 44, CRITICAL: 0)\ndevatlas-ai:hardened (debian 13.7)\nTotal: 26 (HIGH: 26, CRITICAL: 0)\n$ docker run -d --rm --name ai-h -p 8081:8000 -e APP_ENV=local devatlas-ai:hardened\n$ curl -s localhost:8081/health\n{\"status\":\"ok\",\"env\":\"local\"}\n$ docker inspect ai-h --format '{{.State.Health.Status}}'     # after the first 30 s interval\nhealthy\n$ docker exec ai-h sh\nOCI runtime exec failed: exec failed: unable to start container process: exec: \"sh\": executable file not found in $PATH",
       },
     },
     capstone: {
@@ -270,7 +335,76 @@ CMD ["node", "src/server.js"]`,
       criteria: ["All services healthy", "No secrets committed (.env.example provided)", "README 'Run locally' section"],
       hints: ["Frontend: build with Node, serve the static build with nginx in the runtime stage."],
       solution: {
-        text: ["Use depends_on with condition: service_healthy, a .env.example listing every variable, and named volumes for both databases. This compose file later becomes the reference for your Kubernetes manifests."],
+        text: [
+          "Four services: the React frontend (build stage `node:22-slim` runs `npm ci` and `npm run build`; runtime `nginxinc/nginx-unprivileged:1.27-alpine` serves `dist` on port 8080 as user nginx and proxies `/api/ai/` to `http://ai:8000/`), the AI service (the lesson's production Dockerfile; its `/health` runs a query against PostgreSQL and returns 503 if the database is unreachable), PostgreSQL with pgvector (an init script runs `CREATE EXTENSION IF NOT EXISTS vector`), and MySQL for the main API.",
+          "`depends_on: condition: service_healthy` orders startup: pgvector → ai → frontend. Only the frontend publishes a port; the databases are reachable only on the Compose network. `${VAR:?message}` makes Compose refuse to start when a password is missing instead of starting with an empty one. `.env.example` lists every variable (`PG_USER`, `PG_PASSWORD`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_ROOT_PASSWORD`) and `.env` is gitignored.",
+          "README 'Run locally': `git clone …`, `cp .env.example .env` and change the passwords, `docker compose up --build --wait`, open http://localhost:8088. `docker compose down` stops it; `down -v` also deletes both named volumes. This compose file later becomes the reference for your Kubernetes manifests.",
+        ],
+        code: {
+          lang: "yaml",
+          file: "compose.yaml",
+          code: `# DevAtlas local stack: \`cp .env.example .env\` (set passwords), then \`docker compose up --build\`.
+name: devatlas
+
+services:
+  frontend:
+    build: ./frontend
+    ports: ["8088:8080"]                   # the only port published to the host
+    depends_on:
+      ai:
+        condition: service_healthy
+    restart: unless-stopped
+
+  ai:
+    build: ./services/ai
+    environment:
+      APP_ENV: local
+      DATABASE_URL: postgresql://\${PG_USER}:\${PG_PASSWORD}@pgvector:5432/devatlas_ai
+    depends_on:
+      pgvector:
+        condition: service_healthy
+    healthcheck:                           # tighter than the image default so startup is quick
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  pgvector:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: \${PG_USER}
+      POSTGRES_PASSWORD: \${PG_PASSWORD:?set PG_PASSWORD in .env}
+      POSTGRES_DB: devatlas_ai
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/pg-init:/docker-entrypoint-initdb.d:ro   # CREATE EXTENSION vector on first start
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $\${POSTGRES_USER} -d devatlas_ai"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: devatlas
+      MYSQL_USER: \${MYSQL_USER}
+      MYSQL_PASSWORD: \${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env}
+      MYSQL_ROOT_PASSWORD: \${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in .env}
+    volumes:
+      - mysqldata:/var/lib/mysql
+    healthcheck:                           # TCP ping only succeeds once init has finished
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u\\"$\${MYSQL_USER}\\" -p\\"$\${MYSQL_PASSWORD}\\" --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  pgdata:
+  mysqldata:`,
+        },
+        output: "$ cp .env.example .env && docker compose up --build -d --wait\n...\n Container devatlas-mysql-1 Healthy\n Container devatlas-pgvector-1 Healthy\n Container devatlas-ai-1 Healthy\n Container devatlas-frontend-1 Healthy\n$ docker compose ps --format '{{.Service}}\\t{{.Health}}'\nai\thealthy\nfrontend\thealthy\nmysql\thealthy\npgvector\thealthy\n$ curl -s localhost:8088/api/ai/health\n{\"status\":\"ok\",\"db\":\"ok\",\"pgvector\":\"installed\"}\n$ docker compose exec ai id -un\nappuser\n$ docker compose exec frontend id -un\nnginx",
       },
     },
   },

@@ -219,7 +219,70 @@ print(f"consistent hashing moved {moved / len(keys):.0%} of keys; modulo hashing
       criteria: ["Peak RPS, instances, DB QPS", "Storage per year in GB", "Bandwidth per month in TB"],
       hints: ["1,000,000 × 10 × 200 bytes × 365 days."],
       solution: {
-        text: ["Attempts: 1e6 × 10 × 200 B = 2 GB/day ≈ 730 GB/year before indexes and replicas (often ×2–3 with indexes). Requests: 1e6 × 120 = 120 million/day ≈ 1,389 average RPS; × 6 ≈ 8,300 peak RPS. Egress: 120e6 × 15 KB ≈ 1.8 TB/day ≈ 54 TB/month, which makes CDN caching and compression a priority and is a significant cost line."],
+        text: [
+          "Every assumption is a named, commented field of a frozen dataclass, so changing one input and re-running is trivial, and the reviewer can challenge each number separately.",
+          "Attempts: 1e6 × 10 × 200 B = 2 GB/day ≈ 730 GB/year raw, about 2.9 TB once indexes (×2) and a replica (×2) are counted. Requests: 120 million/day ≈ 1,389 average RPS, ≈ 8,333 at peak, which needs about 57 two-core instances at 60% CPU. Egress ≈ 1.8 TB/day ≈ 54 TB/month, which makes CDN caching and compression a priority and is a significant cost line.",
+          "What breaks first: 5,000 database queries per second at peak even with an 80% cache hit rate. That needs read replicas for progress reads and connection pooling (57 instances × a default pool of 10 = 570 connections), long before the app tier becomes a problem.",
+        ],
+        code: {
+          lang: "python",
+          file: "estimate_1m.py",
+          code: `"""Back-of-envelope sizing for DevAtlas at 1,000,000 daily active learners.
+Every input is an explicit, labelled assumption; change one and re-run."""
+import math
+from dataclasses import dataclass
+
+SECONDS_PER_DAY = 86_400
+DAYS_PER_YEAR = 365
+DAYS_PER_MONTH = 30
+
+
+@dataclass(frozen=True)
+class Assumptions:
+    dau: int = 1_000_000                 # daily active learners
+    requests_per_user: int = 120         # page loads + API calls per learner per day (from 6.3.1)
+    peak_factor: int = 6                 # 9 a.m. school start vs the daily average
+    cpu_ms_per_request: float = 8        # measured by profiling the API
+    cores_per_instance: int = 2
+    target_utilisation: float = 0.6      # headroom for spikes
+    db_queries_per_request: int = 3
+    cache_hit_rate: float = 0.8          # share of DB reads served by Redis
+    db_time_ms: float = 4                # average time per query
+    attempts_per_user: int = 10          # quiz attempts per learner per day
+    attempt_bytes: int = 200             # one attempt row
+    index_overhead: float = 2.0          # indexes roughly double table size
+    replicas: int = 2                    # primary + one replica store a full copy each
+    avg_response_kb: float = 15          # average compressed response size
+
+
+def estimate(a: Assumptions) -> dict[str, float | int]:
+    avg_rps = a.dau * a.requests_per_user / SECONDS_PER_DAY
+    peak_rps = avg_rps * a.peak_factor
+    cores = peak_rps * a.cpu_ms_per_request / 1000 / a.target_utilisation
+    instances = math.ceil(cores / a.cores_per_instance) + 1                    # N+1 redundancy
+    db_qps = peak_rps * a.db_queries_per_request * (1 - a.cache_hit_rate)
+    db_in_flight = db_qps * a.db_time_ms / 1000                                # Little's law
+    raw_gb_year = a.dau * a.attempts_per_user * a.attempt_bytes * DAYS_PER_YEAR / 1e9
+    stored_gb_year = raw_gb_year * a.index_overhead * a.replicas
+    egress_tb_month = a.dau * a.requests_per_user * a.avg_response_kb * 1e3 * DAYS_PER_MONTH / 1e12
+    return {
+        "average RPS": avg_rps,
+        "peak RPS": peak_rps,
+        "app instances (2 cores)": instances,
+        "DB queries/sec at peak": db_qps,
+        "DB queries in flight": db_in_flight,
+        "attempt data GB/year (raw)": raw_gb_year,
+        "attempt data GB/year (indexes x replicas)": stored_gb_year,
+        "egress TB/month": egress_tb_month,
+    }
+
+
+if __name__ == "__main__":
+    for name, value in estimate(Assumptions()).items():
+        shown = f"{value:,}" if isinstance(value, int) else f"{value:,.1f}"
+        print(f"{name:42} {shown:>10}")`,
+        },
+        output: "average RPS                                   1,388.9\npeak RPS                                      8,333.3\napp instances (2 cores)                            57\nDB queries/sec at peak                        5,000.0\nDB queries in flight                             20.0\nattempt data GB/year (raw)                      730.0\nattempt data GB/year (indexes x replicas)     2,920.0\negress TB/month                                  54.0",
       },
     },
     intermediate: {
@@ -263,8 +326,62 @@ export default function () {
       hints: ["Embedding and fetching user context can run in parallel; prompt caching reduces LLM time to first token."],
       solution: {
         text: [
-          "Example budget: gateway + auth 30 ms; embed question 80 ms (parallel with loading user context 40 ms); vector search 40 ms; rerank 150 ms; prompt assembly 10 ms; LLM time to first token 1.5–2 s; total ≈ 2.3 s p95. Optimisations: cache embeddings for repeated questions (saves ~80 ms on hits), use prompt caching for the long static system prompt (can cut time to first token noticeably), or skip reranking when retrieval scores are already decisive.",
+          "Budget the critical path, not the sum of every hop: the three independent lookups run in parallel, so only the slowest one counts. Adding p95s gives a conservative upper bound; tracing each span gives the real distribution.",
+          "The useful insight is the ratio: the LLM is about 84% of the path, so the biggest wins are in how you call the model (prompt caching, prompt size) and in removing whole steps (skipping the reranker when retrieval is decisive). The eval-set percentages are example numbers; replace them with your own measurements.",
         ],
+        code: {
+          lang: "markdown",
+          file: "docs/latency-budget-ask.md",
+          code: `# Latency budget: \`POST /ask\` (AI tutor)
+
+**Target:** time to first token (TTFT) p95 ≤ 3,000 ms, measured at the browser. Prompt ≈ 6,000 tokens (system prompt 2,500 + 5 retrieved chunks 3,000 + question and history 500).
+
+## Budget per hop (p95)
+
+| # | Hop | Budget | Runs | Notes |
+|---|---|---|---|---|
+| 1 | Browser → CDN → gateway (TLS reuse, routing) | 40 ms | sequential | HTTP/2 connection already open from the lesson page |
+| 2 | Auth (JWT verified locally) + rate-limit check (Redis) | 5 ms | sequential | no call to the identity service |
+| 3a | Embed the question (embedding API) | 120 ms | **parallel** | slowest branch of step 3 |
+| 3b | Load learner context (current lesson, progress) | 40 ms | **parallel** | one indexed MySQL read through the API |
+| 3c | Load last 6 conversation turns (Redis) | 5 ms | **parallel** | |
+| 4 | Vector search, pgvector HNSW, top 20 chunks | 40 ms | sequential | needs 3a |
+| 5 | Rerank 20 → 5 chunks (cross-encoder) | 150 ms | sequential | needs 4 |
+| 6 | Prompt assembly | 10 ms | sequential | template + token count |
+| 7 | LLM time to first token | 2,000 ms | sequential | provider p95 for a 6k-token prompt, from our traces |
+| 8 | First token back to the browser (SSE) | 30 ms | sequential | proxy buffering disabled |
+| | **Critical path** | **2,395 ms** | | 1 + 2 + max(3a, 3b, 3c) + 4 + 5 + 6 + 7 + 8 |
+| | Headroom | 605 ms (20%) | | absorbs retries and noisy neighbours |
+
+Done sequentially, step 3 would cost 165 ms instead of 120 ms; running it with \`asyncio.gather\` saves 45 ms on every request. Adding p95s is conservative (they rarely all happen on the same request), so this budget is an upper bound; the real p95 comes from tracing each span with OpenTelemetry.
+
+The LLM is 84% of the critical path (2,000 of 2,395 ms). Everything we control adds up to 395 ms, so optimising our code alone cannot rescue a slow provider.
+
+## Optimisation 1: prompt caching for the static prefix
+
+Put the 2,500-token system prompt first and mark it cacheable with the provider's prompt-caching feature, so repeat requests skip re-processing it.
+
+- **Estimated saving:** 300 to 500 ms of TTFT on cache hits. Prefill time scales roughly with uncached prompt length, and 2,500 of 6,000 tokens (42%) become cached.
+- **Expected hit rate:** above 90% during school hours (the prefix is identical for every learner and a request arrives every few seconds, well within the cache lifetime).
+- **Side effect:** cached input tokens are billed at a lower rate, so cost drops too.
+- **Verify:** A/B 200 requests each way, compare TTFT p50 and p95 from traces.
+
+## Optimisation 2: skip the reranker when retrieval is decisive
+
+If the top vector hit beats the second by a cosine margin ≥ 0.08, send the top 5 straight to the prompt.
+
+- **Measured on the 120-question eval set:** the rule triggers on 58% of questions, and recall@3 stays at 0.90 (it drops to 0.82 if we skip reranking for every question, which is why we keep it for the rest).
+- **Saving:** 150 ms on 58% of requests ≈ 87 ms on average. The p95 improves less, because the slow tail is dominated by LLM time.
+
+## Not doing (yet)
+
+- **Smaller model for simple questions:** would cut TTFT by roughly half, but routing errors hurt answer quality; revisit after the router has its own eval.
+- **Caching question embeddings:** 120 ms saved on hits, but only 9% of questions repeat exactly in our logs, so ~11 ms on average. Not worth the extra moving part yet.
+
+## Alerts
+
+Page if TTFT p95 > 3 s for 10 minutes (burn-rate alert, lesson 9.6.1). Dashboard each hop as a span so a regression points to its own row in this table.`,
+        },
       },
     },
     capstone: {
@@ -273,7 +390,166 @@ export default function () {
       criteria: ["Assumptions explicit", "Thresholds based on SLOs", "Trend of p95 over time visible"],
       hints: ["Store k6 summary JSON as an artifact and chart it."],
       solution: {
-        text: ["Performance regressions are then caught like test failures, not discovered by users on launch day."],
+        text: [
+          "The capacity plan states every assumption with its source, turns them into estimates (using the basic tier's script), names the bottlenecks in the order they will be hit, and ties the nightly load test to the SLOs, so a regression fails the job exactly like a failing test.",
+          "The k6 script was run with k6 v2.3.0 (the `grafana/k6` Docker image) against a stub API at `SCALE=0.05`: it wrote `trend.json` (for example `{\"date\":\"2026-10-18\",\"lessons_p95_ms\":31,\"progress_p95_ms\":49,\"error_rate\":0,\"max_vus\":20}`), and lowering one threshold below the measured p95 made k6 exit with code 99 and `thresholds on metrics 'http_req_duration{endpoint:progress}' have been crossed`. The workflow passes `actionlint` (with shellcheck).",
+          "The p95 trend lives as one JSON line per night on a `perf-data` branch and is rendered as a table in the job summary, so a slow drift is visible weeks before a threshold breaks.",
+        ],
+        code: {
+          lang: "markdown",
+          file: "docs/capacity.md",
+          code: `# DevAtlas capacity plan
+
+Last updated: 2026-10-18 · Next review: before the January term launch · Estimates: \`scripts/estimate_1m.py\` (homework basic)
+
+## Targets (SLOs)
+
+| Endpoint | p95 | p99 | Availability |
+|---|---|---|---|
+| \`GET /v1/lessons\` (cached list) | 200 ms | 500 ms | 99.5% of requests succeed |
+| \`GET /v1/me/progress\` (per user, DB read) | 300 ms | 800 ms | 99.5% |
+| \`POST /ask\` (AI tutor, first token) | 3 s | 6 s | 99% (provider outages excluded) |
+
+## Assumptions
+
+| Input | Value | Source |
+|---|---|---|
+| DAU now / in 12 months | 50,000 / 250,000 | school contracts signed + sales pipeline |
+| Requests per learner per day | 120 | access logs, median of 14 days |
+| Peak factor | 6× | 09:00 school start, measured on the pilot |
+| CPU per request | 8 ms | profiler on the API, p50 |
+| DB queries per request / cache hit rate | 3 / 80% | APM traces, Redis INFO |
+| Average response | 15 KB compressed | CDN logs |
+| Quiz attempts | 10 per learner per day, 200 bytes each | product analytics |
+
+## Estimates
+
+| | 50k DAU (now) | 250k DAU (12 months) |
+|---|---|---|
+| Average / peak RPS | 69 / 417 | 347 / 2,083 |
+| API instances (2 cores, 60% target CPU, N+1) | 4 | 15 |
+| DB queries/s at peak (after cache) | 250 | 1,250 |
+| DB queries in flight (Little's law, 4 ms) | 1 | 5 (×4 bursts = 20) |
+| Attempt data per year (indexes × 2 copies) | 146 GB | 730 GB |
+| Egress per month | 2.7 TB | 13.5 TB |
+
+## Bottlenecks, in the order we expect to hit them
+
+1. **MySQL connections.** 15 instances × the default pool of 10 = 150, right at MySQL's default \`max_connections\` of 151. Fix now: cap each pool at 8 (Little's law says 20 concurrent queries is plenty) and raise \`max_connections\` to 300.
+2. **Cache hit rate.** Every 10 points of hit rate lost adds 625 queries/s at 250k DAU. Alert if the Redis hit rate drops below 75% for 15 minutes.
+3. **Egress cost.** 13.5 TB/month; serve lesson JSON through the CDN with \`Cache-Control: public, max-age=300\` (lesson content changes at most daily).
+4. **LLM provider rate limits** for \`/ask\`: at 2% of peak requests that is ~40 requests/s; request a quota increase before January and queue above it.
+
+## Scaling plan
+
+- **Now (50k):** 4 API pods, HPA 4 to 20 pods on CPU 60%; MySQL primary + 1 read replica (db.r6g.large); Redis 1 GB.
+- **At 150k DAU or DB CPU > 60% at peak:** route progress reads to the replica; MySQL to db.r6g.xlarge.
+- **At 250k:** 15 pods baseline at 08:30 on school days (scheduled pre-scaling, because the HPA reacts in about 2 minutes and the 09:00 spike is a step); second read replica.
+- **Not needed before 1M DAU:** sharding, Kafka, multi-region active-active.
+
+## Nightly load test
+
+Staging runs at one quarter of production size (4 API pods). The nightly profile ramps to 400 virtual users, about 760 requests/s, which is 35% above staging's share of the 250k-DAU peak (2,083 / 4 ≈ 520 requests/s). Thresholds are the SLOs above, so a regression fails the job like a failing test. Each run appends one line to \`history.jsonl\` on the \`perf-data\` branch, and the job summary shows the p95 trend for the last 14 nights; a slow upward drift is visible long before a threshold breaks.
+
+\`\`\`javascript
+// load/nightly.js
+// Nightly capacity check against staging. Thresholds come from the SLOs in docs/capacity.md.
+import http from "k6/http";
+import { check, sleep } from "k6";
+
+const BASE = __ENV.BASE_URL || "http://localhost:8080";
+const SCALE = Number(__ENV.SCALE || 1); // 1 = full nightly profile; 0.05 for a smoke run
+
+export const options = {
+  stages: [
+    { duration: \`\${Math.ceil(120 * SCALE)}s\`, target: Math.ceil(100 * SCALE) },
+    { duration: \`\${Math.ceil(600 * SCALE)}s\`, target: Math.ceil(400 * SCALE) },
+    { duration: \`\${Math.ceil(60 * SCALE)}s\`, target: 0 },
+  ],
+  thresholds: {
+    http_req_failed: ["rate<0.005"],                              // SLO: 99.5% success
+    "http_req_duration{endpoint:lessons}": ["p(95)<200", "p(99)<500"],
+    "http_req_duration{endpoint:progress}": ["p(95)<300", "p(99)<800"],
+    checks: ["rate>0.99"],
+  },
+  summaryTrendStats: ["med", "p(95)", "p(99)", "max"],
+};
+
+export default function () {
+  const headers = { Authorization: \`Bearer \${__ENV.TOKEN}\` };
+  const list = http.get(\`\${BASE}/v1/lessons?limit=20\`, { tags: { endpoint: "lessons" } });
+  check(list, { "lessons 200": (r) => r.status === 200 });
+  const me = http.get(\`\${BASE}/v1/me/progress\`, { headers, tags: { endpoint: "progress" } });
+  check(me, { "progress 200": (r) => r.status === 200 });
+  sleep(1);
+}
+
+// Write a compact JSON file the workflow uploads and appends to the p95 trend.
+export function handleSummary(data) {
+  const p95 = (name) => data.metrics[name] ? Math.round(data.metrics[name].values["p(95)"]) : null;
+  const trend = {
+    date: new Date().toISOString().slice(0, 10),
+    lessons_p95_ms: p95("http_req_duration{endpoint:lessons}"),
+    progress_p95_ms: p95("http_req_duration{endpoint:progress}"),
+    error_rate: data.metrics.http_req_failed.values.rate,
+    max_vus: data.metrics.vus_max.values.max,
+  };
+  return { "summary.json": JSON.stringify(data), "trend.json": JSON.stringify(trend) + "\\n" };
+}
+\`\`\`
+
+\`\`\`yaml
+# .github/workflows/nightly-load.yml
+name: nightly-load-test
+on:
+  schedule:
+    - cron: "0 2 * * *"          # 02:00 UTC, outside school hours
+  workflow_dispatch:
+permissions:
+  contents: write                # push results to the perf-data branch
+concurrency: nightly-load
+jobs:
+  k6:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run k6 against staging
+        id: k6
+        continue-on-error: true  # record the trend even when thresholds fail
+        env:
+          TOKEN: \${{ secrets.STAGING_LOADTEST_TOKEN }}
+        run: |
+          chmod 777 load
+          docker run --rm -v "$PWD/load:/load" -w /load \\
+            -e BASE_URL=https://staging-api.devatlas.dev -e TOKEN \\
+            grafana/k6:2.3.0 run --quiet nightly.js
+      - uses: actions/upload-artifact@v4
+        with:
+          name: k6-summary-\${{ github.run_id }}
+          path: load/summary.json
+      - name: Append to p95 history and show the last 14 nights
+        run: |
+          git fetch origin perf-data && git worktree add perf origin/perf-data
+          cat load/trend.json >> perf/history.jsonl
+          cd perf
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add history.jsonl && git commit -m "perf: nightly $(date -u +%F)"
+          git push origin HEAD:perf-data
+          { echo "| date | lessons p95 ms | progress p95 ms | errors |"; echo "|---|---|---|---|"
+            tail -n 14 history.jsonl | jq -r '"| \\(.date) | \\(.lessons_p95_ms) | \\(.progress_p95_ms) | \\(.error_rate) |"'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Fail the job on threshold breach
+        if: steps.k6.outcome == 'failure'
+        run: echo "::error::k6 thresholds crossed, see summary" && exit 1
+\`\`\``,
+        },
+        pitfalls: [
+          "Load testing production by accident: point the job at staging and keep the token in a secret.",
+          "Thresholds without SLOs are arbitrary; derive them from the targets the product actually promises.",
+          "Running the test from a laptop or a tiny runner can make the load generator the bottleneck; watch its CPU.",
+        ],
       },
     },
   },
