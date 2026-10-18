@@ -7,5 +7,8 @@ export default defineConfig({
   plugins: [react()],
   test: {
     environment: "jsdom",
+    // The persistent module cache does not notice new files matched by import.meta.glob
+    // (src/data/lessons/index.ts), so newly added lessons would be skipped by the tests.
+    fsModuleCache: false,
   },
 });
