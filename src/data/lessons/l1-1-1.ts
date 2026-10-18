@@ -307,7 +307,99 @@ def dedupe(articles: list[dict]) -> list[dict]:
       brief: ["Create `services/ai/` with a venv, a `pyproject.toml` or `requirements.txt`, a `devatlas_ai/tags.py` module (from this lesson) and tests. Add a README section on how to run tests."],
       criteria: ["pytest passes from a clean checkout following the README", "mypy passes", ".venv is gitignored"],
       hints: ["Keep the package importable: `devatlas_ai/__init__.py`."],
-      solution: { text: ["Structure: services/ai/devatlas_ai/__init__.py, tags.py; services/ai/tests/test_tags.py; requirements.txt with pinned pytest and mypy versions. This is the folder the FastAPI service will live in."] },
+      solution: {
+        text: [
+          "Layout: services/ai/devatlas_ai/__init__.py and tags.py (the typed helpers from this lesson), services/ai/tests/test_tags.py, a requirements.txt with exact pins for pytest and mypy, and a pyproject.toml that configures both tools. This is the folder the FastAPI service will live in.",
+          "`pythonpath = [\".\"]` in the pytest config lets the tests import `devatlas_ai` without installing the package, and `[tool.mypy] strict = true` with `files` means a bare `mypy` checks the package and the tests.",
+          "The .gitignore keeps .venv and tool caches out of git, so a clean checkout plus the README steps is all a teammate or CI needs. The output below is from running exactly those steps in a fresh folder (timing will vary).",
+        ],
+        code: {
+          lang: "python", file: "services/ai/devatlas_ai/tags.py",
+          code: `"""Tag helpers shared by the DevAtlas AI service."""
+from collections.abc import Iterable
+
+
+def add_tag(tag: str, tags: list[str] | None = None) -> list[str]:
+    """Return a new list with tag appended. Never mutates the caller's list."""
+    result = list(tags) if tags is not None else []
+    if tag not in result:
+        result.append(tag)
+    return result
+
+
+def normalise(tags: Iterable[str]) -> list[str]:
+    """Lower-case, strip, de-duplicate, keep first-seen order."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for t in tags:
+        clean = t.strip().lower()
+        if clean and clean not in seen:
+            seen.add(clean)
+            out.append(clean)
+    return out
+
+# ---- services/ai/devatlas_ai/__init__.py ----
+"""DevAtlas AI service package."""
+
+# ---- services/ai/tests/test_tags.py ----
+from devatlas_ai.tags import add_tag, normalise
+
+
+def test_add_tag_does_not_share_state() -> None:
+    assert add_tag("ai") == ["ai"]
+    assert add_tag("rust") == ["rust"]
+
+
+def test_add_tag_does_not_mutate_input() -> None:
+    original = ["ai"]
+    assert add_tag("rust", original) == ["ai", "rust"]
+    assert original == ["ai"]
+
+
+def test_add_tag_skips_duplicates() -> None:
+    assert add_tag("ai", ["ai"]) == ["ai"]
+
+
+def test_normalise() -> None:
+    assert normalise([" AI", "ai", "Rust ", ""]) == ["ai", "rust"]
+
+# ---- services/ai/requirements.txt ----
+# Dev tools, pinned so CI and laptops run the same versions
+pytest==9.1.1
+mypy==2.4.0
+
+# ---- services/ai/pyproject.toml ----
+[project]
+name = "devatlas-ai"
+version = "0.1.0"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.mypy]
+strict = true
+files = ["devatlas_ai", "tests"]
+
+# ---- services/ai/.gitignore ----
+.venv/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+
+# ---- services/ai/README.md (section) ----
+## Running the AI service tests
+cd services/ai
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+pytest -q
+mypy`,
+        },
+        output: "....                                                                     [100%]\n4 passed in 0.04s\nSuccess: no issues found in 3 source files",
+        pitfalls: ["Running tests with the global Python instead of the venv, so they pass on your laptop and fail in CI", "Committing .venv: it is large and machine specific", "Unpinned tool versions: a new mypy release can fail CI with no code change"],
+      },
     },
   },
   deeper: [
