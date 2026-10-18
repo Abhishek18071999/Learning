@@ -559,5 +559,5 @@ jobs:
     { label: "k6 documentation", url: "https://grafana.com/docs/k6/latest/" },
     { label: "Designing Data-Intensive Applications (book)", url: "https://dataintensive.net/" },
   ],
-  nextPreview: "Next: system design cases. URL shortener, chat, news feed and rate limiter, using a framework you can apply in any interview.",
+  nextPreview: "Next: the design method. A four-step way to approach any design, plus the powers of two and latency numbers that let you estimate in your head.",
 };
