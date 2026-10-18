@@ -9,7 +9,7 @@ DevAtlas is also the **capstone project**. As learners go through the course, th
 | Area | What it does |
 |---|---|
 | `/start` onboarding | Profile, skill levels, goal, time budget, OS, learning style, and a diagnostic quiz when you claim experience. Produces a personalised, week-by-week roadmap. |
-| Lessons | 10 full lessons in the 14-part Mentor format, plus the full 11-phase / 73-lesson curriculum with objectives for upcoming lessons. |
+| Lessons | All 73 lessons of the 11-phase curriculum in the full Mentor format: problem, analogy and precise concept, under the hood with a diagram, runnable hands-on code with real output, how companies do it, mistakes, best practices, interview questions, quick checks, cheat sheet and four homework tiers with model solutions. |
 | Quick checks | Multiple choice, predict-the-output and spot-the-bug questions. Answers stay hidden until you choose one. |
 | Homework | Basic, intermediate, challenge and capstone tasks with acceptance criteria, one-at-a-time hints, a submission box, a 4-part self-review rubric and model solutions with common pitfalls. |
 | Revise | Leitner spaced repetition (1, 2, 4, 8, 16 days) built from completed lessons, plus 3 review questions at the start of each lesson. |

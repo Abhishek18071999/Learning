@@ -46,8 +46,8 @@ export function Home() {
       ) : (
         <div className="continue-card done">
           <div>
-            <h2>All available lessons complete 🎉</h2>
-            <p>More lessons are being written. Meanwhile, run a mock interview or push your capstone forward.</p>
+            <h2>Curriculum complete 🎉</h2>
+            <p>You have finished every DevAtlas lesson. Keep skills sharp with Revise and mock interviews, and ship one capstone improvement a week.</p>
           </div>
         </div>
       )}
@@ -146,6 +146,13 @@ export function goalLabel(g: string) {
 
 function Landing() {
   const totalLessons = phases.reduce((n, p) => n + p.modules.reduce((m, mod) => m + mod.lessons.length, 0), 0);
+  const codeSamples = lessons.reduce(
+    (n, l) =>
+      n +
+      l.handsOn.filter((s) => s.code).length +
+      (["basic", "intermediate", "challenge", "capstone"] as const).filter((t) => l.homework[t].solution.code).length,
+    0,
+  );
   return (
     <div className="page landing">
       <section className="hero">
@@ -169,10 +176,10 @@ function Landing() {
             <strong>11</strong> phases
           </div>
           <div>
-            <strong>{totalLessons}</strong> lessons planned
+            <strong>{lessons.length === totalLessons ? totalLessons : `${lessons.length}/${totalLessons}`}</strong> full lessons
           </div>
           <div>
-            <strong>{lessons.length}</strong> full lessons live
+            <strong>{codeSamples}</strong> runnable examples
           </div>
           <div>
             <strong>1</strong> real capstone app
