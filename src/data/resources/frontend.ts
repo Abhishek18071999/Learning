@@ -1,0 +1,370 @@
+import type { ResourceSection } from "../../types";
+
+export const frontend: ResourceSection = {
+  id: "frontend",
+  title: "Frontend",
+  icon: "🎨",
+  tagline: "HTML, CSS, JavaScript and React, end to end",
+  phaseId: 3,
+  courses: [
+    {
+      id: "html",
+      title: "HTML",
+      topics: [
+        {
+          id: "html-html-document-structure",
+          title: "HTML document structure",
+          revision: [],
+        },
+        {
+          id: "html-text-links-and-images",
+          title: "Text, links and images",
+          revision: [],
+        },
+        {
+          id: "html-lists-and-tables",
+          title: "Lists and tables",
+          revision: [],
+        },
+        {
+          id: "html-forms-and-inputs",
+          title: "Forms and inputs",
+          revision: [],
+        },
+        {
+          id: "html-semantic-html",
+          title: "Semantic HTML",
+          lessonId: "3.1.1",
+          revision: [
+            "Use elements for their meaning: header, nav, main, article, button, label. Screen readers and keyboards rely on them.",
+            "Real buttons and links are focusable and keyboard-operable for free; a clickable div is not.",
+            "Give every image meaningful `alt` text (empty `alt` if decorative) and every form control a `label`.",
+            "Reach for WAI-ARIA only when no native element fits; the first rule of ARIA is to prefer native HTML.",
+          ],
+          read: { label: "HTML: A good basis for accessibility - MDN Learn web development", url: "https://developer.mozilla.org/en-US/docs/Learn_web_development/Core/Accessibility/HTML", kind: "docs" },
+          practice: { label: "Test your skills: HTML accessibility - MDN", url: "https://developer.mozilla.org/en-US/docs/Learn_web_development/Core/Accessibility/Test_your_skills/HTML" },
+        },
+        {
+          id: "html-accessibility-and-aria",
+          title: "Accessibility and ARIA",
+          lessonId: "3.1.1",
+          revision: [],
+        },
+        {
+          id: "html-audio-and-video",
+          title: "Audio and video",
+          revision: [],
+        },
+        {
+          id: "html-seo-and-meta-tags",
+          title: "SEO and meta tags",
+          revision: [],
+        },
+      ],
+    },
+    {
+      id: "css",
+      title: "CSS",
+      topics: [
+        {
+          id: "css-selectors-and-specificity",
+          title: "Selectors and specificity",
+          revision: [],
+        },
+        {
+          id: "css-box-model",
+          title: "Box model",
+          lessonId: "3.2.1",
+          revision: [],
+          read: { label: "The box model - MDN Learn web development", url: "https://developer.mozilla.org/en-US/docs/Learn_web_development/Core/Styling_basics/Box_model", kind: "docs" },
+          video: { label: "CSS Tutorial For Beginners In Hindi 2024 🔥", url: "https://www.youtube.com/watch?v=dSJM4Gyh8jE", channel: "CodeHelp - by Babbar", lang: "Hindi" },
+        },
+        {
+          id: "css-colors-units-and-typography",
+          title: "Colors, units and typography",
+          revision: [],
+        },
+        {
+          id: "css-display-and-positioning",
+          title: "Display and positioning",
+          revision: [],
+        },
+        {
+          id: "css-flexbox",
+          title: "Flexbox",
+          lessonId: "3.2.1",
+          revision: [],
+          practice: { label: "Test your skills: CSS layout (Flexbox, Grid and more) - MDN", url: "https://developer.mozilla.org/en-US/docs/Learn_web_development/Core/CSS_layout/Test_your_skills" },
+        },
+        {
+          id: "css-grid",
+          title: "Grid",
+          lessonId: "3.2.1",
+          revision: [],
+        },
+        {
+          id: "css-responsive-design-and-media-queries",
+          title: "Responsive design and media queries",
+          lessonId: "3.2.1",
+          revision: [],
+        },
+        {
+          id: "css-transitions-and-animations",
+          title: "Transitions and animations",
+          revision: [],
+        },
+        {
+          id: "css-css-variables",
+          title: "CSS variables",
+          revision: [],
+        },
+        {
+          id: "css-tailwind-css",
+          title: "Tailwind CSS",
+          revision: [],
+        },
+        {
+          id: "css-sass",
+          title: "Sass",
+          revision: [],
+        },
+      ],
+    },
+    {
+      id: "javascript",
+      title: "JavaScript and TypeScript",
+      topics: [
+        {
+          id: "javascript-variables-types-and-operators",
+          title: "Variables, types and operators",
+          revision: [],
+        },
+        {
+          id: "javascript-functions-and-arrow-functions",
+          title: "Functions and arrow functions",
+          revision: [],
+        },
+        {
+          id: "javascript-arrays-and-array-methods",
+          title: "Arrays and array methods",
+          revision: [],
+        },
+        {
+          id: "javascript-objects-and-destructuring",
+          title: "Objects and destructuring",
+          revision: [],
+        },
+        {
+          id: "javascript-scope-hoisting-and-closures",
+          title: "Scope, hoisting and closures",
+          lessonId: "1.2.2",
+          revision: [],
+        },
+        {
+          id: "javascript-this-prototypes-and-classes",
+          title: "this, prototypes and classes",
+          revision: [],
+        },
+        {
+          id: "javascript-es-modules",
+          title: "ES modules",
+          lessonId: "1.2.2",
+          revision: [],
+        },
+        {
+          id: "javascript-the-event-loop",
+          title: "The event loop",
+          lessonId: "1.2.1",
+          revision: [],
+        },
+        {
+          id: "javascript-promises-and-async-await",
+          title: "Promises and async/await",
+          lessonId: "1.2.1",
+          revision: [],
+        },
+        {
+          id: "javascript-dom-manipulation",
+          title: "DOM manipulation",
+          lessonId: "3.3.1",
+          revision: [],
+          read: { label: "DOM scripting introduction - MDN Learn web development", url: "https://developer.mozilla.org/en-US/docs/Learn_web_development/Core/Scripting/DOM_scripting", kind: "docs" },
+        },
+        {
+          id: "javascript-events-and-event-delegation",
+          title: "Events and event delegation",
+          lessonId: "3.3.1",
+          revision: [],
+          practice: { label: "Test your skills: Events - MDN", url: "https://developer.mozilla.org/en-US/docs/Learn_web_development/Core/Scripting/Test_your_skills/Events" },
+        },
+        {
+          id: "javascript-fetch-api-and-error-handling",
+          title: "Fetch API and error handling",
+          lessonId: "3.3.1",
+          revision: [],
+        },
+        {
+          id: "javascript-local-storage",
+          title: "Local storage",
+          revision: [],
+        },
+        {
+          id: "javascript-node-js-basics",
+          title: "Node.js basics",
+          revision: [],
+        },
+        {
+          id: "javascript-typescript-basics",
+          title: "TypeScript basics",
+          lessonId: "1.2.3",
+          revision: [],
+        },
+        {
+          id: "javascript-typescript-unions-narrowing-and-generics",
+          title: "TypeScript unions, narrowing and generics",
+          lessonId: "1.2.3",
+          revision: [],
+        },
+      ],
+    },
+    {
+      id: "react",
+      title: "React",
+      topics: [
+        {
+          id: "react-react-setup-with-vite",
+          title: "React setup with Vite",
+          revision: [],
+        },
+        {
+          id: "react-jsx",
+          title: "JSX",
+          revision: [],
+        },
+        {
+          id: "react-components-and-props",
+          title: "Components and props",
+          lessonId: "3.4.1",
+          revision: [
+            "A component is a function that returns JSX; name it with a capital letter and compose small ones into bigger ones.",
+            "Props pass data from parent to child and are read-only inside the child.",
+            "State (`useState`) is a component's memory; calling the setter re-renders the component with the new value.",
+            "Lift state up to the closest common parent when two components need the same data.",
+          ],
+          read: { label: "Componentizing our React app - MDN Learn web development", url: "https://developer.mozilla.org/en-US/docs/Learn_web_development/Core/Frameworks_libraries/React_components", kind: "docs" },
+          video: { label: "Understand the react flow and structure", url: "https://www.youtube.com/watch?v=yNbnA5pryMg", channel: "Chai aur Code", lang: "Hindi" },
+          practice: { label: "hiteshchoudhary/chai-aur-react - ReactJS in-depth series with projects", url: "https://github.com/hiteshchoudhary/chai-aur-react" },
+        },
+        {
+          id: "react-state-with-usestate",
+          title: "State with useState",
+          lessonId: "3.4.1",
+          revision: [],
+        },
+        {
+          id: "react-events-and-forms",
+          title: "Events and forms",
+          revision: [],
+        },
+        {
+          id: "react-lists-and-keys",
+          title: "Lists and keys",
+          revision: [],
+        },
+        {
+          id: "react-conditional-rendering",
+          title: "Conditional rendering",
+          revision: [],
+        },
+        {
+          id: "react-useeffect",
+          title: "useEffect",
+          lessonId: "3.4.2",
+          revision: [],
+        },
+        {
+          id: "react-custom-hooks",
+          title: "Custom hooks",
+          lessonId: "3.4.2",
+          revision: [],
+          practice: { label: "Build this: password generator project (useState, useEffect, useCallback, useRef) - chai-aur-react", url: "https://github.com/hiteshchoudhary/chai-aur-react/tree/main/05passwordGenerator" },
+        },
+        {
+          id: "react-useref-usememo-and-usecallback",
+          title: "useRef, useMemo and useCallback",
+          lessonId: "3.4.3",
+          revision: [],
+        },
+        {
+          id: "react-context-api",
+          title: "Context API",
+          revision: [],
+        },
+        {
+          id: "react-routing-with-react-router",
+          title: "Routing with React Router",
+          lessonId: "3.4.3",
+          revision: [],
+          practice: { label: "Build this: React Router project - chai-aur-react", url: "https://github.com/hiteshchoudhary/chai-aur-react/tree/main/07reactRouter" },
+        },
+        {
+          id: "react-data-fetching-and-tanstack-query",
+          title: "Data fetching and TanStack Query",
+          lessonId: "3.4.3",
+          revision: [],
+        },
+        {
+          id: "react-state-management-redux-toolkit-and-zustand",
+          title: "State management: Redux Toolkit and Zustand",
+          revision: [],
+        },
+        {
+          id: "react-react-performance",
+          title: "React performance",
+          lessonId: "3.4.3",
+          revision: [],
+        },
+        {
+          id: "react-testing-react-components",
+          title: "Testing React components",
+          revision: [],
+        },
+        {
+          id: "react-next-js-basics",
+          title: "Next.js basics",
+          revision: [],
+        },
+      ],
+    },
+    {
+      id: "websec",
+      title: "Web security and performance",
+      topics: [
+        {
+          id: "websec-xss",
+          title: "XSS",
+          lessonId: "3.5.1",
+          revision: [],
+        },
+        {
+          id: "websec-cors",
+          title: "CORS",
+          lessonId: "3.5.1",
+          revision: [],
+        },
+        {
+          id: "websec-content-security-policy",
+          title: "Content Security Policy",
+          lessonId: "3.5.1",
+          revision: [],
+        },
+        {
+          id: "websec-core-web-vitals",
+          title: "Core Web Vitals",
+          lessonId: "3.5.1",
+          revision: [],
+        },
+      ],
+    },
+  ],
+};
