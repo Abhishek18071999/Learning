@@ -20,6 +20,7 @@ const KEYWORDS: Record<string, string[]> = {
   dockerfile: ["FROM", "AS", "RUN", "COPY", "WORKDIR", "ENV", "EXPOSE", "CMD", "ENTRYPOINT", "USER", "ARG", "HEALTHCHECK", "LABEL", "ADD"],
   hcl: ["resource", "variable", "output", "provider", "module", "data", "locals", "terraform", "true", "false", "null", "for_each", "count", "depends_on"],
   yaml: ["true", "false", "null"],
+  promql: ["sum", "by", "without", "rate", "irate", "increase", "histogram_quantile", "avg", "max", "min", "count", "on", "ignoring", "offset"],
   css: [],
   html: [],
 };
@@ -30,7 +31,7 @@ const ALIASES: Record<string, string> = {
   docker: "dockerfile", yml: "yaml", cs: "csharp", rs: "rust", terraform: "hcl", tf: "hcl", xml: "html", toml: "yaml",
 };
 
-const HASH_COMMENTS = new Set(["python", "bash", "yaml", "dockerfile", "hcl"]);
+const HASH_COMMENTS = new Set(["python", "bash", "yaml", "dockerfile", "hcl", "promql", "toml"]);
 const SLASH_COMMENTS = new Set(["javascript", "typescript", "csharp", "rust", "go", "hcl", "css"]);
 const BLOCK_COMMENTS = new Set(["javascript", "typescript", "csharp", "rust", "go", "css", "sql", "hcl"]);
 

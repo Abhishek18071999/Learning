@@ -436,7 +436,7 @@ kubectl -n web get rs --no-headers | wc -l`,
       hints: ["`helm template api chart -f values-prod.yaml | grep replicas`"],
       solution: {
         text: [
-          "The schema turns runtime surprises into lint errors in CI. Keep values files small: only what differs from the defaults.",
+          "The schema turns runtime surprises into lint errors in CI. Keep values files small: only what differs from the defaults. Here `values-dev.yaml` sets `replicaCount: 1`, `image.tag: main-3f2a1c9` and `config` with `APP_ENV: development` and `LOG_LEVEL: debug`; `values-prod.yaml` sets `replicaCount: 5` and larger `resources`.",
         ],
         code: {
           lang: "json",
@@ -461,20 +461,7 @@ kubectl -n web get rs --no-headers | wc -l`,
     },
     "existingSecret": { "type": "string", "minLength": 1 }
   }
-}
-
-// ---- values-dev.yaml ----
-// replicaCount: 1
-// image:
-//   tag: main-3f2a1c9
-// config:
-//   APP_ENV: development
-//   LOG_LEVEL: debug
-// ---- values-prod.yaml ----
-// replicaCount: 5
-// resources:
-//   requests: { cpu: 250m, memory: 256Mi }
-//   limits: { memory: 512Mi }`,
+}`,
         },
         output: "$ helm lint charts/devatlas-api --set replicaCount=0 --set config.LOG_LEVEL=loud\n[ERROR] values.yaml: - replicaCount: Must be greater than or equal to 1\n- config.LOG_LEVEL: config.LOG_LEVEL must be one of the following: \"debug\", \"info\", \"warning\", \"error\"\n\n== dev:  replicas: 1  image: \"ghcr.io/devatlas/api:main-3f2a1c9\"\n== prod: replicas: 5  image: \"ghcr.io/devatlas/api:1.5.0\"",
       },
