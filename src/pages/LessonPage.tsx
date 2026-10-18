@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { allStubs } from "../data/curriculum";
 import { lessonById, lessons, loadLesson } from "../data/lessons";
 import { milestones } from "../data/capstone";
@@ -8,6 +8,9 @@ import { Badge, Code, CopyButton, Flow, Section } from "../components/ui";
 import { rich } from "../lib/rich";
 import { progressCard } from "../lib/roadmap";
 import { actions, useStore } from "../lib/store";
+
+// The resource link lists are a separate chunk, loaded only when a lesson page opens.
+const LessonResources = lazy(() => import("./Resources").then((m) => ({ default: m.LessonResources })));
 
 const TIERS = ["basic", "intermediate", "challenge", "capstone"] as const;
 type Tier = (typeof TIERS)[number];
@@ -303,6 +306,9 @@ function FullLesson({ lesson, section }: { lesson: Lesson; section?: string | nu
               </li>
             ))}
           </ul>
+          <Suspense fallback={null}>
+            <LessonResources lessonId={lesson.id} />
+          </Suspense>
         </Section>
 
         <Section id="next" icon="➡️" title="Next lesson preview">

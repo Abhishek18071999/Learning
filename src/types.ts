@@ -135,3 +135,50 @@ export type Area =
   | "foundations"
   | "architecture"
   | "career";
+
+/** A curated external link on the Resources page. Every URL was opened and checked by hand. */
+export interface ResourceLink {
+  label: string;
+  url: string;
+}
+
+export interface ReadLink extends ResourceLink {
+  kind: "repo" | "article" | "docs";
+}
+
+export interface VideoLink extends ResourceLink {
+  channel: string;
+  lang: "Hindi" | "English";
+}
+
+/**
+ * One topic: short revision lines plus the best repo/article, video and practice link found for it.
+ * A topic with no revision lines and no links is listed but still waiting for verified links.
+ */
+export interface ResourceTopic {
+  id: string;
+  title: string;
+  /** The course lesson that covers this topic, if any. */
+  lessonId?: string;
+  revision: string[];
+  read?: ReadLink;
+  video?: VideoLink;
+  practice?: ResourceLink;
+}
+
+/** An end-to-end course inside a section, e.g. React inside Frontend. */
+export interface ResourceCourse {
+  id: string;
+  title: string;
+  topics: ResourceTopic[];
+}
+
+export interface ResourceSection {
+  id: string;
+  title: string;
+  icon: string;
+  tagline: string;
+  /** Set for sections that mirror a curriculum phase. */
+  phaseId?: number;
+  courses: ResourceCourse[];
+}
