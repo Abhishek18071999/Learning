@@ -359,5 +359,5 @@ print(sum(fw.allow("k", t) for t in times), "of 10 allowed within 0.2s")   # 10 
     { label: "microservices.io: Transactional outbox", url: "https://microservices.io/patterns/data/transactional-outbox.html" },
     { label: "AWS Builders' Library: Timeouts, retries and backoff with jitter", url: "https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/" },
   ],
-  nextPreview: "Next phase: databases in depth. Transactions, isolation levels and locking: who gets the last ticket?",
+  nextPreview: "Next phase: databases in depth. Indexes and query plans: why your site is slow on Friday, and how to read EXPLAIN to fix it.",
 };

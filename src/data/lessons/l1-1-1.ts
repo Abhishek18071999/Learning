@@ -316,5 +316,5 @@ def dedupe(articles: list[dict]) -> list[dict]:
     { label: "typing module docs", url: "https://docs.python.org/3/library/typing.html" },
     { label: "pytest documentation", url: "https://docs.pytest.org/" },
   ],
-  nextPreview: "Next: JavaScript's event loop. Why `setTimeout(fn, 0)` does not run immediately, and how to run async work in parallel without bugs.",
+  nextPreview: "Next: OOP, dataclasses and protocols. Model DevAtlas's domain with classes that are small, typed and easy to test.",
 };

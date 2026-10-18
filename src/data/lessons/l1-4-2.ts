@@ -390,5 +390,5 @@ pub fn ingest_all<S: Storage>(store: &mut S, items: Vec<NewsItem>) -> IngestRepo
     { label: "The Cargo Book", url: "https://doc.rust-lang.org/cargo/" },
     { label: "serde.rs", url: "https://serde.rs/" },
   ],
-  nextPreview: "Next in DSA: two pointers and sliding window, the patterns behind 'longest substring', 'max sum subarray' and rate limiters.",
+  nextPreview: "Next phase: data structures and algorithms. Big-O and hash maps: turn an O(n²) solution into O(n) and learn to recognise when a lookup table is the answer.",
 };

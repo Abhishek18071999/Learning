@@ -643,5 +643,5 @@ def ask(question: str, provider: str | None = None, **client_kwargs) -> str:
     },
     { label: "FinOps Foundation: FinOps framework", url: "https://www.finops.org/framework/" },
   ],
-  nextPreview: "Next: Phase 9, DevOps. You will run DevAtlas's services together with Docker Compose: networks, volumes, healthchecks and a one-command local stack.",
+  nextPreview: "Next: Phase 9, DevOps. Docker in depth: images, layers and multi-stage builds that are small, fast and secure.",
 };

@@ -221,5 +221,5 @@ git reflog                      # every position HEAD has been: your safety net`
     { label: "GitHub Docs: About pull requests", url: "https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/about-pull-requests" },
     { label: "Conventional Commits", url: "https://www.conventionalcommits.org/" },
   ],
-  nextPreview: "Next: Python essentials. Variables as references, mutability traps, functions and type hints: the foundation for the AI service you will build.",
+  nextPreview: "Next: team workflow. Pull requests, code review and branch protection: how teams ship together without breaking main.",
 };

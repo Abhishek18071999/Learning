@@ -306,5 +306,5 @@ export async function retry(fn, { retries = 3, baseMs = 200 } = {}) {
     { label: "Node.js: The event loop, timers and process.nextTick()", url: "https://nodejs.org/en/learn/asynchronous-work/event-loop-timers-and-nexttick" },
     { label: "web.dev: Interaction to Next Paint (INP)", url: "https://web.dev/articles/inp" },
   ],
-  nextPreview: "Next in DSA: Big-O and hash maps. You will turn an O(n²) solution into O(n) and learn to recognise when a problem is secretly a lookup problem.",
+  nextPreview: "Next: closures, scope and modules. Why a loop of callbacks prints the same number, and how JavaScript modules keep code organised.",
 };

@@ -277,5 +277,5 @@ fi`,
     { label: "The Linux man-pages project", url: "https://man7.org/linux/man-pages/" },
     { label: "Microsoft: Install WSL", url: "https://learn.microsoft.com/en-us/windows/wsl/install" },
   ],
-  nextPreview: "Next: Git. You will understand what a commit really is, why branches are cheap, and how to resolve a merge conflict without panic.",
+  nextPreview: "Next: shell scripting and SSH. Automate the commands you just learned with safe Bash scripts, and connect to servers securely with keys.",
 };

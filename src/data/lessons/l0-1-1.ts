@@ -249,5 +249,5 @@ if __name__ == "__main__":
     { label: "Cloudflare Learning Center: What is DNS?", url: "https://www.cloudflare.com/learning/dns/what-is-dns/" },
     { label: "curl manual (-w write-out variables)", url: "https://curl.se/docs/manpage.html" },
   ],
-  nextPreview: "Next: the terminal. You will navigate a Linux machine, read logs, find the process eating your CPU and chain commands with pipes, the daily toolkit of every backend and DevOps engineer.",
+  nextPreview: "Next: HTTP in depth. Methods, status codes, headers and caching: the vocabulary of every API you will build and debug.",
 };

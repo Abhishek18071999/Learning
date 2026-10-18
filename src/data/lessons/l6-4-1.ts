@@ -282,5 +282,5 @@ Failure:  Redis down → fail open (allow, protect availability) for normal endp
     { label: "High Scalability: real architectures", url: "https://highscalability.com/" },
     { label: "Google SRE Book (free online)", url: "https://sre.google/sre-book/table-of-contents/" },
   ],
-  nextPreview: "Next phase: AI engineering continues. Prompt engineering that survives production.",
+  nextPreview: "Next phase: AI engineering. How LLMs really work: tokens, embeddings, attention and sampling, and what that means for cost, latency and hallucinations.",
 };
