@@ -2,6 +2,7 @@
 // (titles, terms, quiz and interview questions, cheat sheet, capstone milestone). Full lesson
 // bodies are loaded on demand, which keeps the initial download small.
 // Run: node --experimental-strip-types scripts/gen-lesson-meta.mjs   (npm scripts do this for you)
+// With --check it writes nothing and exits 1 if the generated file is out of date.
 import { readdirSync, writeFileSync, readFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
@@ -42,5 +43,13 @@ const body =
   'import type { LessonMeta } from "../types";\n\n' +
   `export const lessonMeta: LessonMeta[] = ${JSON.stringify(metas, null, 1)};\n`;
 const prev = (() => { try { return readFileSync(out, "utf8"); } catch { return ""; } })();
-if (prev !== body) writeFileSync(out, body);
-console.log(`lesson meta: ${metas.length} lessons${prev === body ? " (unchanged)" : ""}`);
+if (process.argv.includes("--check")) {
+  if (prev !== body) {
+    console.error("src/data/lessonMeta.generated.ts is out of date: run node --experimental-strip-types scripts/gen-lesson-meta.mjs");
+    process.exit(1);
+  }
+  console.log(`lesson meta: ${metas.length} lessons, up to date`);
+} else {
+  if (prev !== body) writeFileSync(out, body);
+  console.log(`lesson meta: ${metas.length} lessons${prev === body ? " (unchanged)" : ""}`);
+}

@@ -315,7 +315,115 @@ export function QuestionCard({ prompt, options, answer, onAnswered }: Props) {
       criteria: ["State only for lessons, query and filter", "All counts derived", "Short written comparison"],
       hints: ["Filter type: 'all' | 'done' | 'todo'."],
       solution: {
-        text: ["The React version usually has no explicit DOM update code at all: every view (list, counter, empty state) is computed from three pieces of state, so they cannot disagree."],
+        text: [
+          "Three pieces of state: lessons, query and filter. The visible list, the 'N of M completed' counter and the empty message are all computed from them during render, so there is no code that updates the DOM and nothing that can fall out of sync. toggle() returns a new array with a new object for the changed lesson.",
+          "Comparison with the 3.3.1 vanilla prototype: app.js was 77 lines plus 24 lines of HTML, and about half of it was DOM bookkeeping (cloning the template, setting textContent, replaceChildren, and updating the button label in two places: in show() and again in the click handler). The React component is 64 lines including markup and the new done/todo filter and counter, with no DOM calls. The vanilla bug surface is 'forgot to update one place'; in React a view cannot be stale, the bugs that remain are wrong state transitions, which a test like the one below catches. The prototype still owns fetching; in React that moves to an effect (3.4.2) and then TanStack Query (3.4.3).",
+          "The test goes through the same sequence a user would: filter to To do, complete a lesson (it leaves the view and the counter goes to 2 of 3), search, then switch the filter. Verified with tsc (TypeScript 7.0.2) and Vitest 5.0.5 + jsdom + Testing Library on React 19.3.1.",
+        ],
+        code: {
+          lang: "tsx",
+          file: "src/LessonList.tsx + src/LessonList.test.tsx",
+          code: `// file: src/LessonList.tsx
+import { useState } from "react";
+
+export interface Lesson { id: string; title: string; minutes: number; completed: boolean }
+type Filter = "all" | "done" | "todo";
+
+const FILTERS: { value: Filter; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "done", label: "Done" },
+  { value: "todo", label: "To do" },
+];
+
+export function LessonList({ initial }: { initial: Lesson[] }) {
+  // The only state: the data and the two user inputs
+  const [lessons, setLessons] = useState(initial);
+  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState<Filter>("all");
+
+  // Everything else is derived during render, so it can never disagree
+  const q = query.trim().toLowerCase();
+  const visible = lessons
+    .filter((l) => filter === "all" || (filter === "done") === l.completed)
+    .filter((l) => l.title.toLowerCase().includes(q) || l.id.includes(q));
+  const doneCount = lessons.filter((l) => l.completed).length;
+
+  function toggle(id: string) {
+    setLessons((prev) => prev.map((l) => (l.id === id ? { ...l, completed: !l.completed } : l)));
+  }
+
+  return (
+    <main>
+      <h1>Lessons</h1>
+      <p>{doneCount} of {lessons.length} completed</p>
+
+      <label htmlFor="lesson-search">Search</label>
+      <input id="lesson-search" type="search" value={query} onChange={(e) => setQuery(e.target.value)} />
+
+      <fieldset>
+        <legend>Show</legend>
+        {FILTERS.map((f) => (
+          <label key={f.value}>
+            <input type="radio" name="filter" value={f.value}
+                   checked={filter === f.value} onChange={() => setFilter(f.value)} />
+            {f.label}
+          </label>
+        ))}
+      </fieldset>
+
+      {visible.length === 0 ? (
+        <p role="status">No lessons match.</p>
+      ) : (
+        <ul>
+          {visible.map((l) => (
+            <li key={l.id}>
+              <span>{l.id} {l.title} ({l.minutes} min)</span>
+              <button type="button" aria-pressed={l.completed} onClick={() => toggle(l.id)}>
+                {l.completed ? "Completed" : "Mark complete"}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </main>
+  );
+}
+
+// file: src/LessonList.test.tsx
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { LessonList, type Lesson } from "./LessonList";
+
+const lessons: Lesson[] = [
+  { id: "3.1.1", title: "Semantic HTML", minutes: 60, completed: true },
+  { id: "3.2.1", title: "Flexbox and grid", minutes: 70, completed: false },
+  { id: "3.3.1", title: "DOM, events and fetch", minutes: 70, completed: false },
+];
+
+test("filter, search and toggle all drive the same derived view", async () => {
+  const user = userEvent.setup();
+  render(<LessonList initial={lessons} />);
+  expect(screen.getByText("1 of 3 completed")).toBeTruthy();
+
+  await user.click(screen.getByRole("radio", { name: "To do" }));
+  expect(screen.getAllByRole("listitem")).toHaveLength(2);
+
+  await user.click(screen.getAllByRole("button", { name: "Mark complete" })[0]);
+  expect(screen.getByText("2 of 3 completed")).toBeTruthy();
+  expect(screen.getAllByRole("listitem")).toHaveLength(1);     // it left the "To do" view
+
+  await user.type(screen.getByRole("searchbox", { name: "Search" }), "grid");
+  expect(screen.getByRole("status").textContent).toBe("No lessons match.");
+
+  await user.click(screen.getByRole("radio", { name: "Done" }));
+  expect(screen.getByRole("listitem").textContent).toContain("Flexbox and grid");
+});`,
+        },
+        output: `$ npx vitest run --reporter=verbose
+ ✓ src/LessonList.test.tsx > filter, search and toggle all drive the same derived view
+
+ Test Files  1 passed (1)
+      Tests  1 passed (1)`,
       },
     },
     challenge: {
@@ -375,7 +483,162 @@ export function Tabs({ items, value, onChange }: Props) {
       criteria: ["npm test and npm run build pass in CI", "No state duplication", "Keyboard accessible"],
       hints: ["Put shared types in web/src/api/types.ts from lesson 1.2.3."],
       solution: {
-        text: ["This becomes the real DevAtlas frontend; the next lessons add effects, data fetching, routing and performance work on top."],
+        text: [
+          "Lessons are static data imported from JSON and assigned to a typed constant (`const lessons: Lesson[] = data`), so a typo in the JSON fails the type check instead of rendering undefined. They are not state: the only state is what the user changes, the set of completed ids and the quiz answers. Counters and the quiz list are derived during render, so there is nothing to keep in sync.",
+          "LessonCard receives `completed` and `onToggle` from the page (state lives in the closest common parent). QuestionCard is the component from the basic tier, unchanged. Every control is a native button or radio, so the keyboard test can Tab to the first card's button and press Enter.",
+          "Verified in a Vite 8 + React 19.3.1 + TypeScript 7.0.2 project: `npm test` (Vitest 5.0.5, jsdom, Testing Library) passes the three tests below and `npm run build` (tsc -b && vite build) succeeds. The workflow file runs the same three commands in GitHub Actions; it was not run on GitHub here.",
+        ],
+        code: {
+          lang: "tsx",
+          file: "web/src (types, LessonCard, LessonsPage, test) + CI workflow",
+          code: `// file: web/src/api/types.ts
+export interface Question { prompt: string; options: string[]; answer: number }
+export interface Lesson { id: string; title: string; minutes: number; quiz: Question[] }
+
+// file: web/src/data/lessons.json  (tsconfig: "resolveJsonModule": true)
+[
+  { "id": "3.1.1", "title": "Semantic HTML and accessibility", "minutes": 60,
+    "quiz": [{ "prompt": "A control navigates to /pricing. Which element?", "options": ["<button>", "<a href>", "<div onclick>"], "answer": 1 }] },
+  { "id": "3.2.1", "title": "CSS layout: flexbox and grid", "minutes": 70,
+    "quiz": [{ "prompt": "Which property centres a single grid child?", "options": ["place-items", "float", "vertical-align"], "answer": 0 }] },
+  { "id": "3.4.1", "title": "React components, props and state", "minutes": 75,
+    "quiz": [{ "prompt": "Where should derived values live?", "options": ["In state", "Computed during render", "In a ref"], "answer": 1 }] }
+]
+
+// file: web/src/components/LessonCard.tsx
+import type { Lesson } from "../api/types";
+
+interface LessonCardProps {
+  lesson: Lesson;
+  completed: boolean;
+  onToggle: (id: string) => void;
+}
+
+export function LessonCard({ lesson, completed, onToggle }: LessonCardProps) {
+  return (
+    <article className={completed ? "card done" : "card"} aria-labelledby={\`lesson-\${lesson.id}\`}>
+      <h3 id={\`lesson-\${lesson.id}\`}>
+        <span className="id">{lesson.id}</span> {lesson.title}
+      </h3>
+      <p>{lesson.minutes} min</p>
+      <button type="button" onClick={() => onToggle(lesson.id)} aria-pressed={completed}>
+        {completed ? "Completed" : "Mark complete"}
+      </button>
+    </article>
+  );
+}
+
+// file: web/src/LessonsPage.tsx  (QuestionCard is the basic-tier component)
+import { useState } from "react";
+import type { Lesson } from "./api/types";
+import data from "./data/lessons.json";
+import { LessonCard } from "./components/LessonCard";
+import { QuestionCard } from "./components/QuestionCard";
+
+const lessons: Lesson[] = data;        // static JSON, checked against the type at compile time
+
+export function LessonsPage() {
+  // State holds only what the user changes; lessons themselves are static data, not state
+  const [completed, setCompleted] = useState<ReadonlySet<string>>(new Set());
+  const [answers, setAnswers] = useState<Record<string, boolean>>({});
+
+  // Derived values
+  const doneCount = lessons.filter((l) => completed.has(l.id)).length;
+  const correctCount = Object.values(answers).filter(Boolean).length;
+  const quiz = lessons.flatMap((l) => l.quiz.map((q, i) => ({ ...q, key: \`\${l.id}-\${i}\` })));
+
+  function toggle(id: string) {
+    setCompleted((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  return (
+    <main>
+      <h1>Frontend lessons</h1>
+      <p>{doneCount} of {lessons.length} completed</p>
+      <section aria-labelledby="lessons-heading">
+        <h2 id="lessons-heading">Lessons</h2>
+        {lessons.map((l) => (
+          <LessonCard key={l.id} lesson={l} completed={completed.has(l.id)} onToggle={toggle} />
+        ))}
+      </section>
+      <section aria-labelledby="quiz-heading">
+        <h2 id="quiz-heading">Quick check</h2>
+        <p>{correctCount} of {quiz.length} correct</p>
+        {quiz.map((q) => (
+          <QuestionCard key={q.key} prompt={q.prompt} options={q.options} answer={q.answer}
+            onAnswered={(correct) => setAnswers((prev) => ({ ...prev, [q.key]: correct }))} />
+        ))}
+      </section>
+    </main>
+  );
+}
+
+// file: web/src/LessonsPage.test.tsx
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { LessonsPage } from "./LessonsPage";
+
+test("lessons can be completed with the keyboard only", async () => {
+  const user = userEvent.setup();
+  render(<LessonsPage />);
+  expect(screen.getByText("0 of 3 completed")).toBeTruthy();
+
+  await user.tab();                                   // first focusable element: lesson 3.1.1's button
+  expect(document.activeElement).toBe(screen.getAllByRole("button", { name: "Mark complete" })[0]);
+  await user.keyboard("{Enter}");
+  expect(screen.getByText("1 of 3 completed")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Completed" }).getAttribute("aria-pressed")).toBe("true");
+});
+
+test("answering a question updates the derived score", async () => {
+  const user = userEvent.setup();
+  render(<LessonsPage />);
+  const group = screen.getByRole("group", { name: "Where should derived values live?" });
+  await user.click(screen.getByRole("radio", { name: "Computed during render" }));
+  await user.click(screen.getAllByRole("button", { name: "Check" })[2]);
+  expect(group.textContent).toContain("Correct!");
+  expect(screen.getByText("1 of 3 correct")).toBeTruthy();
+});
+
+test("a wrong answer shows the right one and locks the options", async () => {
+  const user = userEvent.setup();
+  render(<LessonsPage />);
+  await user.click(screen.getByRole("radio", { name: "<button>" }));
+  await user.click(screen.getAllByRole("button", { name: "Check" })[0]);
+  expect(screen.getByRole("status").textContent).toBe("Not quite: the answer is <a href>");
+  expect((screen.getByRole("radio", { name: "<button>" }) as HTMLInputElement).disabled).toBe(true);
+});
+
+# file: .github/workflows/web.yml
+name: web
+on: [push, pull_request]
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: web } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: web/package-lock.json }
+      - run: npm ci
+      - run: npm test
+      - run: npm run build`,
+        },
+        output: `$ npx vitest run --reporter=verbose
+ ✓ src/LessonsPage.test.tsx > lessons can be completed with the keyboard only
+ ✓ src/LessonsPage.test.tsx > answering a question updates the derived score
+ ✓ src/LessonsPage.test.tsx > a wrong answer shows the right one and locks the options
+
+ Test Files  1 passed (1)
+      Tests  3 passed (3)`,
+        pitfalls: [
+          "Copying the JSON lessons into useState: they never change, and a copy invites drift between two sources of truth",
+          "Storing doneCount or the score in state alongside the data it is computed from",
+        ],
       },
     },
   },

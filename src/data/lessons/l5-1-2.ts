@@ -147,12 +147,17 @@ COMMIT;`,
 RETRYABLE = {"1213", "1205", "40001", "40P01"}   # MySQL deadlock/lock wait; Postgres serialization/deadlock
 
 def run_in_transaction(conn, work, attempts: int = 5):
+    # conn must not be in autocommit mode. Avoid "with conn:" here: psycopg 3 and PyMySQL
+    # close the connection when that block exits, so the retry would hit a closed connection.
     for i in range(attempts):
         try:
-            with conn:                         # many drivers: commit on success, rollback on exception
-                return work(conn)
+            result = work(conn)
+            conn.commit()
+            return result
         except Exception as e:
-            code = str(getattr(e, "sqlstate", None) or getattr(e, "args", [""])[0])
+            conn.rollback()                    # end the failed transaction; the connection stays usable
+            args = getattr(e, "args", ())
+            code = str(getattr(e, "sqlstate", None) or (args[0] if args else ""))
             if code not in RETRYABLE or i == attempts - 1:
                 raise
             time.sleep((2 ** i) * 0.01 * random.random())   # backoff with jitter (lesson 1.2.1)`,
@@ -269,7 +274,74 @@ print("total", total, "min", minimum)`,
       hints: ["SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED; to compare."],
       solution: {
         text: [
-          "Session A: BEGIN; SELECT seats_left FROM sessions WHERE id=1; → 5. Session B: UPDATE … SET seats_left=4; COMMIT. Session A: SELECT again → still 5 under REPEATABLE READ (snapshot), 4 under READ COMMITTED. Locking: A: BEGIN; SELECT … FOR UPDATE; B: UPDATE same row → blocks until A commits or rolls back (or innodb_lock_wait_timeout expires, error 1205).",
+          "Session A: BEGIN; SELECT seats_left FROM sessions WHERE id=1; → 5. Session B: UPDATE … SET seats_left=4 (autocommit). Session A: SELECT again → still 5 under REPEATABLE READ, because InnoDB gives the transaction a consistent snapshot taken at its first read. Under READ COMMITTED every statement gets a fresh snapshot, so A sees B's commit immediately.",
+          "A detail worth knowing: inside the same REPEATABLE READ transaction, `SELECT … FOR UPDATE` returned 4, while the plain SELECT before and after it returned 5. Locking reads (and UPDATE/DELETE) always work on the latest committed row version; only plain reads use the snapshot. That is why read-then-update code must use a locking read or an atomic UPDATE.",
+          "Locking: A: BEGIN; SELECT … FOR UPDATE; B: UPDATE the same row → blocks until A commits or rolls back, and both decrements are applied. If A never finishes, B fails after innodb_lock_wait_timeout with error 1205. B's plain SELECT does not wait at all, because MVCC readers never block on row locks.",
+          "Every result in the comments was observed on MySQL 8.0 by running these exact statements on two connections.",
+        ],
+        code: {
+          lang: "sql",
+          file: "isolation_transcript.sql",
+          code: `-- Two terminals, both: docker exec -it mysql-lab mysql -uroot -p shop
+-- [A] / [B] says which terminal runs the next lines. Results observed on MySQL 8.0 are in comments.
+
+-- Setup (either terminal)
+CREATE TABLE sessions (id INT PRIMARY KEY, seats_left INT NOT NULL);
+INSERT INTO sessions VALUES (1, 5);
+
+-- ===== 1. REPEATABLE READ keeps a snapshot =====
+-- [A]
+SELECT @@transaction_isolation;                           -- REPEATABLE-READ (InnoDB default)
+BEGIN;
+SELECT seats_left FROM sessions WHERE id = 1;             -- 5  (the snapshot is taken at this first read)
+-- [B]  autocommit: committed immediately
+UPDATE sessions SET seats_left = 4 WHERE id = 1;          -- Query OK, 1 row affected
+-- [A]
+SELECT seats_left FROM sessions WHERE id = 1;             -- still 5: plain reads use the snapshot
+SELECT seats_left FROM sessions WHERE id = 1 FOR UPDATE;  -- 4: locking reads see the latest committed row
+SELECT seats_left FROM sessions WHERE id = 1;             -- 5 again: back to the snapshot
+COMMIT;
+SELECT seats_left FROM sessions WHERE id = 1;             -- 4: new transaction, new snapshot
+
+-- ===== 2. Same steps under READ COMMITTED =====
+-- [A]
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+BEGIN;
+SELECT seats_left FROM sessions WHERE id = 1;             -- 4
+-- [B]
+UPDATE sessions SET seats_left = 3 WHERE id = 1;
+-- [A]
+SELECT seats_left FROM sessions WHERE id = 1;             -- 3: every statement takes a fresh snapshot
+COMMIT;
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+
+-- ===== 3. SELECT ... FOR UPDATE makes the other writer wait =====
+-- [A]
+BEGIN;
+SELECT seats_left FROM sessions WHERE id = 1 FOR UPDATE;  -- 3, row is now locked by A
+-- [B]
+SET SESSION innodb_lock_wait_timeout = 5;
+UPDATE sessions SET seats_left = seats_left - 1 WHERE id = 1;   -- hangs ...
+-- [A]
+UPDATE sessions SET seats_left = seats_left - 1 WHERE id = 1;
+COMMIT;
+-- [B] the UPDATE returns as soon as A commits: Query OK, 1 row affected (2.00 sec)
+SELECT seats_left FROM sessions WHERE id = 1;             -- 1: both decrements applied, none lost
+
+-- ===== 4. Lock wait timeout =====
+-- [A]
+BEGIN;
+SELECT seats_left FROM sessions WHERE id = 1 FOR UPDATE;  -- 1, and A does not commit
+-- [B]
+UPDATE sessions SET seats_left = seats_left - 1 WHERE id = 1;
+-- after 5 s: ERROR 1205 (HY000): Lock wait timeout exceeded; try restarting transaction
+SELECT seats_left FROM sessions WHERE id = 1;             -- 1, instantly: plain reads never wait for row locks
+-- [A]
+ROLLBACK;`,
+        },
+        pitfalls: [
+          "Forgetting that the mysql client is in autocommit mode: without BEGIN, each SELECT is its own transaction and you will not see the snapshot effect",
+          "Leaving terminal A's transaction open and wondering why every later write from B hangs",
         ],
       },
     },
@@ -280,7 +352,115 @@ print("total", total, "min", minimum)`,
       hints: ["Each transaction reads both rows but writes only its own row, so there is no direct write-write conflict."],
       solution: {
         text: [
-          "Timeline: T1 reads count(on_call)=2, T2 reads count=2, T1 sets mentor A off, T2 sets mentor B off, both commit → zero on call. No row was written by both, so row-level conflict detection does not fire: this is write skew. Fixes: PostgreSQL SERIALIZABLE detects the dangerous read/write dependency and aborts one transaction with 40001 (retry it); or lock the set being checked with SELECT … FROM mentors WHERE on_call FOR UPDATE so the second transaction waits and re-checks.",
+          "Timeline: T1 reads count(on_call)=2, T2 reads count=2, T1 sets mentor A off, T2 sets mentor B off, both commit → zero on call. No row was written by both, so row-level conflict detection does not fire: this is write skew. A CHECK constraint cannot help either, because the rule ('at least one row') spans several rows and each row on its own is valid.",
+          "The script replays that exact interleaving with two connections. Under REPEATABLE READ (snapshot isolation in PostgreSQL) both commits succeed and nobody is on call. Under SERIALIZABLE, PostgreSQL's SSI notices the read/write dependency cycle and fails T2's commit with SQLSTATE 40001; the retry wrapper re-runs the whole check-then-write, T2 now sees only one mentor on call and is refused.",
+          "The MySQL-style fix is to lock the set the decision depends on: `SELECT id FROM mentors WHERE on_call ORDER BY id FOR UPDATE`, then count in the application (PostgreSQL does not allow FOR UPDATE with count(*)). T2 blocks on the row locks, and when T1 commits, its locking read sees the latest committed rows, finds one mentor and refuses. The same function behaves the same way on MySQL 8.0 under its default REPEATABLE READ.",
+        ],
+        code: {
+          lang: "python",
+          file: "write_skew.py",
+          code: `"""Write skew: 'at least one mentor on call', reproduced and fixed in PostgreSQL."""
+import os
+import random
+import threading
+import time
+
+import psycopg
+from psycopg import IsolationLevel
+
+DSN = os.environ.get("DATABASE_URL", "postgresql://postgres@localhost:5432/postgres")  # password via PGPASSWORD
+RETRYABLE = {"40001", "40P01"}
+
+def connect(level: IsolationLevel) -> psycopg.Connection:
+    conn = psycopg.connect(DSN)
+    conn.isolation_level = level
+    return conn
+
+def reset() -> None:
+    with psycopg.connect(DSN, autocommit=True) as db:
+        db.execute("DROP TABLE IF EXISTS mentors")
+        db.execute("CREATE TABLE mentors (id int PRIMARY KEY, name text NOT NULL, on_call boolean NOT NULL)")
+        db.execute("INSERT INTO mentors VALUES (1, 'Asha', true), (2, 'Ravi', true)")
+
+def on_call_names() -> list[str]:
+    with psycopg.connect(DSN) as db:
+        return [r[0] for r in db.execute("SELECT name FROM mentors WHERE on_call ORDER BY id")]
+
+def count_on_call(conn: psycopg.Connection) -> int:
+    return conn.execute("SELECT count(*) FROM mentors WHERE on_call").fetchone()[0]
+
+def go_off(conn: psycopg.Connection, mentor_id: int) -> None:
+    conn.execute("UPDATE mentors SET on_call = false WHERE id = %s", (mentor_id,))
+
+def request_off_call(conn: psycopg.Connection, mentor_id: int) -> bool:
+    """The whole check-then-write as one unit of work (what the retry wrapper re-runs)."""
+    if count_on_call(conn) < 2:
+        return False
+    go_off(conn, mentor_id)
+    return True
+
+def run_in_transaction(conn, work, attempts: int = 5):
+    for i in range(attempts):
+        try:
+            result = work(conn)
+            conn.commit()
+            return result
+        except psycopg.Error as e:
+            conn.rollback()
+            if e.sqlstate not in RETRYABLE or i == attempts - 1:
+                raise
+            time.sleep((2 ** i) * 0.01 * random.random())
+
+def race(level: IsolationLevel) -> None:
+    reset()
+    t1, t2 = connect(level), connect(level)
+    seen1, seen2 = count_on_call(t1), count_on_call(t2)     # both read before either writes
+    print(f"T1 sees {seen1} on call, T2 sees {seen2} on call")
+    go_off(t1, 1)                                          # different rows: no write-write conflict
+    go_off(t2, 2)
+    t1.commit()
+    try:
+        t2.commit()
+        print("T2 commit: OK")
+    except psycopg.errors.SerializationFailure as e:
+        t2.rollback()
+        print(f"T2 commit: {e.sqlstate} serialization failure -> retrying the whole transaction")
+        allowed = run_in_transaction(t2, lambda c: request_off_call(c, 2))
+        print(f"T2 retry: request {'granted' if allowed else 'refused, Asha is already off call'}")
+    print(f"{level.name}: on call now = {on_call_names()}\\n")
+    t1.close(); t2.close()
+
+def request_off_call_locking(conn: psycopg.Connection, mentor_id: int) -> bool:
+    """MySQL-style fix (works in PostgreSQL too): lock the rows the decision depends on."""
+    rows = conn.execute("SELECT id FROM mentors WHERE on_call ORDER BY id FOR UPDATE").fetchall()
+    if len(rows) < 2:
+        return False
+    go_off(conn, mentor_id)
+    return True
+
+def race_with_locks() -> None:
+    reset()
+    t1, t2 = connect(IsolationLevel.READ_COMMITTED), connect(IsolationLevel.READ_COMMITTED)
+    results: dict[str, bool] = {}
+    request_off_call_locking(t1, 1)                        # T1 holds both row locks, not committed yet
+    worker = threading.Thread(target=lambda: results.update(t2=run_in_transaction(
+        t2, lambda c: request_off_call_locking(c, 2))))
+    worker.start()
+    time.sleep(0.5)                                        # T2 is now blocked on the row locks
+    t1.commit()                                            # T2 wakes up and re-checks the current rows
+    worker.join()
+    print(f"FOR UPDATE: T1 granted, T2 {'granted' if results['t2'] else 'refused'}; on call now = {on_call_names()}")
+    t1.close(); t2.close()
+
+if __name__ == "__main__":
+    race(IsolationLevel.REPEATABLE_READ)                   # snapshot isolation: anomaly
+    race(IsolationLevel.SERIALIZABLE)                      # SSI detects it, one transaction retries
+    race_with_locks()`,
+        },
+        output: "T1 sees 2 on call, T2 sees 2 on call\nT2 commit: OK\nREPEATABLE_READ: on call now = []\n\nT1 sees 2 on call, T2 sees 2 on call\nT2 commit: 40001 serialization failure -> retrying the whole transaction\nT2 retry: request refused, Asha is already off call\nSERIALIZABLE: on call now = ['Ravi']\n\nFOR UPDATE: T1 granted, T2 refused; on call now = ['Ravi']",
+        pitfalls: [
+          "Retrying only the failed COMMIT or UPDATE: the decision was made on stale data, so the whole transaction (including the read) must run again",
+          "Using SERIALIZABLE without a retry loop: 40001 errors are expected behaviour under load, not bugs",
         ],
       },
     },
@@ -290,7 +470,169 @@ print("total", total, "min", minimum)`,
       criteria: ["Exactly 20 bookings after the test", "No duplicate bookings per user", "Endpoint returns 409 when full"],
       hints: ["Use Testcontainers MySQL (lesson 4.1.2) for the concurrency test."],
       solution: {
-        text: ["The atomic UPDATE with rowcount check plus the bookings insert in one transaction is enough; constraints guarantee correctness even if a future code path forgets the rule."],
+        text: [
+          "The atomic UPDATE with rowcount check plus the bookings insert in one transaction is enough; constraints guarantee correctness even if a future code path forgets the rule.",
+          "`UPDATE live_sessions SET seats_left = seats_left - 1 WHERE id = @id AND seats_left > 0` decides and takes the seat in one statement. If it affects no row, the session is full (409) or does not exist (404). The booking insert runs in the same transaction, so a duplicate booking (error 1062 from the `one_booking_per_user` primary key) rolls back and gives the seat back.",
+          "CHECK (seats_left BETWEEN 0 AND capacity) is the safety net (MySQL 8.0.16+ enforces CHECK). Deadlocks (1213) and lock wait timeouts (1205) retry the whole transaction with jittered backoff, up to five attempts.",
+          "The test starts a real MySQL 8.0 in a Testcontainer, fires 200 parallel POSTs at a 20-seat session through WebApplicationFactory and checks the HTTP results and the database: exactly 20 × 201 Created, 180 × 409, 20 distinct users booked, seats_left = 0. It passes on .NET 9 (`dotnet test`, about 15 to 30 s including the container start).",
+        ],
+        code: {
+          lang: "csharp",
+          file: "Booking.Api/Program.cs + Booking.Tests/BookingTests.cs",
+          code: `// dotnet add Booking.Api package MySqlConnector
+// dotnet add Booking.Tests package Microsoft.AspNetCore.Mvc.Testing; dotnet add Booking.Tests package Testcontainers.MySql
+
+// Booking.Api/Program.cs: atomic live-session booking (MySQL 8 via MySqlConnector)
+using MySqlConnector;
+
+var builder = WebApplication.CreateBuilder(args);
+var cs = builder.Configuration.GetConnectionString("Booking")
+         ?? throw new InvalidOperationException("ConnectionStrings:Booking is not configured");  // env/secret store, not code
+builder.Services.AddSingleton(new MySqlDataSource(cs));
+var app = builder.Build();
+
+await using (var conn = await app.Services.GetRequiredService<MySqlDataSource>().OpenConnectionAsync())
+    await new MySqlCommand(BookingService.Schema, conn).ExecuteNonQueryAsync();   // real apps: a migration
+
+app.MapPost("/sessions/{sessionId:long}/bookings", async (long sessionId, BookRequest req, MySqlDataSource db) =>
+    await BookingService.BookAsync(db, sessionId, req.UserId) switch
+    {
+        BookingOutcome.Booked => Results.Created($"/sessions/{sessionId}/bookings/{req.UserId}", new { sessionId, req.UserId }),
+        BookingOutcome.Full => Results.Conflict(new { error = "session is full" }),
+        BookingOutcome.AlreadyBooked => Results.Conflict(new { error = "you already booked this session" }),
+        _ => Results.NotFound(),
+    });
+
+app.Run();
+
+public record BookRequest(long UserId);
+public enum BookingOutcome { Booked, Full, AlreadyBooked, NotFound }
+
+public static class BookingService
+{
+    public const string Schema = """
+        CREATE TABLE IF NOT EXISTS live_sessions (
+          id         BIGINT AUTO_INCREMENT PRIMARY KEY,
+          title      VARCHAR(200) NOT NULL,
+          capacity   INT NOT NULL CHECK (capacity > 0),
+          seats_left INT NOT NULL,
+          CONSTRAINT seats_in_range CHECK (seats_left BETWEEN 0 AND capacity)
+        );
+        CREATE TABLE IF NOT EXISTS bookings (
+          session_id BIGINT NOT NULL,
+          user_id    BIGINT NOT NULL,
+          booked_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          CONSTRAINT one_booking_per_user PRIMARY KEY (session_id, user_id),
+          FOREIGN KEY (session_id) REFERENCES live_sessions (id)
+        );
+        """;
+
+    public static async Task<BookingOutcome> BookAsync(MySqlDataSource db, long sessionId, long userId)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return await TryBookAsync(db, sessionId, userId);
+            }
+            catch (MySqlException e) when (attempt < 5 &&
+                e.ErrorCode is MySqlErrorCode.LockDeadlock or MySqlErrorCode.LockWaitTimeout)
+            {
+                await Task.Delay(Random.Shared.Next(5, 25) * attempt);   // backoff with jitter, then rerun everything
+            }
+        }
+    }
+
+    private static async Task<BookingOutcome> TryBookAsync(MySqlDataSource db, long sessionId, long userId)
+    {
+        await using var conn = await db.OpenConnectionAsync();
+        await using var tx = await conn.BeginTransactionAsync();
+
+        // 1) check and decrement in ONE statement: no window for another request to sneak in
+        var take = new MySqlCommand(
+            "UPDATE live_sessions SET seats_left = seats_left - 1 WHERE id = @id AND seats_left > 0", conn, tx);
+        take.Parameters.AddWithValue("@id", sessionId);
+        if (await take.ExecuteNonQueryAsync() == 0)
+        {
+            await tx.RollbackAsync();
+            var exists = new MySqlCommand("SELECT COUNT(*) FROM live_sessions WHERE id = @id", conn);
+            exists.Parameters.AddWithValue("@id", sessionId);
+            return Convert.ToInt64(await exists.ExecuteScalarAsync()) > 0 ? BookingOutcome.Full : BookingOutcome.NotFound;
+        }
+
+        // 2) the booking row in the same transaction; the primary key rejects a second booking by the same user
+        var insert = new MySqlCommand("INSERT INTO bookings (session_id, user_id) VALUES (@s, @u)", conn, tx);
+        insert.Parameters.AddWithValue("@s", sessionId);
+        insert.Parameters.AddWithValue("@u", userId);
+        try
+        {
+            await insert.ExecuteNonQueryAsync();
+        }
+        catch (MySqlException e) when (e.ErrorCode == MySqlErrorCode.DuplicateKeyEntry)
+        {
+            await tx.RollbackAsync();                                    // gives the seat back
+            return BookingOutcome.AlreadyBooked;
+        }
+        await tx.CommitAsync();
+        return BookingOutcome.Booked;
+    }
+}
+
+public partial class Program;   // lets WebApplicationFactory<Program> find the app
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Booking.Tests/BookingTests.cs: 200 parallel requests against real MySQL in a Testcontainer
+using System.Net;
+using System.Net.Http.Json;
+using Microsoft.AspNetCore.Mvc.Testing;
+using MySqlConnector;
+using Testcontainers.MySql;
+
+public sealed class BookingTests : IAsyncLifetime
+{
+    private readonly MySqlContainer _mysql = new MySqlBuilder("mysql:8.0").Build();
+
+    public Task InitializeAsync() => _mysql.StartAsync();
+    public Task DisposeAsync() => _mysql.DisposeAsync().AsTask();
+
+    [Fact]
+    public async Task Two_hundred_parallel_bookings_fill_exactly_twenty_seats()
+    {
+        await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(b =>
+            b.UseSetting("ConnectionStrings:Booking", _mysql.GetConnectionString()));
+        var client = factory.CreateClient();                              // starts the app, creates the schema
+        await using var db = new MySqlConnection(_mysql.GetConnectionString());
+        await db.OpenAsync();
+        await new MySqlCommand(
+            "INSERT INTO live_sessions (id, title, capacity, seats_left) VALUES (1, 'SQL office hours', 20, 20)", db)
+            .ExecuteNonQueryAsync();
+
+        var responses = await Task.WhenAll(Enumerable.Range(1, 200).Select(userId =>
+            client.PostAsJsonAsync("/sessions/1/bookings", new BookRequest(userId))));
+
+        Assert.Equal(20, responses.Count(r => r.StatusCode == HttpStatusCode.Created));
+        Assert.Equal(180, responses.Count(r => r.StatusCode == HttpStatusCode.Conflict));
+        Assert.Equal(20L, await ScalarAsync(db, "SELECT COUNT(DISTINCT user_id) FROM bookings WHERE session_id = 1"));
+        Assert.Equal(0L, await ScalarAsync(db, "SELECT seats_left FROM live_sessions WHERE id = 1"));
+
+        // a second session: the same user cannot book twice, and the seat is given back
+        await new MySqlCommand("INSERT INTO live_sessions (id, title, capacity, seats_left) VALUES (2, 'Docker Q&A', 5, 5)", db)
+            .ExecuteNonQueryAsync();
+        Assert.Equal(HttpStatusCode.Created, (await client.PostAsJsonAsync("/sessions/2/bookings", new BookRequest(7))).StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, (await client.PostAsJsonAsync("/sessions/2/bookings", new BookRequest(7))).StatusCode);
+        Assert.Equal(4L, await ScalarAsync(db, "SELECT seats_left FROM live_sessions WHERE id = 2"));
+        Assert.Equal(HttpStatusCode.NotFound, (await client.PostAsJsonAsync("/sessions/99/bookings", new BookRequest(7))).StatusCode);
+    }
+
+    private static async Task<long> ScalarAsync(MySqlConnection db, string sql) =>
+        Convert.ToInt64(await new MySqlCommand(sql, db).ExecuteScalarAsync());
+}`,
+        },
+        pitfalls: [
+          "Reading seats_left in C#, checking it, then writing the new value: exactly the lost update from the hands-on, just slower",
+          "Inserting the booking in a separate transaction: a crash between the two statements loses a seat",
+          "Testing with the EF InMemory provider or SQLite: neither reproduces MySQL's locking, so the race never shows up",
+        ],
       },
     },
   },

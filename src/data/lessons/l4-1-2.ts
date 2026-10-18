@@ -55,13 +55,13 @@ export const lesson: Lesson = {
       code: {
         lang: "bash",
         code: `docker run -d --name devatlas-mysql -e MYSQL_ROOT_PASSWORD=devpass -e MYSQL_DATABASE=devatlas -p 3306:3306 mysql:8.4
-dotnet add package Pomelo.EntityFrameworkCore.MySql
-dotnet add package Microsoft.EntityFrameworkCore.Design
-dotnet tool install --global dotnet-ef
+dotnet add package Pomelo.EntityFrameworkCore.MySql --version 9.0.0        # EF Core 9 provider
+dotnet add package Microsoft.EntityFrameworkCore.Design --version "9.0.*"
+dotnet tool install --global dotnet-ef --version "9.0.*"
 dotnet user-secrets init
 dotnet user-secrets set "ConnectionStrings:Default" "Server=localhost;Port=3306;Database=devatlas;User=root;Password=devpass"`,
       },
-      notes: ["Check that the Pomelo provider version supports your EF Core / .NET version (its README lists compatibility). The password is for a local throwaway container only."],
+      notes: ["Keep every EF Core package (provider, Design, the dotnet-ef tool) on the same major version as your target framework (9.x for net9.0); check the Pomelo README for which EF Core version each provider release supports. The password is for a local throwaway container only."],
     },
     {
       title: "Entities and DbContext",
@@ -120,7 +120,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
       title: "Register and migrate",
       code: {
         lang: "csharp",
-        code: `// Program.cs
+        code: `// Program.cs (add: using DevAtlas.Api.Data; using Microsoft.EntityFrameworkCore;)
 var cs = builder.Configuration.GetConnectionString("Default")
          ?? throw new InvalidOperationException("ConnectionStrings:Default is not configured");
 builder.Services.AddDbContext<AppDbContext>(o => o.UseMySql(cs, ServerVersion.AutoDetect(cs)));
@@ -136,7 +136,8 @@ builder.Services.AddDbContext<AppDbContext>(o => o.UseMySql(cs, ServerVersion.Au
       code: {
         lang: "csharp",
         file: "Features/Progress/ProgressEndpoints.cs",
-        code: `using Microsoft.EntityFrameworkCore;
+        code: `using DevAtlas.Api.Data;
+using Microsoft.EntityFrameworkCore;
 
 public sealed record ProgressDto(string LessonId, string Status, decimal? Score);
 public sealed record CompleteRequest(decimal Score);
@@ -211,12 +212,13 @@ var summary = await db.Users
         lang: "csharp",
         file: "ProgressTests.cs",
         code: `// dotnet add package Testcontainers.MySql
+using DevAtlas.Api.Data;
 using Microsoft.EntityFrameworkCore;
 using Testcontainers.MySql;
 
 public class ProgressTests : IAsyncLifetime
 {
-    private readonly MySqlContainer _mysql = new MySqlBuilder().WithImage("mysql:8.4").Build();
+    private readonly MySqlContainer _mysql = new MySqlBuilder("mysql:8.4").Build();   // Testcontainers 4.x: image in the constructor
 
     public Task InitializeAsync() => _mysql.StartAsync();
     public Task DisposeAsync() => _mysql.DisposeAsync().AsTask();
@@ -368,8 +370,101 @@ public sealed class CommandCounter : DbCommandInterceptor
       hints: ["Never rename in one step: add the new column first."],
       solution: {
         text: [
-          "1) Migration: add nullable State column. 2) Deploy app v2 that writes both Status and State and reads State ?? Status. 3) Backfill: UPDATE ... SET State = Status WHERE State IS NULL (in batches). 4) Make State non-null. 5) Deploy app v3 that uses only State. 6) Migration: drop Status. Each step is compatible with the versions running during that step.",
+          "1) Migration: add a nullable State column. v1 ignores it. 2) Deploy app v2, which writes both Status and State and reads State ?? Status. 3) Once no v1 instance is left: backfill (UPDATE ... SET State = Status WHERE State IS NULL, in batches on big tables), make State NOT NULL, and make Status nullable. 4) Deploy app v3, which uses only State. 5) Once no v2 instance is left: migration drops Status.",
+          "Making Status nullable in step 3 is easy to forget. v3 never writes Status, so while the column still exists as NOT NULL, every v3 insert fails until the contract step. Each migration has to be compatible with both app versions that run while it is live: (v1, v2) after step 1, (v2, v3) after step 3, and only v3 after step 5.",
+          "The program applies the hand-written migrations one at a time to a real MySQL database. After each step it runs each app version's insert and read inside a transaction that it rolls back, then prints which versions still work. Read it as a deployment schedule: you may only roll out (or still be running) a version marked ok for the current schema.",
         ],
+        code: {
+          lang: "csharp", file: "Program.cs (Pomelo.EntityFrameworkCore.MySql 9.0.0)",
+          code: `// Expand/contract rename of Progress.Status -> State, verified against MySQL.
+// Migration ids follow EF's <timestamp>_<Name> format; in a real project generate them with
+// dotnet ef migrations add <Name> and edit the generated Up/Down methods.
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
+
+var cs = Environment.GetEnvironmentVariable("ConnectionStrings__Default")
+         ?? throw new InvalidOperationException("ConnectionStrings__Default is not set");
+await using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>()
+    .UseMySql(cs, ServerVersion.AutoDetect(cs)).Options);
+await db.Database.EnsureDeletedAsync();
+
+// What each app version runs: v1 knows only Status, v2 writes both and reads State ?? Status, v3 knows only State.
+var apps = new (string Name, string Write, string Read)[]
+{
+    ("v1", "INSERT INTO Progress (UserId, LessonId, Status) VALUES (1, '4.1.2', 'completed')", "SELECT Status FROM Progress"),
+    ("v2", "INSERT INTO Progress (UserId, LessonId, Status, State) VALUES (1, '4.1.2', 'completed', 'completed')",
+           "SELECT COALESCE(State, Status) FROM Progress"),
+    ("v3", "INSERT INTO Progress (UserId, LessonId, State) VALUES (1, '4.1.2', 'completed')", "SELECT State FROM Progress"),
+};
+
+var migrator = db.GetService<IMigrator>();
+foreach (var step in new[] { "20261018000001_Initial", "20261018000002_AddState", "20261018000003_BackfillState", "20261018000004_DropStatus" })
+{
+    await migrator.MigrateAsync(step);
+    if (step.EndsWith("_Initial")) await db.Database.ExecuteSqlRawAsync(apps[0].Write);   // existing data from v1
+    var results = new List<string>();
+    foreach (var (name, write, read) in apps)
+    {
+        await using var tx = await db.Database.BeginTransactionAsync();
+        try
+        {
+            await db.Database.ExecuteSqlRawAsync(write);
+            await db.Database.ExecuteSqlRawAsync(read);
+            results.Add($"{name} ok");
+        }
+        catch (Exception) { results.Add($"{name} BROKEN"); }
+        await tx.RollbackAsync();
+    }
+    Console.WriteLine($"{step[15..],-14} {string.Join("  ", results)}");
+}
+var kept = await db.Database.SqlQueryRaw<string>("SELECT State AS Value FROM Progress").ToListAsync();
+Console.WriteLine($"rows written by v1, after the rename: State = {string.Join(", ", kept)}");
+
+public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(options);
+
+[DbContext(typeof(AppDbContext)), Migration("20261018000001_Initial")]
+public class Initial : Migration
+{
+    protected override void Up(MigrationBuilder m) => m.CreateTable("Progress", t => new
+    {
+        Id = t.Column<int>(nullable: false).Annotation("MySql:ValueGenerationStrategy", MySqlValueGenerationStrategy.IdentityColumn),
+        UserId = t.Column<int>(nullable: false),
+        LessonId = t.Column<string>(maxLength: 16, nullable: false),
+        Status = t.Column<string>(maxLength: 16, nullable: false),
+    }, constraints: t => t.PrimaryKey("PK_Progress", x => x.Id));
+}
+
+// Step 1 (expand): new nullable column. v1 keeps working; then deploy v2.
+[DbContext(typeof(AppDbContext)), Migration("20261018000002_AddState")]
+public class AddState : Migration
+{
+    protected override void Up(MigrationBuilder m) =>
+        m.AddColumn<string>("State", "Progress", maxLength: 16, nullable: true);
+}
+
+// Step 2 (migrate data), only after every instance runs v2: backfill, require State,
+// and relax Status so v3 (which never writes it) can insert. Then deploy v3.
+[DbContext(typeof(AppDbContext)), Migration("20261018000003_BackfillState")]
+public class BackfillState : Migration
+{
+    protected override void Up(MigrationBuilder m)
+    {
+        m.Sql("UPDATE Progress SET State = Status WHERE State IS NULL;");   // batch this on large tables
+        m.AlterColumn<string>("State", "Progress", maxLength: 16, nullable: false, oldNullable: true);
+        m.AlterColumn<string>("Status", "Progress", maxLength: 16, nullable: true, oldNullable: false);
+    }
+}
+
+// Step 3 (contract), only after every instance runs v3.
+[DbContext(typeof(AppDbContext)), Migration("20261018000004_DropStatus")]
+public class DropStatus : Migration
+{
+    protected override void Up(MigrationBuilder m) => m.DropColumn("Status", "Progress");
+}`,
+        },
+        output: "Initial        v1 ok  v2 BROKEN  v3 BROKEN\nAddState       v1 ok  v2 ok  v3 BROKEN\nBackfillState  v1 BROKEN  v2 ok  v3 ok\nDropStatus     v1 BROKEN  v2 BROKEN  v3 ok\nrows written by v1, after the rename: State = completed",
       },
     },
     capstone: {
@@ -378,7 +473,191 @@ public sealed class CommandCounter : DbCommandInterceptor
       criteria: ["Migrations committed and applied in CI tests", "No N+1 in list endpoints (query-count test)", "Unique indexes for business rules"],
       hints: ["GitHub Actions ubuntu runners have Docker available for Testcontainers."],
       solution: {
-        text: ["With persistence, migrations and real-database tests, the API is production-shaped. Next: authentication so each user only sees their own progress."],
+        text: [
+          "With persistence, migrations and real-database tests, the API is production-shaped. Next: authentication so each user only sees their own progress.",
+          "The model adds QuizAttempt with an index on (UserId, CreatedAt) that matches the 'latest attempts' query, next to the unique (UserId, LessonId) index on progress from the hands-on. `dotnet ef migrations add InitialCreate` generates the migration (committed, not shown); CI applies the same migrations to a throwaway MySQL with `Database.MigrateAsync()`, and production uses `dotnet ef migrations script --idempotent`.",
+          "The user list is a single projection: the completed and attempt counts become subqueries inside one SELECT, so 20 users cost one query instead of 41. Keyset paging (`afterId`) and clamped limits keep the response bounded.",
+          "Interceptors are resolved from DI (`sp.GetServices<IInterceptor>()`): production registers none, while the test host adds a CommandCounter. That lets the query-count assertion run against the real endpoint, routing and serialisation included. The counter saw exactly 1 query for the 20-user page.",
+          "MySqlApiFactory starts a mysql:8.4 container with Testcontainers, points the app at it with UseSetting before the host is built, and runs the migrations once per test class. GitHub Actions ubuntu runners have Docker, so `dotnet test` works there unchanged.",
+          "For local development, docker-compose.yml has one mysql:8.4 service with MYSQL_DATABASE=devatlas, MYSQL_ROOT_PASSWORD taken from a gitignored .env file, port 3306, a named volume for data and a `mysqladmin ping` healthcheck. The API reads `ConnectionStrings__Default` from user secrets or the environment, never from appsettings.json.",
+        ],
+        code: {
+          lang: "csharp",
+          code: `// ---- DevAtlas.Api/Program.cs (registration; also app.MapUserEndpoints()) ----
+// using Microsoft.EntityFrameworkCore.Diagnostics;
+var cs = builder.Configuration.GetConnectionString("Default")
+         ?? throw new InvalidOperationException("ConnectionStrings:Default is not configured");
+builder.Services.AddDbContext<AppDbContext>((sp, o) => o
+    .UseMySql(cs, ServerVersion.AutoDetect(cs))
+    .AddInterceptors(sp.GetServices<IInterceptor>()));   // none in production; tests add a query counter
+
+// ---- DevAtlas.Api/Data/AppDbContext.cs (additions to the hands-on model) ----
+public class QuizAttempt
+{
+    public long Id { get; set; }
+    public int UserId { get; set; }
+    public required string LessonId { get; set; }
+    public decimal Score { get; set; }
+    public DateTime CreatedAt { get; set; }
+}
+
+// in AppDbContext:
+public DbSet<QuizAttempt> Attempts => Set<QuizAttempt>();
+// in OnModelCreating:
+b.Entity<QuizAttempt>(e =>
+{
+    e.Property(a => a.LessonId).HasMaxLength(16);
+    e.Property(a => a.Score).HasPrecision(4, 3);
+    e.HasOne<User>().WithMany().HasForeignKey(a => a.UserId);
+    e.HasIndex(a => new { a.UserId, a.CreatedAt });               // "last N attempts for a user"
+});
+
+// ---- DevAtlas.Api/Features/Users/UserEndpoints.cs ----
+using DevAtlas.Api.Data;
+using Microsoft.EntityFrameworkCore;
+
+namespace DevAtlas.Api.Features.Users;
+
+public sealed record UserSummary(int Id, string Email, int Completed, int Attempts);
+public sealed record AttemptDto(string LessonId, decimal Score, DateTime CreatedAt);
+
+public static class UserEndpoints
+{
+    public static void MapUserEndpoints(this IEndpointRouteBuilder app)
+    {
+        var g = app.MapGroup("/users");
+
+        // One SQL query: the counts are correlated subqueries inside the same SELECT, not a query per user.
+        g.MapGet("/", async (int? limit, int? afterId, AppDbContext db, CancellationToken ct) =>
+            TypedResults.Ok(await db.Users.AsNoTracking()
+                .Where(u => u.Id > (afterId ?? 0))
+                .OrderBy(u => u.Id)
+                .Take(Math.Clamp(limit ?? 20, 1, 100))
+                .Select(u => new UserSummary(
+                    u.Id,
+                    u.Email,
+                    u.Progress.Count(p => p.Status == "completed"),
+                    db.Attempts.Count(a => a.UserId == u.Id)))
+                .ToListAsync(ct)));
+
+        g.MapGet("/{userId:int}/attempts", async (int userId, int? limit, AppDbContext db, CancellationToken ct) =>
+            TypedResults.Ok(await db.Attempts.AsNoTracking()
+                .Where(a => a.UserId == userId)
+                .OrderByDescending(a => a.CreatedAt)                         // served by IX (UserId, CreatedAt)
+                .Take(Math.Clamp(limit ?? 10, 1, 50))
+                .Select(a => new AttemptDto(a.LessonId, a.Score, a.CreatedAt))
+                .ToListAsync(ct)));
+    }
+}
+
+// ---- DevAtlas.Api.Tests/PersistenceTests.cs (Testcontainers.MySql 4.16, Mvc.Testing 9.0.*) ----
+using System.Data.Common;
+using System.Net.Http.Json;
+using DevAtlas.Api.Data;
+using DevAtlas.Api.Features.Users;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.DependencyInjection;
+using Testcontainers.MySql;
+
+public sealed class CommandCounter : DbCommandInterceptor
+{
+    private int _count;
+    public int Count => _count;
+    public void Reset() => Interlocked.Exchange(ref _count, 0);
+    public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+        DbCommand c, CommandEventData e, InterceptionResult<DbDataReader> r, CancellationToken ct = default)
+    { Interlocked.Increment(ref _count); return ValueTask.FromResult(r); }
+}
+
+// Real MySQL in Docker + the real app in memory, with the same migrations as production.
+public sealed class MySqlApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
+{
+    private readonly MySqlContainer _mysql = new MySqlBuilder("mysql:8.4").Build();
+    public CommandCounter Counter { get; } = new();
+
+    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    {
+        builder.UseSetting("ConnectionStrings:Default", _mysql.GetConnectionString());
+        builder.ConfigureTestServices(s => s.AddSingleton<IInterceptor>(Counter));
+    }
+
+    public async Task InitializeAsync()
+    {
+        await _mysql.StartAsync();
+        using var scope = Services.CreateScope();
+        await scope.ServiceProvider.GetRequiredService<AppDbContext>().Database.MigrateAsync();
+    }
+
+    public new async Task DisposeAsync() { await base.DisposeAsync(); await _mysql.DisposeAsync(); }
+}
+
+public class PersistenceTests(MySqlApiFactory factory) : IClassFixture<MySqlApiFactory>
+{
+    private AppDbContext NewDb() => factory.Services.CreateScope().ServiceProvider.GetRequiredService<AppDbContext>();
+
+    [Fact]
+    public async Task Unique_index_rejects_a_second_progress_row()
+    {
+        var db = NewDb();
+        var user = new User { Email = "dup@x.dev" };
+        db.Users.Add(user);
+        await db.SaveChangesAsync();
+        db.Progress.Add(new LessonProgress { UserId = user.Id, LessonId = "4.1.2", UpdatedAt = DateTime.UtcNow });
+        db.Progress.Add(new LessonProgress { UserId = user.Id, LessonId = "4.1.2", UpdatedAt = DateTime.UtcNow });
+        await Assert.ThrowsAsync<DbUpdateException>(() => db.SaveChangesAsync());
+    }
+
+    [Fact]
+    public async Task Listing_20_users_with_counts_is_a_single_query()
+    {
+        var db = NewDb();
+        var start = DateTime.UtcNow;
+        var users = Enumerable.Range(1, 20).Select(i => new User { Email = $"list{i}@x.dev" }).ToList();
+        db.Users.AddRange(users);
+        await db.SaveChangesAsync();
+        foreach (var u in users)
+        {
+            db.Progress.Add(new LessonProgress { UserId = u.Id, LessonId = "4.1.1", Status = "completed", UpdatedAt = start });
+            db.Progress.Add(new LessonProgress { UserId = u.Id, LessonId = "4.1.2", Status = "started", UpdatedAt = start });
+            for (var k = 0; k < 3; k++)
+                db.Attempts.Add(new QuizAttempt { UserId = u.Id, LessonId = "4.1.1", Score = 0.5m + k / 10m, CreatedAt = start.AddMinutes(k) });
+        }
+        await db.SaveChangesAsync();
+
+        factory.Counter.Reset();
+        var page = await factory.CreateClient().GetFromJsonAsync<List<UserSummary>>($"/users?limit=20&afterId={users[0].Id - 1}");
+
+        Assert.Equal(20, page!.Count);
+        Assert.All(page, u => Assert.Equal((1, 3), (u.Completed, u.Attempts)));
+        Assert.True(factory.Counter.Count <= 2, $"Expected <= 2 queries, got {factory.Counter.Count}");
+    }
+
+    [Fact]
+    public async Task Attempts_are_newest_first_and_limit_is_clamped()
+    {
+        var db = NewDb();
+        var user = new User { Email = "attempts@x.dev" };
+        db.Users.Add(user);
+        await db.SaveChangesAsync();
+        var t0 = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        for (var i = 0; i < 60; i++)
+            db.Attempts.Add(new QuizAttempt { UserId = user.Id, LessonId = "4.1.2", Score = 0.9m, CreatedAt = t0.AddMinutes(i) });
+        await db.SaveChangesAsync();
+
+        var attempts = await factory.CreateClient().GetFromJsonAsync<List<AttemptDto>>($"/users/{user.Id}/attempts?limit=500");
+        Assert.Equal(50, attempts!.Count);
+        Assert.Equal(t0.AddMinutes(59), attempts[0].CreatedAt);
+    }
+}`,
+        },
+        output: "$ dotnet test        # Docker running; Testcontainers starts mysql:8.4\nPassed!  - Failed:     0, Passed:     3, Skipped:     0, Total:     3",
+        pitfalls: [
+          "The test project needs Microsoft.EntityFrameworkCore.Relational 9.0.* when the API references Microsoft.EntityFrameworkCore.Design (a private asset). Without it the test project resolves the older EF Core version that Pomelo 9.0.0 asks for, and fails with CS1705.",
+        ],
       },
     },
   },

@@ -251,7 +251,174 @@ h1 { font-size: clamp(1.8rem, 1.2rem + 2.5vw, 3rem); line-height: 1.1; }`,
       criteria: ["Works from 320px to 1600px without horizontal scroll", "Grid for the page, flex inside components", "Custom properties for colours and spacing"],
       hints: ["Use the layout.css and cards patterns from the hands-on."],
       solution: {
-        text: ["Page: grid with areas switching at 900px. Stats: repeat(auto-fit, minmax(min(14rem, 100%), 1fr)). Panels: grid-template-columns: 1fr on mobile, repeat(2, minmax(0, 1fr)) on desktop. The minmax(0, 1fr) avoids content forcing columns wider."],
+        text: [
+          "The page is a grid with named areas: one column on mobile (topbar, then a sidebar that is hidden until the Menu button opens it, then main) and, from 900px, a 240px sidebar beside the topbar and main. Inside each component it is flexbox: the topbar's search takes the remaining space with flex: 1 1 auto and min-width: 0, and the panel's Resume button is pushed to the bottom with margin-top: auto. Colours, radius and spacing are custom properties, with fluid spacing from clamp().",
+          "Stat cards use repeat(auto-fit, minmax(min(14rem, 100%), 1fr)), so they go from 1 to 4 per row without media queries. The two panels use minmax(0, 1fr) columns and sit side by side from 1100px (below that, the 240px sidebar leaves them too narrow); minmax(0, …) stops the long code line from widening its column, so the <pre> scrolls inside instead.",
+          "The check script loads the page in Chromium 141 at six widths and measures it. Its first run found horizontal scroll at 320px and 375px: on mobile the grid had no explicit column, and an implicit auto column grows to the topbar's min-content width (474px here, because of the search input's intrinsic size). grid-template-columns: minmax(0, 1fr) fixed it; the output below is from after the fix.",
+        ],
+        code: {
+          lang: "html",
+          file: "site/index.html + site/dashboard.css + check.mjs",
+          code: `<!-- file: site/index.html -->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dashboard · DevAtlas</title>
+  <link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <button class="menu-toggle" type="button" aria-expanded="false" aria-controls="sidebar">Menu</button>
+      <a class="brand" href="/">DevAtlas</a>
+      <input class="search" type="search" aria-label="Search lessons" placeholder="Search lessons">
+    </header>
+
+    <nav class="sidebar" id="sidebar" aria-label="Main">
+      <ul>
+        <li><a href="/" aria-current="page">Dashboard</a></li>
+        <li><a href="/roadmap">Roadmap</a></li>
+        <li><a href="/glossary">Glossary</a></li>
+      </ul>
+    </nav>
+
+    <main>
+      <h1>Welcome back</h1>
+      <ul class="stats">
+        <li class="card"><span class="label">Lessons done</span><span class="value">18</span></li>
+        <li class="card"><span class="label">Streak</span><span class="value">12 days</span></li>
+        <li class="card"><span class="label">Quiz average</span><span class="value">86%</span></li>
+        <li class="card"><span class="label">Hours this week</span><span class="value">6.5</span></li>
+      </ul>
+      <div class="panels">
+        <section class="card" aria-labelledby="next">
+          <h2 id="next">Continue learning</h2>
+          <p>3.2.1 CSS layout: flexbox, grid and responsive design</p>
+          <a class="button" href="/lessons/3.2.1">Resume</a>
+        </section>
+        <section class="card" aria-labelledby="activity">
+          <h2 id="activity">Recent activity</h2>
+          <pre><code>grid-template-columns: repeat(auto-fit, minmax(min(14rem, 100%), 1fr));</code></pre>
+        </section>
+      </div>
+    </main>
+  </div>
+  <script>
+    const toggle = document.querySelector(".menu-toggle");
+    toggle.addEventListener("click", () => {
+      const open = toggle.getAttribute("aria-expanded") !== "true";
+      toggle.setAttribute("aria-expanded", String(open));
+      document.querySelector(".app").classList.toggle("nav-open", open);
+    });
+  </script>
+</body>
+</html>
+
+/* file: site/dashboard.css */
+*, *::before, *::after { box-sizing: border-box; }
+:root {
+  --bg: #f6f6fa; --surface: #ffffff; --text: #13141c; --muted: #4a4d5e; --accent: #4b3bd1; --on-accent: #ffffff;
+  --radius: 12px;
+  --space: clamp(1rem, 0.6rem + 1.5vw, 2rem);
+  --gap: 1rem;
+}
+body { margin: 0; font: 1rem/1.6 system-ui, sans-serif; background: var(--bg); color: var(--text); }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+/* Page: grid with named areas, mobile first */
+.app {
+  display: grid;
+  min-height: 100vh;
+  grid-template-columns: minmax(0, 1fr);   /* an implicit auto column would grow to the topbar's min-content */
+  grid-template-rows: auto auto 1fr;
+  grid-template-areas: "topbar" "sidebar" "main";
+}
+.topbar  { grid-area: topbar; }
+.sidebar { grid-area: sidebar; display: none; background: var(--surface); }
+main     { grid-area: main; padding: var(--space); min-width: 0; }   /* min-width: 0 lets <pre> scroll inside */
+.app.nav-open .sidebar { display: block; }                               /* collapsible on mobile */
+
+@media (min-width: 900px) {
+  .app {
+    grid-template-columns: 240px minmax(0, 1fr);
+    grid-template-rows: auto 1fr;
+    grid-template-areas: "sidebar topbar" "sidebar main";
+  }
+  .sidebar { display: block; }
+  .menu-toggle { display: none; }
+}
+
+/* Components: flex inside */
+.topbar { display: flex; align-items: center; gap: var(--gap); padding: 0.75rem var(--space); background: var(--surface); }
+.brand { flex: none; font-weight: 700; color: var(--text); text-decoration: none; }
+.search { flex: 1 1 auto; min-width: 0; padding: 0.5rem; font: inherit; border: 1px solid var(--muted); border-radius: 8px; }
+.menu-toggle, .button { flex: none; padding: 0.5rem 1rem; border: 0; border-radius: 8px;
+  background: var(--accent); color: var(--on-accent); font: inherit; text-decoration: none; }
+.sidebar ul { list-style: none; margin: 0; padding: var(--gap); display: flex; flex-direction: column; gap: 0.5rem; }
+.sidebar a { color: var(--text); }
+
+.card { background: var(--surface); border-radius: var(--radius); padding: var(--gap); }
+.stats {
+  list-style: none; margin: 0 0 var(--gap); padding: 0;
+  display: grid; gap: var(--gap);
+  grid-template-columns: repeat(auto-fit, minmax(min(14rem, 100%), 1fr));   /* no media query needed */
+}
+.stats .card { display: flex; flex-direction: column; }
+.label { color: var(--muted); }
+.value { font-size: 1.75rem; font-weight: 700; }
+
+.panels { display: grid; gap: var(--gap); grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 1100px) { .panels { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.panels .card { display: flex; flex-direction: column; gap: 0.5rem; }
+.panels .button { align-self: flex-start; margin-top: auto; }
+pre { overflow-x: auto; margin: 0; padding: 0.75rem; background: var(--bg); border-radius: 8px; }
+
+// file: check.mjs
+// CHROME_PATH=/path/to/chrome node check.mjs : loads the page at several widths and checks the layout
+import { chromium } from "playwright-core";
+const url = new URL("./site/index.html", import.meta.url).href;
+const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH });
+const page = await browser.newPage();
+await page.goto(url);
+
+for (const width of [320, 375, 768, 1024, 1280, 1600]) {
+  await page.setViewportSize({ width, height: 900 });
+  const r = await page.evaluate(() => {
+    const box = (s) => document.querySelector(s).getBoundingClientRect();
+    const [a, b] = [...document.querySelectorAll(".panels > .card")].map((e) => e.getBoundingClientRect());
+    const stats = [...document.querySelectorAll(".stats .card")].map((e) => Math.round(e.getBoundingClientRect().top));
+    return {
+      hScroll: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+      sidebar: getComputedStyle(document.querySelector(".sidebar")).display !== "none",
+      statsPerRow: stats.filter((t) => t === stats[0]).length,
+      panels: Math.round(a.top) === Math.round(b.top) ? "side by side" : "stacked",
+      preScrolls: document.querySelector("pre").scrollWidth > box("pre").width,
+    };
+  });
+  console.log(\`\${String(width).padStart(4)}px  horizontal scroll: \${r.hScroll ? "YES" : "no"}  sidebar: \${r.sidebar ? "shown" : "hidden"}  \` +
+    \`stat cards per row: \${r.statsPerRow}  panels: \${r.panels}  code scrolls inside: \${r.preScrolls}\`);
+}
+
+await page.setViewportSize({ width: 375, height: 900 });
+await page.click(".menu-toggle");
+console.log("375px after Menu click: sidebar", await page.isVisible(".sidebar") ? "shown" : "hidden",
+  "aria-expanded =", await page.getAttribute(".menu-toggle", "aria-expanded"));
+await browser.close();`,
+        },
+        output: `$ node check.mjs
+ 320px  horizontal scroll: no  sidebar: hidden  stat cards per row: 1  panels: stacked  code scrolls inside: true
+ 375px  horizontal scroll: no  sidebar: hidden  stat cards per row: 1  panels: stacked  code scrolls inside: true
+ 768px  horizontal scroll: no  sidebar: hidden  stat cards per row: 3  panels: stacked  code scrolls inside: true
+1024px  horizontal scroll: no  sidebar: shown  stat cards per row: 3  panels: stacked  code scrolls inside: true
+1280px  horizontal scroll: no  sidebar: shown  stat cards per row: 4  panels: side by side  code scrolls inside: true
+1600px  horizontal scroll: no  sidebar: shown  stat cards per row: 4  panels: side by side  code scrolls inside: true
+375px after Menu click: sidebar shown aria-expanded = true`,
+        pitfalls: [
+          "Leaving the mobile grid column implicit: auto tracks size to content and cause horizontal scroll on small phones",
+          "Using 1fr instead of minmax(0, 1fr) for columns that contain code or long URLs",
+        ],
       },
     },
     challenge: {
@@ -286,7 +453,218 @@ h1 { font-size: clamp(1.8rem, 1.2rem + 2.5vw, 3rem); line-height: 1.1; }`,
       criteria: ["All colours come from tokens", "Shell responsive at 320/768/1280px", "Visible focus styles kept"],
       hints: ["Screenshot the three widths in DevTools device mode for your PR."],
       solution: {
-        text: ["Tokens first means every component in Phase 3.4 uses var(--…) and themes work automatically."],
+        text: [
+          "tokens.css is the only file with raw values: colour roles (bg, surface, text, muted, border, accent, on-accent, focus), a spacing scale plus one fluid page gutter, two radii and the type scale. Dark values are declared twice, under prefers-color-scheme guarded by :root:not([data-theme=\"light\"]) and under :root[data-theme=\"dark\"], so the OS setting is followed by default and a manual choice (the challenge tier's inline script) wins either way. Components only reference roles such as var(--color-accent), never a hex value, so a theme is just a different set of token values.",
+          "layout.css is mobile first: one minmax(0, 1fr) column with header, a horizontally scrollable nav strip, main and footer; at 768px main gets a readable max width; at 1024px the nav becomes a sticky sidebar column. :focus-visible keeps a 3px outline in the focus colour, which has its own token so it stays visible in dark mode.",
+          "check.mjs enforces the criteria instead of trusting screenshots: a regex finds no colour literals in layout.css (its first version flagged 'white-space', hence the stricter pattern), then Chromium 141 loads a demo page at 320, 768 and 1280px in light and dark colour schemes and reports horizontal scroll, where the nav sits, the body background, axe-core 4.14 colour-contrast violations and the focus ring on the first Tab stop. Take screenshots at the same three widths for the PR.",
+        ],
+        code: {
+          lang: "css",
+          file: "web/src/styles/tokens.css + layout.css (+ demo page and check)",
+          code: `/* file: web/src/styles/tokens.css */
+/* Design tokens: the only file allowed to contain raw colour values */
+:root {
+  color-scheme: light dark;
+
+  /* colour (light) */
+  --color-bg: #f6f6fa;
+  --color-surface: #ffffff;
+  --color-text: #13141c;
+  --color-text-muted: #4a4d5e;
+  --color-border: #d4d5df;
+  --color-accent: #4b3bd1;
+  --color-on-accent: #ffffff;
+  --color-focus: #4b3bd1;
+
+  /* spacing: 4px scale plus one fluid value for page gutters */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 1rem;
+  --space-4: 1.5rem;
+  --space-page: clamp(1rem, 0.6rem + 1.5vw, 2rem);
+
+  /* radius */
+  --radius-sm: 6px;
+  --radius-md: 12px;
+
+  /* typography */
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --text-sm: 0.875rem;
+  --text-md: 1rem;
+  --text-xl: clamp(1.6rem, 1.2rem + 2vw, 2.5rem);
+  --leading: 1.6;
+
+  /* layout */
+  --sidebar-width: 15rem;
+}
+
+/* dark: follow the OS unless the user picked light; or the user picked dark */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --color-bg: #0a0c12;
+    --color-surface: #141824;
+    --color-text: #e9eaf2;
+    --color-text-muted: #a9adc0;
+    --color-border: #2c3142;
+    --color-accent: #8f84ff;
+    --color-on-accent: #0a0c12;
+    --color-focus: #b3abff;
+  }
+}
+:root[data-theme="dark"] {
+  --color-bg: #0a0c12;
+  --color-surface: #141824;
+  --color-text: #e9eaf2;
+  --color-text-muted: #a9adc0;
+  --color-border: #2c3142;
+  --color-accent: #8f84ff;
+  --color-on-accent: #0a0c12;
+  --color-focus: #b3abff;
+}
+
+/* file: web/src/styles/layout.css */
+/* App shell. Every colour, space, radius and font comes from tokens.css */
+*, *::before, *::after { box-sizing: border-box; }
+body {
+  margin: 0;
+  font: var(--text-md) / var(--leading) var(--font-sans);
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+a { color: var(--color-accent); }
+:focus-visible { outline: 3px solid var(--color-focus); outline-offset: 2px; }   /* never removed */
+
+.app {
+  display: grid;
+  min-height: 100vh;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto 1fr auto;
+  grid-template-areas: "header" "nav" "main" "footer";
+}
+.app > header { grid-area: header; }
+.app > nav    { grid-area: nav; }
+.app > main   { grid-area: main; padding: var(--space-page); min-width: 0; }
+.app > footer { grid-area: footer; padding: var(--space-3) var(--space-page); color: var(--color-text-muted); }
+
+/* Phones: nav is a horizontally scrollable strip under the header */
+.app > nav { overflow-x: auto; border-bottom: 1px solid var(--color-border); background: var(--color-surface); }
+.app > nav ul { display: flex; gap: var(--space-3); margin: 0; padding: var(--space-2) var(--space-page); list-style: none; }
+.app > nav a { white-space: nowrap; color: var(--color-text); }
+.app > nav a[aria-current="page"] { color: var(--color-accent); font-weight: 600; }
+
+/* Tablet: content gets a readable max width */
+@media (min-width: 768px) {
+  .app > main { max-width: 60rem; }
+}
+
+/* Desktop: sidebar column */
+@media (min-width: 1024px) {
+  .app {
+    grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+    grid-template-rows: auto 1fr auto;
+    grid-template-areas: "nav header" "nav main" "nav footer";
+  }
+  .app > nav { border-bottom: 0; border-right: 1px solid var(--color-border); overflow: visible; }
+  .app > nav ul { flex-direction: column; position: sticky; top: 0; padding: var(--space-4) var(--space-3); }
+}
+
+.app > header {
+  display: flex; align-items: center; gap: var(--space-3);
+  padding: var(--space-2) var(--space-page);
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+}
+.brand { flex: none; font-weight: 700; color: var(--color-text); text-decoration: none; }
+.search {
+  flex: 1 1 auto; min-width: 0; padding: var(--space-2);
+  font: inherit; color: inherit; background: var(--color-bg);
+  border: 1px solid var(--color-border); border-radius: var(--radius-sm);
+}
+.button {
+  flex: none; padding: var(--space-2) var(--space-3); border: 0; border-radius: var(--radius-sm);
+  background: var(--color-accent); color: var(--color-on-accent); font: inherit; cursor: pointer;
+}
+h1 { font-size: var(--text-xl); line-height: 1.15; }
+.card { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-3); }
+code, pre { font-family: var(--font-mono); font-size: var(--text-sm); }
+pre { overflow-x: auto; }
+
+/* file: web/shell.html (demo page for the check) */
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Shell · DevAtlas</title>
+  <link rel="stylesheet" href="src/styles/tokens.css">
+  <link rel="stylesheet" href="src/styles/layout.css">
+</head>
+<body>
+  <div class="app">
+    <header><a class="brand" href="/">DevAtlas</a><input class="search" type="search" aria-label="Search lessons"><button class="button" type="button">Theme</button></header>
+    <nav aria-label="Main"><ul><li><a href="/" aria-current="page">Dashboard</a></li><li><a href="/roadmap">Roadmap</a></li><li><a href="/glossary">Glossary</a></li><li><a href="/news">News</a></li><li><a href="/settings">Settings</a></li></ul></nav>
+    <main><h1>CSS layout: flexbox and grid</h1><p class="card">Tokens first: components only use var(--…).</p>
+      <pre><code>grid-template-columns: var(--sidebar-width) minmax(0, 1fr); /* a long line that must scroll inside the pre on phones */</code></pre></main>
+    <footer>© 2026 DevAtlas</footer>
+  </div>
+</body>
+</html>
+
+/* file: check.mjs */
+// CHROME_PATH=/path/to/chrome node check.mjs
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { chromium } from "playwright-core";
+const require = createRequire(import.meta.url);
+
+// 1. No raw colours outside tokens.css
+const layout = readFileSync("web/src/styles/layout.css", "utf8").replace(/\\/\\*[\\s\\S]*?\\*\\//g, "");
+const literals = layout.match(/#[0-9a-f]{3,8}\\b|\\b(?:rgb|hsl|oklch)a?\\(|(?<![\\w-])(?:white|black)(?![\\w-])/gi) ?? [];
+console.log(\`colour literals in layout.css: \${literals.length}\`);
+
+// 2. Shell at three widths, light and dark
+const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH });
+for (const colorScheme of ["light", "dark"]) {
+  const page = await browser.newPage({ colorScheme });
+  await page.goto(new URL("./web/shell.html", import.meta.url).href);
+  await page.addScriptTag({ path: require.resolve("axe-core") });
+  for (const width of [320, 768, 1280]) {
+    await page.setViewportSize({ width, height: 800 });
+    const r = await page.evaluate(async () => {
+      const nav = document.querySelector("nav").getBoundingClientRect();
+      const main = document.querySelector("main").getBoundingClientRect();
+      const contrast = await window.axe.run(document, { runOnly: ["color-contrast"] });
+      return {
+        hScroll: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+        nav: nav.right <= main.left ? "sidebar" : "top strip",
+        bg: getComputedStyle(document.body).backgroundColor,
+        contrastViolations: contrast.violations.length,
+      };
+    });
+    console.log(\`\${colorScheme.padEnd(5)} \${String(width).padStart(4)}px  horizontal scroll: \${r.hScroll ? "YES" : "no"}  nav: \${r.nav}  body bg: \${r.bg}  contrast violations: \${r.contrastViolations}\`);
+  }
+  await page.keyboard.press("Tab");
+  const focus = await page.evaluate(() => { const s = getComputedStyle(document.activeElement); return \`\${s.outlineStyle} \${s.outlineWidth} \${s.outlineColor}\`; });
+  console.log(\`\${colorScheme.padEnd(5)} focus ring on first Tab stop: \${focus}\`);
+  await page.close();
+}
+await browser.close();`,
+        },
+        output: `$ node check.mjs
+colour literals in layout.css: 0
+light  320px  horizontal scroll: no  nav: top strip  body bg: rgb(246, 246, 250)  contrast violations: 0
+light  768px  horizontal scroll: no  nav: top strip  body bg: rgb(246, 246, 250)  contrast violations: 0
+light 1280px  horizontal scroll: no  nav: sidebar  body bg: rgb(246, 246, 250)  contrast violations: 0
+light focus ring on first Tab stop: solid 3px rgb(75, 59, 209)
+dark   320px  horizontal scroll: no  nav: top strip  body bg: rgb(10, 12, 18)  contrast violations: 0
+dark   768px  horizontal scroll: no  nav: top strip  body bg: rgb(10, 12, 18)  contrast violations: 0
+dark  1280px  horizontal scroll: no  nav: sidebar  body bg: rgb(10, 12, 18)  contrast violations: 0
+dark  focus ring on first Tab stop: solid 3px rgb(179, 171, 255)`,
+        pitfalls: [
+          "Naming tokens after values (--purple-500) instead of roles (--color-accent): dark mode then needs every component changed",
+          "Reusing the light accent as the dark focus ring, which can drop below 3:1 against a dark background",
+        ],
       },
     },
   },

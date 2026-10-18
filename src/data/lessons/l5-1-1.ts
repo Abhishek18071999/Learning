@@ -177,7 +177,7 @@ WHERE user_id = 42 ORDER BY created_at DESC LIMIT 20;
       code: { lang: "sql", code: "SELECT id FROM users WHERE LOWER(email) = 'asha@example.com';" },
       options: ["id is not indexed", "The function on the column prevents index use", "Strings cannot be indexed", "LIMIT is missing"],
       answer: 1,
-      explanation: "The index is on email, not LOWER(email). Store emails normalised, use a case-insensitive collation, or create an expression index.",
+      explanation: "The index is on email, not LOWER(email), so it cannot seek. (MySQL 8 may show `type: index`: it reads every entry of the email index because the index covers `id`, which is still a full scan.) Store emails normalised, use a case-insensitive collation, or create an expression index.",
     },
     {
       kind: "output",
@@ -230,7 +230,113 @@ LIMIT 20;` },
       criteria: ["Slow log enabled with SQL commands", "Ranking of queries by total time", "Fix verified by re-running the load"],
       hints: ["SET GLOBAL slow_query_log = 'ON'; SET GLOBAL long_query_time = 0.1;", "mysqldumpslow is included in the MySQL image."],
       solution: {
-        text: ["Rank by total time (count × average), not by the single slowest execution: a 50 ms query run 100,000 times hurts more than a 5 s report run once a day. Fix the top one, re-run the load, compare."],
+        text: [
+          "Rank by total time (count × average), not by the single slowest execution: a 50 ms query run 100,000 times hurts more than a 5 s report run once a day. Fix the top one, re-run the load, compare.",
+          "The script turns the slow log on with SET GLOBAL, sends it to a table (`log_output = 'TABLE'`) so it can be read back with SQL, and replays 1,000 requests: 800 'My orders', 150 order lookups by id and 50 'revenue for one day' queries. It groups the logged statements by fingerprint (numbers replaced by N, which is what mysqldumpslow does) and ranks them by total time.",
+          "In production you would keep long_query_time = 0.1. While sampling, the script sets it to 0 for a short window so that fast-but-frequent queries are counted too; it restores the original settings at the end. With a file log, the same ranking is `mysqldumpslow -s t -t 3 /var/lib/mysql/<host>-slow.log` (`-s t` sorts by total time).",
+          "The winner is the revenue query: `DATE(created_at) = …` cannot seek, so each call scans all 1,000,000 rows. The fix is the sargable range from the lesson plus a covering index on (created_at, total). In one run on MySQL 8.0 it dropped from about 9 s total (180 ms per call, 1,000,000 rows examined) to under 0.1 s (about 1.4 ms per call, about 2,700 rows examined). Your timings will differ; the rows-examined column is the number to watch.",
+        ],
+        code: {
+          lang: "python",
+          file: "find_friday_query.py",
+          code: `"""Find the Friday query: enable the slow log, replay a realistic load, rank by total time, fix, re-run."""
+import os
+import random
+import re
+from collections import defaultdict
+
+import pymysql
+
+def connect() -> pymysql.connections.Connection:
+    return pymysql.connect(
+        host=os.environ.get("MYSQL_HOST", "127.0.0.1"),
+        user=os.environ.get("MYSQL_USER", "root"),
+        password=os.environ["MYSQL_PASSWORD"],          # never hard-code credentials
+        database=os.environ.get("MYSQL_DB", "shop"),
+        autocommit=True,
+    )
+
+def day_params() -> tuple:
+    d = random.randint(1, 7)
+    return (d, d)
+
+QUERIES = {   # name -> (sql, params factory)
+    "my_orders": ("SELECT id, total, created_at FROM orders WHERE user_id = %s "
+                  "ORDER BY created_at DESC LIMIT 20", lambda: (random.randint(1, 50_000),)),
+    "order_detail": ("SELECT * FROM orders WHERE id = %s", lambda: (random.randint(1, 1_000_000),)),
+    "revenue_day": ("SELECT SUM(total) FROM orders "
+                    "WHERE DATE(created_at) = CURDATE() - INTERVAL %s DAY", lambda: (random.randint(1, 7),)),
+}
+FIXED_REVENUE = ("SELECT SUM(total) FROM orders WHERE created_at >= CURDATE() - INTERVAL %s DAY "
+                 "AND created_at < CURDATE() - INTERVAL %s DAY + INTERVAL 1 DAY", day_params)
+MIX = ["my_orders"] * 800 + ["order_detail"] * 150 + ["revenue_day"] * 50   # 1,000 requests
+
+def run_load(admin: pymysql.connections.Connection) -> None:
+    with admin.cursor() as c:
+        c.execute("TRUNCATE TABLE mysql.slow_log")
+    app = connect()                      # new session: picks up the GLOBAL long_query_time
+    random.seed(7)
+    order = MIX[:]
+    random.shuffle(order)
+    with app.cursor() as c:
+        for name in order:
+            sql, params = QUERIES[name]
+            c.execute(sql, params())
+            c.fetchall()
+    thread = app.thread_id()
+    app.close()
+    report(admin, thread)
+
+def report(admin: pymysql.connections.Connection, thread: int) -> None:
+    stats: dict[str, list[float]] = defaultdict(lambda: [0, 0.0, 0])   # calls, seconds, rows examined
+    with admin.cursor() as c:
+        c.execute("SELECT sql_text, query_time, rows_examined FROM mysql.slow_log "
+                  "WHERE thread_id = %s AND sql_text LIKE 'SELECT%%FROM orders%%'", (thread,))
+        for sql_text, query_time, rows in c.fetchall():
+            text = sql_text.decode() if isinstance(sql_text, bytes) else sql_text
+            fingerprint = re.sub(r"\\b\\d+\\b", "N", text)              # same idea as mysqldumpslow
+            s = stats[fingerprint]
+            s[0] += 1; s[1] += query_time.total_seconds(); s[2] += rows
+    ranked = sorted(stats.items(), key=lambda kv: kv[1][1], reverse=True)
+    for rank, (fp, (calls, secs, rows)) in enumerate(ranked, 1):
+        print(f"{rank}. total {secs:7.3f}s  calls {calls:4d}  avg {secs / calls * 1000:8.2f} ms  "
+              f"rows/call {rows / calls:>9.0f}  {fp[:70]}")
+
+def main() -> None:
+    admin = connect()                    # needs SYSTEM_VARIABLES_ADMIN for SET GLOBAL
+    with admin.cursor() as c:
+        c.execute("SELECT @@log_output, @@slow_query_log, @@long_query_time")
+        saved = c.fetchone()
+        c.execute("SET GLOBAL log_output = 'TABLE'")         # query the log with SQL (FILE works with mysqldumpslow)
+        c.execute("SET GLOBAL slow_query_log = 'ON'")
+        # Production setting is 0.1. While sampling we log everything, otherwise a 5 ms query
+        # run 100,000 times would never appear in the log at all.
+        c.execute("SET GLOBAL long_query_time = 0")
+    try:
+        print("== before ==")
+        run_load(admin)
+        with admin.cursor() as c:        # fix the worst: sargable range + covering index
+            c.execute("SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema = DATABASE() "
+                      "AND table_name = 'orders' AND index_name = 'idx_orders_created_total'")
+            if c.fetchone()[0] == 0:
+                c.execute("CREATE INDEX idx_orders_created_total ON orders (created_at, total)")
+        QUERIES["revenue_day"] = FIXED_REVENUE
+        print("== after ==")
+        run_load(admin)
+    finally:
+        with admin.cursor() as c:        # put the server back the way we found it
+            c.execute(f"SET GLOBAL log_output = '{saved[0]}'")
+            c.execute("SET GLOBAL slow_query_log = %s", ("ON" if saved[1] else "OFF",))
+            c.execute("SET GLOBAL long_query_time = %s", (float(saved[2]),))
+        admin.close()
+
+if __name__ == "__main__":
+    main()`,
+        },
+        pitfalls: [
+          "Leaving long_query_time = 0 on in production: the log grows by every statement. Sample for a short window, then restore it",
+          "SET GLOBAL long_query_time only affects new connections; open the load connection after changing it",
+        ],
       },
     },
     capstone: {
@@ -239,7 +345,100 @@ LIMIT 20;` },
       criteria: ["Primary and foreign keys defined", "3 queries with matching indexes", "EXPLAIN shows index use with seeded data"],
       hints: ["The dashboard asks: my progress for all lessons; my last 10 quiz attempts; how many learners completed lesson X."],
       solution: {
-        text: ["lesson_progress: PRIMARY KEY (user_id, lesson_id) serves 'my progress'. quiz_attempts: INDEX (user_id, created_at) serves 'last 10 attempts'. INDEX (lesson_id, status) serves completion counts. Each index maps to a named query."],
+        text: [
+          "lesson_progress: PRIMARY KEY (user_id, lesson_id) serves 'my progress'. quiz_attempts: INDEX (user_id, created_at) serves 'last 10 attempts'. INDEX (lesson_id, status) serves completion counts. Each index maps to a named query.",
+          "Foreign keys are table-level clauses (MySQL 8.0 ignores column-level REFERENCES). Each composite index also starts with a foreign key column, so InnoDB does not need an extra index for that FK; only quiz_attempts.lesson_id gets one created automatically.",
+          "The seed uses deterministic expressions instead of RAND(), so the EXPLAIN output and results below are reproducible. Q1 is a `ref` lookup on the primary key, Q2 reads the index backwards and stops after 10 entries (no filesort), and Q3 is answered from the index alone (`Using index`).",
+        ],
+        code: {
+          lang: "sql",
+          file: "progress_schema.sql",
+          code: `-- DevAtlas step 7: progress schema, seeded data, and the 3 dashboard queries with their plans (MySQL 8)
+CREATE DATABASE IF NOT EXISTS devatlas;
+USE devatlas;
+
+CREATE TABLE users (
+  id         BIGINT AUTO_INCREMENT PRIMARY KEY,
+  email      VARCHAR(254) NOT NULL UNIQUE,
+  name       VARCHAR(100) NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE lessons (
+  id       VARCHAR(16) PRIMARY KEY,                 -- natural key like '5.1.1'
+  title    VARCHAR(200) NOT NULL,
+  position INT NOT NULL UNIQUE
+);
+
+CREATE TABLE lesson_progress (
+  user_id    BIGINT NOT NULL,
+  lesson_id  VARCHAR(16) NOT NULL,
+  status     VARCHAR(12) NOT NULL CHECK (status IN ('started', 'completed')),
+  score      DECIMAL(4,3) NULL CHECK (score BETWEEN 0 AND 1),
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, lesson_id),                         -- Q1: my progress
+  INDEX idx_progress_lesson_status (lesson_id, status),     -- Q3: completions per lesson (also serves the FK)
+  FOREIGN KEY (user_id) REFERENCES users (id),
+  FOREIGN KEY (lesson_id) REFERENCES lessons (id)
+);
+
+CREATE TABLE quiz_attempts (
+  id         BIGINT AUTO_INCREMENT PRIMARY KEY,
+  user_id    BIGINT NOT NULL,
+  lesson_id  VARCHAR(16) NOT NULL,
+  score      DECIMAL(4,3) NOT NULL CHECK (score BETWEEN 0 AND 1),
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_attempts_user_created (user_id, created_at),   -- Q2: my last 10 attempts (also serves the FK)
+  FOREIGN KEY (user_id) REFERENCES users (id),
+  FOREIGN KEY (lesson_id) REFERENCES lessons (id)
+);
+
+-- Deterministic seed: 5,000 users, 20 lessons, ~67k progress rows, 100k quiz attempts
+SET SESSION cte_max_recursion_depth = 100000;
+INSERT INTO users (email, name)
+WITH RECURSIVE s (n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM s WHERE n < 5000)
+SELECT CONCAT('learner', n, '@devatlas.dev'), CONCAT('Learner ', n) FROM s;
+
+INSERT INTO lessons (id, title, position)
+WITH RECURSIVE s (n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM s WHERE n < 20)
+SELECT CONCAT('5.', CEIL(n / 5), '.', (n - 1) % 5 + 1), CONCAT('Lesson ', n), n FROM s;
+
+INSERT INTO lesson_progress (user_id, lesson_id, status, score)
+SELECT u.id, l.id,
+       IF((u.id + l.position) % 4 = 0, 'started', 'completed'),
+       IF((u.id + l.position) % 4 = 0, NULL, ((u.id * 7 + l.position * 13) % 101) / 100)
+FROM users u JOIN lessons l
+WHERE (u.id * 7 + l.position) % 3 <> 0;
+
+INSERT INTO quiz_attempts (user_id, lesson_id, score, created_at)
+WITH RECURSIVE s (n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM s WHERE n < 100000)
+SELECT n % 5000 + 1,
+       (SELECT id FROM lessons WHERE position = (n DIV 5000) % 20 + 1),
+       ((n * 37) % 1001) / 1000,
+       TIMESTAMP '2026-07-01 00:00:00' + INTERVAL n MINUTE
+FROM s;
+
+ANALYZE TABLE users, lessons, lesson_progress, quiz_attempts;
+
+-- Q1: my progress for all lessons (dashboard grid)
+EXPLAIN SELECT lesson_id, status, score FROM lesson_progress WHERE user_id = 42 ORDER BY lesson_id;
+SELECT lesson_id, status, score FROM lesson_progress WHERE user_id = 42 ORDER BY lesson_id LIMIT 5;
+
+-- Q2: my last 10 quiz attempts
+EXPLAIN SELECT lesson_id, score, created_at FROM quiz_attempts
+WHERE user_id = 42 ORDER BY created_at DESC LIMIT 10;
+SELECT lesson_id, score, created_at FROM quiz_attempts
+WHERE user_id = 42 ORDER BY created_at DESC LIMIT 3;
+
+-- Q3: how many learners completed lesson 5.1.1
+EXPLAIN SELECT COUNT(*) FROM lesson_progress WHERE lesson_id = '5.1.1' AND status = 'completed';
+SELECT COUNT(*) AS completed FROM lesson_progress WHERE lesson_id = '5.1.1' AND status = 'completed';`,
+        },
+        output: "+--------------------------+---------+----------+----------+\n| Table                    | Op      | Msg_type | Msg_text |\n+--------------------------+---------+----------+----------+\n| devatlas.users           | analyze | status   | OK       |\n| devatlas.lessons         | analyze | status   | OK       |\n| devatlas.lesson_progress | analyze | status   | OK       |\n| devatlas.quiz_attempts   | analyze | status   | OK       |\n+--------------------------+---------+----------+----------+\n+----+-------------+-----------------+------------+------+---------------+---------+---------+-------+------+----------+-------+\n| id | select_type | table           | partitions | type | possible_keys | key     | key_len | ref   | rows | filtered | Extra |\n+----+-------------+-----------------+------------+------+---------------+---------+---------+-------+------+----------+-------+\n|  1 | SIMPLE      | lesson_progress | NULL       | ref  | PRIMARY       | PRIMARY | 8       | const |   14 |   100.00 | NULL  |\n+----+-------------+-----------------+------------+------+---------------+---------+---------+-------+------+----------+-------+\n+-----------+-----------+-------+\n| lesson_id | status    | score |\n+-----------+-----------+-------+\n| 5.1.1     | completed | 0.040 |\n| 5.1.2     | started   |  NULL |\n| 5.1.4     | completed | 0.430 |\n| 5.1.5     | completed | 0.560 |\n| 5.2.2     | completed | 0.820 |\n+-----------+-----------+-------+\n+----+-------------+---------------+------------+------+---------------------------+---------------------------+---------+-------+------+----------+---------------------+\n| id | select_type | table         | partitions | type | possible_keys             | key                       | key_len | ref   | rows | filtered | Extra               |\n+----+-------------+---------------+------------+------+---------------------------+---------------------------+---------+-------+------+----------+---------------------+\n|  1 | SIMPLE      | quiz_attempts | NULL       | ref  | idx_attempts_user_created | idx_attempts_user_created | 8       | const |   20 |   100.00 | Backward index scan |\n+----+-------------+---------------+------------+------+---------------------------+---------------------------+---------+-------+------+----------+---------------------+\n+-----------+-------+---------------------+\n| lesson_id | score | created_at          |\n+-----------+-------+---------------------+\n| 5.4.5     | 0.004 | 2026-09-05 00:01:00 |\n| 5.4.4     | 0.189 | 2026-09-01 12:41:00 |\n| 5.4.3     | 0.374 | 2026-08-29 01:21:00 |\n+-----------+-------+---------------------+\n+----+-------------+-----------------+------------+------+----------------------------+----------------------------+---------+-------------+------+----------+-------------+\n| id | select_type | table           | partitions | type | possible_keys              | key                        | key_len | ref         | rows | filtered | Extra       |\n+----+-------------+-----------------+------------+------+----------------------------+----------------------------+---------+-------------+------+----------+-------------+\n|  1 | SIMPLE      | lesson_progress | NULL       | ref  | idx_progress_lesson_status | idx_progress_lesson_status | 116     | const,const | 2499 |   100.00 | Using index |\n+----+-------------+-----------------+------------+------+----------------------------+----------------------------+---------+-------------+------+----------+-------------+\n+-----------+\n| completed |\n+-----------+\n|      2499 |\n+-----------+",
+        pitfalls: [
+          "A separate index on status alone: with two values it is not selective, and Q3 still has to visit rows",
+          "Forgetting ANALYZE TABLE after a bulk load, so the optimiser plans with stale statistics",
+        ],
       },
     },
   },

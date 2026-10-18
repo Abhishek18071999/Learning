@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { allStubs } from "../data/curriculum";
-import { lessonById, lessons } from "../data/lessons";
+import { lessonById, lessons, loadLesson } from "../data/lessons";
 import { milestones } from "../data/capstone";
-import type { HomeworkTask, Lesson } from "../types";
+import type { HomeworkTask, Lesson, LessonMeta } from "../types";
 import { QuestionCard, QuizSet } from "../components/Quiz";
 import { Badge, Code, CopyButton, Flow, Section } from "../components/ui";
 import { rich } from "../lib/rich";
@@ -30,9 +30,53 @@ const TOC = [
 ] as const;
 
 export function LessonPage({ id, section }: { id: string; section?: string | null }) {
-  const lesson = lessonById[id];
-  if (!lesson) return <StubLesson id={id} />;
-  return <FullLesson key={id} lesson={lesson} section={section} />;
+  const meta = lessonById[id];
+  if (!meta) return <StubLesson id={id} />;
+  return <LoadedLesson key={id} meta={meta} section={section} />;
+}
+
+// Full lesson bodies are separate chunks; show the title and a placeholder while one downloads.
+function LoadedLesson({ meta, section }: { meta: LessonMeta; section?: string | null }) {
+  const [lesson, setLesson] = useState<Lesson | null>(null);
+  const [error, setError] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+
+  useEffect(() => {
+    let live = true;
+    setError(false);
+    loadLesson(meta.id).then(
+      (l) => live && setLesson(l),
+      () => live && setError(true),
+    );
+    return () => {
+      live = false;
+    };
+  }, [meta.id, attempt]);
+
+  if (lesson) return <FullLesson lesson={lesson} section={section} />;
+  return (
+    <div className="page narrow" aria-busy={!error}>
+      <h1>
+        <span className="lesson-num">Lesson {meta.id}</span>
+        {meta.title}
+      </h1>
+      {error ? (
+        <div className="callout warn" role="alert">
+          This lesson could not be loaded. Check your connection and{" "}
+          <button className="btn btn-ghost" onClick={() => setAttempt((n) => n + 1)}>
+            try again
+          </button>
+        </div>
+      ) : (
+        <>
+          <p className="muted" role="status">
+            Loading lesson…
+          </p>
+          <div className="skeleton" />
+        </>
+      )}
+    </div>
+  );
 }
 
 function FullLesson({ lesson, section }: { lesson: Lesson; section?: string | null }) {
@@ -312,7 +356,7 @@ function FullLesson({ lesson, section }: { lesson: Lesson; section?: string | nu
   );
 }
 
-function Review({ lesson, prev, idx }: { lesson: Lesson; prev: Lesson | null; idx: number }) {
+function Review({ lesson, prev, idx }: { lesson: Lesson; prev: LessonMeta | null; idx: number }) {
   const state = useStore((s) => s);
   if (!prev) {
     return <p className="muted">This is your first lesson, so there is no homework to review yet. From the next lesson on, this section reviews your previous homework and brings back three questions from earlier lessons (spaced repetition).</p>;
@@ -321,7 +365,7 @@ function Review({ lesson, prev, idx }: { lesson: Lesson; prev: Lesson | null; id
   // spaced repetition: questions from roughly 1, 3 and 7 lessons ago
   const picks = [1, 3, 7]
     .map((back) => lessons[idx - back])
-    .filter((l): l is Lesson => !!l)
+    .filter((l): l is LessonMeta => !!l)
     .map((l, i) => ({ from: l, q: l.quickCheck[(new Date().getDate() + i) % l.quickCheck.length] }));
   return (
     <div>

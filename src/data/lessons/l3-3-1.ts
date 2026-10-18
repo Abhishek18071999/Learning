@@ -354,7 +354,132 @@ new IntersectionObserver((entries) => entries[0].isIntersecting && loadMore(), {
       criteria: ["All five UI states handled", "No innerHTML with data", "Search uses debounce and AbortController"],
       hints: ["Serve the folder with `npx serve` or `python3 -m http.server`; fetch does not work from file:// URLs."],
       solution: {
-        text: ["Keep this prototype: comparing it with the React version next lesson makes clear what components and state management add."],
+        text: [
+          "Model the page as five explicit states (idle, loading, success, empty, error) and route every change through one show() function that sets data-state on <main>, the live-region status text and the list. 'idle' is the markup before the script runs; search('') moves straight to loading on startup.",
+          "All data goes in with textContent on rows cloned from a <template>, so a query like <img src=x onerror=…> is shown as text in the empty message and never parsed. Each search aborts the previous request with AbortController and ignores the resulting AbortError; the input is debounced by 250 ms so typing 'flex' sends one request, not four.",
+          "One click listener on <main> handles both the Retry button in the error state and every 'Mark complete' button, including rows rendered later. Fetching a static lessons.json and filtering in the browser keeps the prototype server-free; swap the URL for /api/lessons?q= once the API exists. Serve the folder over HTTP (fetch does not work from file://).",
+          "Verified in Chromium with Playwright, with requests intercepted to slow them down or return HTTP 500: loading → success (4 lessons), typing 'flex' → 1 request and 1 lesson, an HTML-looking query → empty state with no <img> created, HTTP 500 → error with Retry, Retry → success, and a slow request superseded by a newer search never overwrote the newer result.",
+        ],
+        code: {
+          lang: "html",
+          file: "index.html + app.js + lessons.json",
+          code: `<!-- file: index.html -->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lessons · DevAtlas</title>
+</head>
+<body>
+  <main id="app" data-state="idle">
+    <h1>Lessons</h1>
+    <label for="q">Search lessons</label>
+    <input id="q" type="search" autocomplete="off">
+    <p id="status" role="status" aria-live="polite">Start typing to filter, or wait for the full list.</p>
+    <ul id="lessons"></ul>
+  </main>
+  <template id="lesson-row">
+    <li>
+      <span class="id"></span> <strong class="title"></strong> <span class="minutes"></span>
+      <button type="button" data-action="toggle" aria-pressed="false">Mark complete</button>
+    </li>
+  </template>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
+
+<!-- file: app.js -->
+const app = document.querySelector("#app");
+const input = document.querySelector("#q");
+const status = document.querySelector("#status");
+const list = document.querySelector("#lessons");
+const rowTemplate = document.querySelector("#lesson-row");
+
+const completed = new Set();          // ids the user marked complete (in memory for now)
+let controller;                       // AbortController of the in-flight request
+let timer;                            // debounce timer
+
+// One function decides what each of the five states looks like: idle, loading, success, empty, error
+function show(state, { lessons = [], query = "", message = "" } = {}) {
+  app.dataset.state = state;
+  list.replaceChildren();
+  if (state === "loading") status.textContent = "Loading lessons…";
+  if (state === "empty") status.textContent = \`No lessons match "\${query}".\`;   // textContent: never parsed as HTML
+  if (state === "error") {
+    status.textContent = \`Could not load lessons (\${message}). \`;
+    const retry = Object.assign(document.createElement("button"), { type: "button", textContent: "Retry" });
+    retry.dataset.action = "retry";
+    status.append(retry);
+  }
+  if (state === "success") {
+    status.textContent = \`\${lessons.length} lesson\${lessons.length === 1 ? "" : "s"}\`;
+    const frag = document.createDocumentFragment();
+    for (const lesson of lessons) {
+      const row = rowTemplate.content.firstElementChild.cloneNode(true);
+      row.dataset.id = lesson.id;
+      row.querySelector(".id").textContent = lesson.id;
+      row.querySelector(".title").textContent = lesson.title;
+      row.querySelector(".minutes").textContent = \`\${lesson.minutes} min\`;
+      const done = completed.has(lesson.id);
+      const button = row.querySelector("button");
+      button.setAttribute("aria-pressed", String(done));
+      button.textContent = done ? "Completed" : "Mark complete";
+      frag.append(row);
+    }
+    list.append(frag);
+  }
+}
+
+async function search(query) {
+  controller?.abort();                                  // a newer search supersedes the old one
+  controller = new AbortController();
+  show("loading");
+  try {
+    // Static JSON for now; later: fetch(\`/api/lessons?q=\${encodeURIComponent(query)}\`)
+    const res = await fetch("./lessons.json", { signal: controller.signal });
+    if (!res.ok) throw new Error(\`HTTP \${res.status}\`);
+    const all = await res.json();
+    const q = query.toLowerCase();
+    const lessons = all.filter((l) => l.title.toLowerCase().includes(q) || l.id.includes(q));
+    show(lessons.length ? "success" : "empty", { lessons, query });
+  } catch (err) {
+    if (err.name === "AbortError") return;              // ignore cancelled requests
+    show("error", { message: err.message });
+  }
+}
+
+input.addEventListener("input", () => {
+  clearTimeout(timer);
+  timer = setTimeout(() => search(input.value.trim()), 250);
+});
+
+// Delegation: one listener handles every current and future button in the page
+app.addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-action]");
+  if (!button) return;
+  if (button.dataset.action === "retry") return search(input.value.trim());
+  const id = button.closest("li").dataset.id;
+  completed.has(id) ? completed.delete(id) : completed.add(id);
+  const done = completed.has(id);
+  button.setAttribute("aria-pressed", String(done));
+  button.textContent = done ? "Completed" : "Mark complete";
+});
+
+search("");
+
+<!-- file: lessons.json -->
+[
+  { "id": "3.1.1", "title": "Semantic HTML and accessibility", "minutes": 60 },
+  { "id": "3.2.1", "title": "CSS layout: flexbox and grid", "minutes": 70 },
+  { "id": "3.3.1", "title": "DOM, events and fetch", "minutes": 70 },
+  { "id": "3.4.1", "title": "React components, props and state", "minutes": 75 }
+]`,
+        },
+        pitfalls: [
+          "Forgetting to ignore AbortError, which flashes the error state every time the user keeps typing",
+          "Updating the button label in two places (render and click handler) that can drift apart; React removes this whole class of bug next lesson",
+        ],
       },
     },
   },

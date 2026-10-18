@@ -5,10 +5,14 @@
   "type": "module",
   "description": "DevAtlas: a mentor-led learning platform for full-stack, AI and DevOps engineering.",
   "scripts": {
+    "gen:meta": "node --experimental-strip-types --no-warnings scripts/gen-lesson-meta.mjs",
+    "predev": "npm run gen:meta",
     "dev": "vite",
+    "prebuild": "npm run gen:meta",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc -b",
+    "pretest": "npm run gen:meta",
     "test": "vitest run"
   },
   "dependencies": {
@@ -16,6 +20,7 @@
     "react-dom": "^19.3.1"
   },
   "devDependencies": {
+    "@types/node": "^22.20.5",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",

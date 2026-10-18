@@ -284,7 +284,136 @@ export function LessonPage() {
       criteria: ["URL reflects page and topic", "Back button restores the previous view", "No flash of empty content between pages"],
       hints: ["import { keepPreviousData } from '@tanstack/react-query'."],
       solution: {
-        text: ["Query key ['news', topic, page]; placeholderData: keepPreviousData shows the old page with an 'updating' indicator until the new one arrives; setSearchParams drives navigation."],
+        text: [
+          "topic and page are read from useSearchParams, never copied into useState, so the URL is the single source of truth: a shared link opens the same view, and because setParams pushes a history entry, Back restores the previous topic and page. The page number is clamped so ?page=abc falls back to 1.",
+          "The query key is ['news', topic, page], so every combination is cached separately. placeholderData: keepPreviousData keeps the last page rendered while the next one loads; isPlaceholderData dims the list, sets aria-busy and disables Next so users cannot skip ahead of the data, and isFetching shows an 'Updating…' status. TanStack Query passes an AbortSignal to queryFn, which the fetch uses so abandoned pages are cancelled. The response is validated with a type guard before it is trusted.",
+          "The test replaces fetch with one that waits until the test answers, so it can assert the in-between screen: after clicking Next the URL is already ?topic=react&page=2 while page 1 is still visible with 'Updating…'. After switching topic and pressing Back, page 2 of react is shown immediately from the cache while a background refetch runs. Verified with tsc (TypeScript 7.0.2) and Vitest 5.0.5 + jsdom + Testing Library, using @tanstack/react-query 5.104 and react-router-dom 7.18 on React 19.3.1.",
+        ],
+        code: {
+          lang: "tsx",
+          file: "src/pages/NewsPage.tsx + src/pages/NewsPage.test.tsx",
+          code: `// file: src/pages/NewsPage.tsx
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { useSearchParams } from "react-router-dom";
+
+export interface Story { objectID: string; title: string; url: string | null }
+interface NewsPage { hits: Story[]; nbPages: number }
+const TOPICS = ["react", "typescript", "dotnet"] as const;
+
+function isNewsPage(d: unknown): d is NewsPage {
+  if (typeof d !== "object" || d === null) return false;
+  const o = d as Record<string, unknown>;
+  return Array.isArray(o.hits) && typeof o.nbPages === "number";
+}
+
+async function fetchNews(topic: string, page: number, signal: AbortSignal): Promise<NewsPage> {
+  const qs = new URLSearchParams({ tags: "story", query: topic, page: String(page - 1) });  // API pages start at 0
+  const res = await fetch(\`https://hn.algolia.com/api/v1/search?\${qs}\`, { signal });
+  if (!res.ok) throw new Error(\`HTTP \${res.status}\`);
+  const data: unknown = await res.json();
+  if (!isNewsPage(data)) throw new Error("Unexpected response shape");
+  return data;
+}
+
+export function NewsPage() {
+  const [params, setParams] = useSearchParams();
+  const topic = params.get("topic") ?? "react";                       // the URL is the state
+  const page = Math.max(1, Number(params.get("page")) || 1);
+
+  const { data, isPending, isError, error, isPlaceholderData, isFetching } = useQuery({
+    queryKey: ["news", topic, page],
+    queryFn: ({ signal }) => fetchNews(topic, page, signal),
+    placeholderData: keepPreviousData,                                 // keep the old page on screen
+  });
+
+  const go = (next: { topic?: string; page?: number }) =>
+    setParams({ topic: next.topic ?? topic, page: String(next.page ?? page) });   // push: Back works
+
+  return (
+    <main>
+      <h1>News</h1>
+      <label>Topic{" "}
+        <select value={topic} onChange={(e) => go({ topic: e.target.value, page: 1 })}>
+          {TOPICS.map((t) => <option key={t}>{t}</option>)}
+        </select>
+      </label>
+      {isPending && <p>Loading…</p>}
+      {isError && <p role="alert">Could not load news: {error.message}</p>}
+      {data && (
+        <>
+          <ol aria-busy={isPlaceholderData} style={{ opacity: isPlaceholderData ? 0.6 : 1 }}>
+            {data.hits.map((s) => (
+              <li key={s.objectID}><a href={s.url ?? \`https://news.ycombinator.com/item?id=\${s.objectID}\`}>{s.title}</a></li>
+            ))}
+          </ol>
+          <nav aria-label="Pagination">
+            <button type="button" disabled={page <= 1} onClick={() => go({ page: page - 1 })}>Previous</button>
+            <span> Page {page} of {data.nbPages} </span>
+            <button type="button" disabled={isPlaceholderData || page >= data.nbPages} onClick={() => go({ page: page + 1 })}>Next</button>
+            {isFetching && <span role="status"> Updating…</span>}
+          </nav>
+        </>
+      )}
+    </main>
+  );
+}
+
+// file: src/pages/NewsPage.test.tsx
+import { act, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { createMemoryRouter, RouterProvider } from "react-router-dom";
+import { NewsPage } from "./NewsPage";
+
+// Each fetch waits until the test resolves it, so we can look at the screen in between
+const pending: { url: URL; resolve: () => void }[] = [];
+vi.stubGlobal("fetch", (input: string) => new Promise<Response>((resolve) => {
+  const url = new URL(input);
+  const q = url.searchParams;
+  const body = { nbPages: 3, hits: [{ objectID: q.get("page")!, title: \`\${q.get("query")} story p\${Number(q.get("page")) + 1}\`, url: null }] };
+  pending.push({ url, resolve: () => resolve(new Response(JSON.stringify(body))) });
+}));
+async function respond() {                       // wait for the request, then answer it
+  await vi.waitFor(() => expect(pending.length).toBeGreaterThan(0));
+  await act(async () => pending.splice(0).forEach((p) => p.resolve()));
+}
+
+test("page and topic live in the URL, old page stays visible, Back restores", async () => {
+  const user = userEvent.setup();
+  const router = createMemoryRouter([{ path: "/news", element: <NewsPage /> }], { initialEntries: ["/news?topic=react&page=1"] });
+  render(<QueryClientProvider client={new QueryClient()}><RouterProvider router={router} /></QueryClientProvider>);
+
+  expect(screen.getByText("Loading…")).toBeTruthy();
+  await respond();
+  expect(await screen.findByText("react story p1")).toBeTruthy();
+
+  await user.click(screen.getByRole("button", { name: "Next" }));
+  expect(router.state.location.search).toBe("?topic=react&page=2");
+  expect(screen.getByRole("link").textContent).toBe("react story p1");     // no empty flash
+  expect(screen.getByRole("status").textContent).toBe(" Updating…");
+  await respond();
+  expect(await screen.findByText("react story p2")).toBeTruthy();
+
+  await user.selectOptions(screen.getByRole("combobox", { name: "Topic" }), "dotnet");
+  expect(router.state.location.search).toBe("?topic=dotnet&page=1");
+  await respond();
+  expect(await screen.findByText("dotnet story p1")).toBeTruthy();
+
+  await act(() => router.navigate(-1));                                     // browser Back
+  expect(router.state.location.search).toBe("?topic=react&page=2");
+  expect(screen.getByRole("link").textContent).toBe("react story p2");      // served from cache
+  expect(pending.at(-1)?.url.searchParams.get("page")).toBe("1");           // background refetch of the same page
+});`,
+        },
+        output: `$ npx vitest run --reporter=verbose
+ ✓ src/pages/NewsPage.test.tsx > page and topic live in the URL, old page stays visible, Back restores
+
+ Test Files  1 passed (1)
+      Tests  1 passed (1)`,
+        pitfalls: [
+          "Mirroring page into useState as well as the URL: the two drift and Back stops working",
+          "Using setParams(..., { replace: true }) for pagination, which leaves no history entries for Back to restore",
+        ],
       },
     },
     challenge: {
@@ -293,7 +422,137 @@ export function LessonPage() {
       criteria: ["Profiler screenshots or numbers before and after", "useDeferredValue or debounce for filtering", "Virtualised list"],
       hints: ["const deferred = useDeferredValue(query); filter with deferred."],
       solution: {
-        text: ["useDeferredValue keeps typing responsive by letting React render the expensive filtered list at lower priority; virtualisation cuts the DOM from 10,000 rows to the visible ~20. Together they typically turn sluggish typing into instant feedback."],
+        text: [
+          "SlowGlossary is the 'before': every keystroke filters 10,000 terms and React renders thousands of <li> synchronously, so the key press cannot paint until that work is done. FastGlossary applies both fixes. (1) useDeferredValue: the input renders from query immediately, while the memoised ResultList receives deferredQuery, which React updates in a lower-priority, interruptible render; the list is dimmed while it is stale. (2) Virtualisation with @tanstack/react-virtual: only the rows in the 480 px viewport plus 8 rows of overscan exist in the DOM.",
+          "Measure, do not guess. measure.mjs builds on the production bundle (vite preview), throttles the CPU 4x through the Chrome DevTools Protocol, types 'quorum' one key every 120 ms and records each keydown's input-to-next-paint duration with the Event Timing API, the same data INP is built from. The React DevTools Profiler gives the same picture interactively; this script makes it repeatable.",
+          "Results from three runs in this container (Chromium 141, React 19.3.1 production build, 4x throttling): before, the DOM held 10,000 <li> (4,000 after filtering) and keystrokes took 104-616 ms to paint, worst 456-616 ms per run. After, the DOM held 26 <li> throughout and every keystroke painted in 16-32 ms. Your absolute numbers will differ by machine; the ratio is what to report.",
+        ],
+        code: {
+          lang: "tsx",
+          file: "src/Glossary.tsx + src/main.tsx + measure.mjs",
+          code: `// file: src/Glossary.tsx
+import { memo, useDeferredValue, useRef, useState } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
+
+export interface Term { id: number; term: string; def: string }
+
+export function makeTerms(n: number): Term[] {
+  const words = ["cache", "queue", "index", "shard", "token", "lease", "quorum", "replica", "schema", "vector"];
+  return Array.from({ length: n }, (_, i) => ({
+    id: i,
+    term: \`\${words[i % 10]}-\${words[(i * 7) % 10]}-\${i}\`,
+    def: \`Definition \${i}: how \${words[(i * 3) % 10]} relates to \${words[(i * 9) % 10]}.\`,
+  }));
+}
+
+const filterTerms = (terms: Term[], q: string) => {
+  const needle = q.trim().toLowerCase();
+  return needle ? terms.filter((t) => t.term.includes(needle) || t.def.toLowerCase().includes(needle)) : terms;
+};
+
+// BEFORE: every keystroke filters and renders up to 10,000 <li> synchronously
+export function SlowGlossary({ terms }: { terms: Term[] }) {
+  const [query, setQuery] = useState("");
+  const visible = filterTerms(terms, query);
+  return (
+    <section>
+      <input aria-label="Search terms" value={query} onChange={(e) => setQuery(e.target.value)} />
+      <p>{visible.length} terms</p>
+      <ul>{visible.map((t) => <li key={t.id}><strong>{t.term}</strong> {t.def}</li>)}</ul>
+    </section>
+  );
+}
+
+// AFTER (1): the input updates urgently; the list renders from a deferred copy of the query
+export function FastGlossary({ terms }: { terms: Term[] }) {
+  const [query, setQuery] = useState("");
+  const deferredQuery = useDeferredValue(query);
+  return (
+    <section>
+      <input aria-label="Search terms" value={query} onChange={(e) => setQuery(e.target.value)} />
+      <ResultList terms={terms} query={deferredQuery} stale={query !== deferredQuery} />
+    </section>
+  );
+}
+
+// memo: while typing, ResultList re-renders only when the deferred query catches up
+const ResultList = memo(function ResultList({ terms, query, stale }: { terms: Term[]; query: string; stale: boolean }) {
+  const visible = filterTerms(terms, query);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // AFTER (2): virtualisation, only the rows in view (plus overscan) exist in the DOM
+  const virtualizer = useVirtualizer({
+    count: visible.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 28,
+    overscan: 8,
+  });
+  return (
+    <>
+      <p>{visible.length} terms</p>
+      <div ref={scrollRef} style={{ height: 480, overflow: "auto", opacity: stale ? 0.7 : 1 }}>
+        <ul role="list" style={{ height: virtualizer.getTotalSize(), position: "relative", margin: 0 }}>
+          {virtualizer.getVirtualItems().map((row) => {
+            const t = visible[row.index];
+            return (
+              <li key={t.id} style={{ position: "absolute", top: 0, height: 28, transform: \`translateY(\${row.start}px)\` }}>
+                <strong>{t.term}</strong> {t.def}
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+    </>
+  );
+});
+
+// file: src/main.tsx
+import { createRoot } from "react-dom/client";
+import { FastGlossary, SlowGlossary, makeTerms } from "./Glossary";
+
+const terms = makeTerms(10_000);
+const fast = new URLSearchParams(location.search).get("mode") === "fast";
+createRoot(document.getElementById("root")!).render(fast ? <FastGlossary terms={terms} /> : <SlowGlossary terms={terms} />);
+
+// file: measure.mjs
+// npm run build, then: CHROME_PATH=/path/to/chrome node measure.mjs   (npm i -D playwright-core)
+import { chromium } from "playwright-core";
+import { preview } from "vite";
+
+const server = await preview({ preview: { port: 4343, strictPort: true } });   // serves dist/ (production React)
+const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH });
+
+for (const mode of ["slow", "fast"]) {
+  const page = await browser.newPage();
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 });      // roughly a mid-range phone
+  await page.goto(\`http://localhost:4343/?mode=\${mode}\`);
+  await page.waitForSelector("li");
+  const rowsBefore = await page.locator("li").count();
+
+  // Event Timing API: input-to-next-paint duration of each keystroke (what INP is built from)
+  await page.evaluate(() => {
+    window.__durations = [];
+    new PerformanceObserver((list) => {
+      for (const e of list.getEntries()) if (e.name === "keydown") window.__durations.push(e.duration);
+    }).observe({ type: "event", durationThreshold: 16 });
+  });
+  await page.click("input");
+  await page.keyboard.type("quorum", { delay: 120 });
+  await page.waitForTimeout(1500);
+
+  const d = await page.evaluate(() => window.__durations);
+  const rowsAfter = await page.locator("li").count();
+  console.log(\`\${mode}: <li> in DOM \${rowsBefore} -> \${rowsAfter}; keydown-to-paint ms: \${d.map(Math.round).join(", ")} (worst \${Math.max(...d)})\`);
+  await page.close();
+}
+await browser.close();
+server.httpServer.close();`,
+        },
+        pitfalls: [
+          "Measuring in the dev build: development React is several times slower and exaggerates the problem",
+          "Using useDeferredValue without memo on the expensive child, so the list still re-renders on every urgent keystroke",
+          "Virtualised rows need a known or measured height; variable-height rows need the virtualizer's measureElement",
+        ],
       },
     },
     capstone: {
@@ -302,7 +561,241 @@ export function LessonPage() {
       criteria: ["All data via useQuery/useMutation", "Settings page code-split", "CI reports bundle size"],
       hints: ["`vite build` prints chunk sizes; a small script can fail if the main chunk exceeds a limit."],
       solution: {
-        text: ["With routes, queries and code splitting in place, the frontend architecture matches what most production React apps use; the remaining lessons focus on security and the backend it talks to."],
+        text: [
+          "src/api/client.ts is the only place that knows URLs: each call validates the JSON with a type guard before returning a typed value, and the query keys live next to it so invalidation cannot miss a typo'd key. Pages never call fetch directly; reads go through useQuery and the completion toggle through useMutation. LessonPage is the basic-tier component switched to api.lesson and keys.lesson, and NewsPage is the intermediate-tier page.",
+          "useSetCompleted is the optimistic update: onMutate cancels in-flight lesson queries (so a late refetch cannot overwrite the change), snapshots the cache, and writes the new value; onError restores the snapshot and the page shows a short alert; onSettled invalidates so the list re-syncs with the server either way. SettingsPage is a default export loaded with React.lazy behind Suspense, and the build emits it as its own chunk.",
+          "check-bundle.mjs runs after vite build in CI: it finds the entry chunk from dist/index.html, prints the gzip size of every JS chunk and exits 1 when the entry is over BUNDLE_BUDGET_KB. On this app the build produced a separate 0.2 kB SettingsPage chunk and a 93.1 kB entry (React, React Router and TanStack Query); with BUNDLE_BUDGET_KB=50 the script failed with 'Bundle budget exceeded'.",
+          "Verified with tsc (TypeScript 7.0.2; import.meta.env needs /// <reference types=\"vite/client\" /> in src/vite-env.d.ts, as Vite's template provides), Vitest 5.0.5 + jsdom + Testing Library, vite build 8.3.4 and the bundle script, with @tanstack/react-query 5.104 and react-router-dom 7.18 on React 19.3.1. The tests hold the PUT open until they release it, which proves the button flips before the server answers and flips back when the server returns 500. The workflow steps were not run on GitHub here.",
+        ],
+        code: {
+          lang: "tsx",
+          file: "web/src (api, pages, App, test) + scripts/check-bundle.mjs",
+          code: `// file: web/src/api/client.ts
+// Typed API module: every response is validated before the app trusts it
+export interface LessonSummary { id: string; title: string; completed: boolean }
+export interface LessonDetail extends LessonSummary { minutes: number; body: string }
+
+const BASE = import.meta.env.VITE_API_URL ?? "/api";
+
+function isLessonSummary(d: unknown): d is LessonSummary {
+  if (typeof d !== "object" || d === null) return false;
+  const o = d as Record<string, unknown>;
+  return typeof o.id === "string" && typeof o.title === "string" && typeof o.completed === "boolean";
+}
+function isLessonDetail(d: unknown): d is LessonDetail {
+  return isLessonSummary(d) && typeof (d as unknown as Record<string, unknown>).minutes === "number";
+}
+
+async function request<T>(path: string, guard: (d: unknown) => d is T, init?: RequestInit): Promise<T> {
+  const res = await fetch(\`\${BASE}\${path}\`, init);
+  if (!res.ok) throw new Error(\`HTTP \${res.status} for \${path}\`);
+  const data: unknown = await res.json();
+  if (!guard(data)) throw new Error(\`Unexpected response shape for \${path}\`);
+  return data;
+}
+
+const isLessonList = (d: unknown): d is LessonSummary[] => Array.isArray(d) && d.every(isLessonSummary);
+
+export const api = {
+  lessons: (signal?: AbortSignal) => request("/lessons", isLessonList, { signal }),
+  lesson: (id: string, signal?: AbortSignal) => request(\`/lessons/\${encodeURIComponent(id)}\`, isLessonDetail, { signal }),
+  setCompleted: (id: string, completed: boolean) =>
+    request(\`/lessons/\${encodeURIComponent(id)}/completion\`, isLessonSummary, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ completed }),
+    }),
+};
+
+// Query keys in one place, so invalidation cannot miss a typo'd key
+export const keys = {
+  lessons: ["lessons"] as const,
+  lesson: (id: string) => ["lessons", id] as const,
+};
+
+// file: web/src/pages/LessonsPage.tsx
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
+import { api, keys, type LessonSummary } from "../api/client";
+
+export function useSetCompleted() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, completed }: { id: string; completed: boolean }) => api.setCompleted(id, completed),
+    onMutate: async ({ id, completed }) => {
+      await qc.cancelQueries({ queryKey: keys.lessons });            // a late refetch must not overwrite us
+      const previous = qc.getQueryData<LessonSummary[]>(keys.lessons);
+      qc.setQueryData<LessonSummary[]>(keys.lessons, (old) => old?.map((l) => (l.id === id ? { ...l, completed } : l)));
+      return { previous };
+    },
+    onError: (_err, _vars, ctx) => qc.setQueryData(keys.lessons, ctx?.previous),   // roll back
+    onSettled: () => qc.invalidateQueries({ queryKey: keys.lessons }),           // re-sync with the server
+  });
+}
+
+export function LessonsPage() {
+  const { data, isPending, isError, error } = useQuery({ queryKey: keys.lessons, queryFn: ({ signal }) => api.lessons(signal) });
+  const setCompleted = useSetCompleted();
+
+  if (isPending) return <p>Loading lessons…</p>;
+  if (isError) return <p role="alert">Could not load lessons: {error.message}</p>;
+  return (
+    <main>
+      <h1>Lessons</h1>
+      {setCompleted.isError && <p role="alert">Could not save. Your change was undone.</p>}
+      <ul>
+        {data.map((l) => (
+          <li key={l.id}>
+            <Link to={\`/lessons/\${l.id}\`}>{l.title}</Link>{" "}
+            <button type="button" aria-pressed={l.completed}
+                    onClick={() => setCompleted.mutate({ id: l.id, completed: !l.completed })}>
+              {l.completed ? "Completed" : "Mark complete"}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </main>
+  );
+}
+
+// file: web/src/pages/SettingsPage.tsx
+export default function SettingsPage() {          // default export: required by React.lazy
+  return <main><h1>Settings</h1><p>Theme, notifications and account options live here.</p></main>;
+}
+
+// file: web/src/App.tsx
+import { Suspense, lazy } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { Link, Route, Routes } from "react-router-dom";
+import { LessonsPage } from "./pages/LessonsPage";
+import { LessonPage } from "./pages/LessonPage";
+import { NewsPage } from "./pages/NewsPage";
+
+const SettingsPage = lazy(() => import("./pages/SettingsPage"));     // its own chunk
+
+export const makeQueryClient = () => new QueryClient({ defaultOptions: { queries: { staleTime: 60_000, retry: 2 } } });
+
+export function App({ client }: { client: QueryClient }) {
+  return (
+    <QueryClientProvider client={client}>
+      <nav aria-label="Main"><Link to="/">Lessons</Link> <Link to="/news">News</Link> <Link to="/settings">Settings</Link></nav>
+      <Suspense fallback={<p>Loading page…</p>}>
+        <Routes>
+          <Route path="/" element={<LessonsPage />} />
+          <Route path="/lessons/:id" element={<LessonPage />} />
+          <Route path="/news" element={<NewsPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
+          <Route path="*" element={<p>Page not found</p>} />
+        </Routes>
+      </Suspense>
+    </QueryClientProvider>
+  );
+}
+
+// file: web/src/main.tsx
+import { StrictMode } from "react";
+import { createRoot } from "react-dom/client";
+import { BrowserRouter } from "react-router-dom";
+import { App, makeQueryClient } from "./App";
+
+createRoot(document.getElementById("root")!).render(
+  <StrictMode><BrowserRouter><App client={makeQueryClient()} /></BrowserRouter></StrictMode>,
+);
+
+// file: web/src/App.test.tsx
+import { act, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
+import { QueryClient } from "@tanstack/react-query";
+import { App } from "./App";
+
+let lessons = [{ id: "3.4.3", title: "Data fetching and routing", completed: false }];
+let failNextPut = false;
+let releasePut: () => void = () => {};
+
+vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+  if (init?.method === "PUT") {
+    await new Promise<void>((r) => { releasePut = r; });              // the test decides when the server answers
+    if (failNextPut) return new Response("nope", { status: 500 });
+    const { completed } = JSON.parse(String(init.body)) as { completed: boolean };
+    lessons = lessons.map((l) => ({ ...l, completed }));
+    return Response.json(lessons[0]);
+  }
+  return Response.json(url === "/api/lessons" ? lessons : { ...lessons[0], minutes: 80, body: "…" });
+});
+
+function renderAt(path: string) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(<MemoryRouter initialEntries={[path]}><App client={client} /></MemoryRouter>);
+}
+
+test("mark complete is instant, then confirmed by the server", async () => {
+  renderAt("/");
+  await userEvent.click(await screen.findByRole("button", { name: "Mark complete" }));
+  expect(await screen.findByRole("button", { name: "Completed" })).toBeTruthy();   // before the server answered
+  await act(async () => releasePut());
+  expect(await screen.findByRole("button", { name: "Completed" })).toBeTruthy();
+  expect(lessons[0].completed).toBe(true);
+});
+
+test("a failed save rolls back and explains", async () => {
+  failNextPut = true;
+  lessons = [{ ...lessons[0], completed: false }];
+  renderAt("/");
+  await userEvent.click(await screen.findByRole("button", { name: "Mark complete" }));
+  expect(await screen.findByRole("button", { name: "Completed" })).toBeTruthy();
+  await act(async () => releasePut());
+  expect(await screen.findByRole("alert")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Mark complete" })).toBeTruthy();  // rolled back
+});
+
+test("settings is lazy-loaded behind Suspense", async () => {
+  renderAt("/settings");
+  expect(screen.getByText("Loading page…")).toBeTruthy();
+  expect(await screen.findByRole("heading", { name: "Settings" })).toBeTruthy();
+});
+
+// file: web/scripts/check-bundle.mjs
+// Run after \`vite build\`: prints gzip size of every JS chunk and fails if the entry chunk is over budget.
+import { readFileSync, readdirSync } from "node:fs";
+import { gzipSync } from "node:zlib";
+
+const BUDGET_KB = Number(process.env.BUNDLE_BUDGET_KB ?? 100);          // gzip budget for the entry chunk
+const html = readFileSync("dist/index.html", "utf8");
+const entry = html.match(/<script[^>]+src="[^"]*\\/assets\\/([^"]+\\.js)"/)?.[1];
+if (!entry) throw new Error("entry chunk not found in dist/index.html");
+
+let entryKb = 0;
+for (const file of readdirSync("dist/assets").filter((f) => f.endsWith(".js")).sort()) {
+  const kb = gzipSync(readFileSync(\`dist/assets/\${file}\`)).length / 1000;
+  if (file === entry) entryKb = kb;
+  console.log(\`\${file === entry ? "entry" : "chunk"}  \${kb.toFixed(1).padStart(7)} kB gzip  \${file}\`);
+}
+console.log(\`entry \${entryKb.toFixed(1)} kB / budget \${BUDGET_KB} kB\`);
+if (entryKb > BUDGET_KB) {
+  console.error(\`Bundle budget exceeded by \${(entryKb - BUDGET_KB).toFixed(1)} kB\`);
+  process.exit(1);
+}
+
+# file: CI steps
+      # .github/workflows/web.yml (steps, after npm ci)
+      - run: npm test
+      - run: npm run build
+      - run: node scripts/check-bundle.mjs
+        env: { BUNDLE_BUDGET_KB: "100" }`,
+        },
+        output: `$ npx vitest run --reporter=verbose
+ ✓ src/App.test.tsx > mark complete is instant, then confirmed by the server
+ ✓ src/App.test.tsx > a failed save rolls back and explains
+ ✓ src/App.test.tsx > settings is lazy-loaded behind Suspense
+
+ Test Files  1 passed (1)
+      Tests  3 passed (3)`,
+        pitfalls: [
+          "Skipping cancelQueries in onMutate: a refetch that started before the click can land afterwards and undo the optimistic value",
+          "Invalidating only on success: after a rollback the cache may still be out of date with the server",
+          "Importing SettingsPage statically anywhere else, which silently pulls it back into the entry chunk",
+        ],
       },
     },
   },

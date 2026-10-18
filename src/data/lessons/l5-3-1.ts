@@ -252,23 +252,28 @@ print(f"hit rate: {hits / (hits + misses):.0%}")`,
       criteria: ["Both versions", "Atomicity addressed (pipeline/MULTI or Lua)", "Tests with fixed timestamps"],
       hints: ["SET key 0 EX 60 NX, then INCR; or a Lua script."],
       solution: {
-        text: ["If the process dies after INCR but before EXPIRE, the key never expires and the client is blocked forever. Use SET … NX EX to create the key with a TTL atomically, or a MULTI/EXEC transaction or Lua script."],
+        text: ["If the process dies after INCR but before EXPIRE, the key never expires and the client is blocked forever. Use SET … NX EX to create the key with a TTL atomically, or a MULTI/EXEC transaction or Lua script.", "The sliding window has a second race: counting and adding in separate round trips lets 50 parallel requests through as 6 when the limit is 5. Running the whole check-and-add as a Lua script makes it one atomic server-side step (verified: exactly 5 of 50 concurrent requests allowed)."],
         code: {
           lang: "python",
-          code: `def allow_fixed(key: str, limit: int, window: int) -> bool:
+          code: `import uuid
+
+def allow_fixed(key: str, limit: int, window: int) -> bool:
     r.set(key, 0, ex=window, nx=True)          # create with TTL only if missing (atomic)
     return r.incr(key) <= limit
 
+# Check-then-add must be atomic too: two instances could both see limit-1 and both add.
+# A Lua script runs as one command on the Redis server, so nothing can interleave.
+SLIDING = r.register_script("""
+redis.call('ZREMRANGEBYSCORE', KEYS[1], 0, ARGV[1] - ARGV[2])   -- drop old timestamps
+if redis.call('ZCARD', KEYS[1]) >= tonumber(ARGV[3]) then return 0 end
+redis.call('ZADD', KEYS[1], ARGV[1], ARGV[4])
+redis.call('EXPIRE', KEYS[1], math.ceil(ARGV[2]) + 1)
+return 1
+""")
+
 def allow_sliding(key: str, limit: int, window: float, now: float) -> bool:
-    pipe = r.pipeline(transaction=True)
-    pipe.zremrangebyscore(key, 0, now - window)  # drop old timestamps
-    pipe.zcard(key)
-    _, count = pipe.execute()
-    if count >= limit:
-        return False
-    r.zadd(key, {str(now): now})
-    r.expire(key, int(window) + 1)
-    return True`,
+    member = f"{now}:{uuid.uuid4().hex}"         # unique even when two requests share a timestamp
+    return SLIDING(keys=[key], args=[now, window, limit, member]) == 1`,
         },
       },
     },
@@ -278,7 +283,89 @@ def allow_sliding(key: str, limit: int, window: float, now: float) -> bool:
       criteria: ["Ground truth from exact search", "Recall computed per setting", "Table of latency vs recall"],
       hints: ["SET hnsw.ef_search = 40; before queries. Use numpy to generate vectors and COPY or executemany to insert."],
       solution: {
-        text: ["Expect exact search to be slower but perfect, and HNSW to be much faster with recall approaching 1.0 as ef_search increases. Real embeddings cluster more than random vectors, so measure on your own data before tuning."],
+        text: [
+          "Load the vectors with binary COPY (pgvector's Python package registers the type), run every query once without an index to get the exact top 10 (the ground truth, recall 1.0 by definition), then build HNSW and repeat for several hnsw.ef_search values. recall@10 = how many of the true 10 neighbours the index returned, averaged over all queries.",
+          "The surprise is the data. Independent random 384-d vectors are the worst case for every ANN index: all distances are almost equal, so there is no neighbourhood structure for the graph to exploit. In one run on PostgreSQL 16 + pgvector 0.8: exact search took a median of 45 ms; HNSW took 2 to 24 ms but recall@10 was only 0.02 to 0.36 between ef_search = 10 and 400.",
+          "Real embeddings are not random: they lie near a much lower-dimensional surface. The second dataset imitates that (384 dims, generated from 16 latent dimensions plus noise). There HNSW behaves as expected: recall 0.84 at ef_search = 10, 0.99 at 40 and 1.000 from 100, at 2 to 5 ms against 44 ms exact. So tune ef_search on a sample of your own embeddings and queries, never on synthetic data alone.",
+          "Your numbers will differ (CPU, caching, and HNSW builds are randomised), but the shape holds: latency grows roughly linearly with ef_search, recall rises and flattens, and exact search costs the same whatever the data.",
+        ],
+        code: {
+          lang: "python",
+          file: "hnsw_benchmark.py",
+          code: `"""Exact vs HNSW search in pgvector: latency and recall@10 on 100,000 384-d vectors."""
+import os
+import statistics
+import time
+
+import numpy as np
+import psycopg
+from pgvector.psycopg import register_vector   # pip install pgvector "psycopg[binary]" numpy
+
+DSN = os.environ.get("DATABASE_URL", "postgresql://postgres@localhost:5432/postgres")  # password via PGPASSWORD
+N, DIM, QUERIES, K = 100_000, 384, 50, 10
+SQL = "SELECT id FROM items ORDER BY embedding <=> %s LIMIT %s"
+
+def timed_search(conn: psycopg.Connection, queries: np.ndarray) -> tuple[list[set[int]], float]:
+    results, times = [], []
+    for q in queries:
+        start = time.perf_counter()
+        rows = conn.execute(SQL, (q, K)).fetchall()
+        times.append((time.perf_counter() - start) * 1000)
+        results.append({r[0] for r in rows})
+    return results, statistics.median(times)
+
+def benchmark(conn: psycopg.Connection, name: str, data: np.ndarray, queries: np.ndarray) -> None:
+    conn.execute("DROP TABLE IF EXISTS items")
+    conn.execute(f"CREATE TABLE items (id int PRIMARY KEY, embedding vector({DIM}) NOT NULL)")
+    with conn.cursor().copy("COPY items (id, embedding) FROM STDIN WITH (FORMAT BINARY)") as copy:
+        copy.set_types(["int4", "vector"])
+        for i, vec in enumerate(data):
+            copy.write_row((i, vec))
+    conn.execute("ANALYZE items")
+
+    print(f"\\n== {name}: {N:,} x {DIM}d, {QUERIES} queries, top {K}")
+    truth, exact_ms = timed_search(conn, queries)          # no index yet: exact, recall 1.0 by definition
+    print(f"{'setting':<18}{'median ms':>10}{'recall@10':>11}")
+    print(f"{'exact (seq scan)':<18}{exact_ms:>10.1f}{1.0:>11.3f}")
+
+    conn.execute("SET maintenance_work_mem = '1GB'")       # build the graph in memory
+    # Parallel builds keep the graph in shared memory, and Docker's default /dev/shm is only 64 MB:
+    # build serially here, or start the container with --shm-size=1g and drop this line.
+    conn.execute("SET max_parallel_maintenance_workers = 0")
+    start = time.perf_counter()
+    conn.execute("CREATE INDEX ON items USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64)")
+    print(f"(HNSW build took {time.perf_counter() - start:.0f}s)")
+
+    for ef in (10, 40, 100, 200, 400):
+        conn.execute(f"SET hnsw.ef_search = {ef}")        # keep ef >= K, or fewer than K rows come back
+        found, ms = timed_search(conn, queries)
+        recall = sum(len(f & t) for f, t in zip(found, truth)) / (K * QUERIES)
+        print(f"{'hnsw ef=' + str(ef):<18}{ms:>10.1f}{recall:>11.3f}")
+
+def main() -> None:
+    rng = np.random.default_rng(42)
+    with psycopg.connect(DSN, autocommit=True) as conn:
+        conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        register_vector(conn)
+        # 1) what the brief asks for: independent random vectors (the worst case for any ANN index)
+        benchmark(conn, "random", rng.standard_normal((N, DIM), dtype=np.float32),
+                  rng.standard_normal((QUERIES, DIM), dtype=np.float32))
+        # 2) closer to real embeddings: 384 dims, but the points lie near a 16-dimensional subspace
+        basis = rng.standard_normal((16, DIM)).astype(np.float32)
+        def structured(n: int) -> np.ndarray:
+            return (rng.standard_normal((n, 16), dtype=np.float32) @ basis
+                    + 0.1 * rng.standard_normal((n, DIM), dtype=np.float32))
+        benchmark(conn, "structured", structured(N), structured(QUERIES))
+        conn.execute("DROP TABLE items")
+
+if __name__ == "__main__":
+    main()`,
+        },
+        pitfalls: [
+          "Setting hnsw.ef_search below LIMIT: the index can return fewer rows than asked for",
+          "Building HNSW in a Docker container with default 64 MB /dev/shm and parallel workers: the build fails with 'could not resize shared memory segment'. Use --shm-size or a serial build",
+          "Measuring the first query only: the first run pays for loading the index into memory",
+        ],
       },
     },
     capstone: {
@@ -287,7 +374,150 @@ def allow_sliding(key: str, limit: int, window: float, now: float) -> bool:
       criteria: ["Cache hit-rate metric exposed", "Leaderboard endpoint", "chunks table with HNSW index and filter columns"],
       hints: ["In .NET, IDistributedCache with the StackExchange Redis provider covers simple cache-aside; use StackExchange.Redis directly for sorted sets."],
       solution: {
-        text: ["Redis now protects MySQL from repeated reads and powers the leaderboard, and PostgreSQL holds vectors for Phase 7's 'Ask the course' tutor."],
+        text: [
+          "Redis now protects MySQL from repeated reads and powers the leaderboard, and PostgreSQL holds vectors for Phase 7's 'Ask the course' tutor.",
+          "One small CachedAsync helper implements cache-aside for both lessons (5-minute TTL) and per-user dashboards (60 s). Writes go to the source of truth first and then delete the key. Hits and misses are counted with INCR in Redis rather than in process memory, so /metrics/cache reports the same rate whichever instance you ask.",
+          "Completing a lesson invalidates that user's dashboard and adds points with ZINCRBY to a key per ISO week (`leaderboard:week:2026-42`) that expires after 8 days; /leaderboard reads the top N with one ZREVRANGE (`SortedSetRangeByRankWithScoresAsync(..., Order.Descending)`).",
+          "The chunks table stores model and lesson_id next to each embedding, with an HNSW index for similarity and a B-tree on (model, lesson_id) for the filters, so a search can never mix vectors from two embedding models. The schema runs at startup only to keep the sample self-contained; in the real app it is a migration.",
+          "Checked on .NET 9 against Redis 7.0 and PostgreSQL 16 + pgvector 0.8 with curl: the second GET of a lesson is a hit, the title change is visible straight after the PUT, the dashboard key has a 60 s TTL, the leaderboard ranks users by points, and /chunks/search with lessonId set returns only that lesson's chunks.",
+        ],
+        code: {
+          lang: "csharp",
+          file: "DevAtlas.Api/Program.cs",
+          code: `// DevAtlas.Api/Program.cs: Redis cache-aside + weekly leaderboard, and the pgvector chunks table for the RAG tutor
+// dotnet add package StackExchange.Redis; dotnet add package Npgsql
+using System.Globalization;
+using System.Text.Json;
+using Npgsql;
+using StackExchange.Redis;
+
+var builder = WebApplication.CreateBuilder(args);
+string Cs(string name) => builder.Configuration.GetConnectionString(name)
+    ?? throw new InvalidOperationException($"ConnectionStrings:{name} is not configured");   // env vars, not code
+builder.Services.AddSingleton<IConnectionMultiplexer>(ConnectionMultiplexer.Connect(Cs("Redis")));
+builder.Services.AddSingleton(NpgsqlDataSource.Create(Cs("Vectors")));
+builder.Services.AddSingleton<LessonStore>();       // stands in for the EF Core/MySQL repository
+var app = builder.Build();
+
+await using (var cmd = app.Services.GetRequiredService<NpgsqlDataSource>().CreateCommand(VectorSchema.Sql))
+    await cmd.ExecuteNonQueryAsync();               // real app: a migration
+
+// ---- cache-aside helper: shared hit/miss counters in Redis so every instance reports the same rate ----
+static async Task<T> CachedAsync<T>(IDatabase redis, string key, TimeSpan ttl, Func<Task<T>> load)
+{
+    if (await redis.StringGetAsync(key) is { HasValue: true } hit)
+    {
+        await redis.StringIncrementAsync("metrics:cache:hits");
+        return JsonSerializer.Deserialize<T>(hit.ToString())!;
+    }
+    await redis.StringIncrementAsync("metrics:cache:misses");
+    var value = await load();
+    await redis.StringSetAsync(key, JsonSerializer.Serialize(value), ttl);   // TTL is the safety net
+    return value;
+}
+static string WeekKey() =>
+    $"leaderboard:week:{ISOWeek.GetYear(DateTime.UtcNow)}-{ISOWeek.GetWeekOfYear(DateTime.UtcNow):D2}";
+
+app.MapGet("/lessons/{id}", async (string id, IConnectionMultiplexer mux, LessonStore db) =>
+    await CachedAsync(mux.GetDatabase(), $"lesson:{id}:v1", TimeSpan.FromMinutes(5), () => db.GetLessonAsync(id)));
+
+app.MapPut("/lessons/{id}/title", async (string id, TitleChange body, IConnectionMultiplexer mux, LessonStore db) =>
+{
+    await db.RenameAsync(id, body.Title);                       // 1) source of truth first
+    await mux.GetDatabase().KeyDeleteAsync($"lesson:{id}:v1");  // 2) then invalidate
+    return Results.NoContent();
+});
+
+app.MapGet("/users/{userId:int}/dashboard", async (int userId, IConnectionMultiplexer mux, LessonStore db) =>
+    await CachedAsync(mux.GetDatabase(), $"user:{userId}:dashboard:v1", TimeSpan.FromSeconds(60),
+        () => db.GetDashboardAsync(userId)));
+
+app.MapPost("/users/{userId:int}/lessons/{lessonId}/complete", async (int userId, string lessonId,
+    IConnectionMultiplexer mux, LessonStore db) =>
+{
+    var points = await db.CompleteAsync(userId, lessonId);
+    var redis = mux.GetDatabase();
+    await redis.KeyDeleteAsync($"user:{userId}:dashboard:v1");
+    if (points > 0)                                             // first completion only
+    {
+        await redis.SortedSetIncrementAsync(WeekKey(), $"user:{userId}", points);
+        await redis.KeyExpireAsync(WeekKey(), TimeSpan.FromDays(8));
+    }
+    return Results.NoContent();
+});
+
+app.MapGet("/leaderboard", async (IConnectionMultiplexer mux, int top = 10) =>
+    (await mux.GetDatabase().SortedSetRangeByRankWithScoresAsync(WeekKey(), 0, Math.Clamp(top, 1, 100) - 1, Order.Descending))
+        .Select((e, i) => new { rank = i + 1, user = e.Element.ToString(), points = e.Score }));
+
+app.MapGet("/metrics/cache", async (IConnectionMultiplexer mux) =>
+{
+    var v = await mux.GetDatabase().StringGetAsync(["metrics:cache:hits", "metrics:cache:misses"]);
+    long hits = (long?)v[0] ?? 0, misses = (long?)v[1] ?? 0;
+    return new { hits, misses, hitRate = hits + misses == 0 ? 0 : Math.Round((double)hits / (hits + misses), 3) };
+});
+
+// Vector search for the tutor: SQL filters (model, lesson) and similarity ordering in one query
+app.MapPost("/chunks/search", async (ChunkQuery q, NpgsqlDataSource pg) =>
+{
+    await using var cmd = pg.CreateCommand("""
+        SELECT lesson_id, content, round((1 - (embedding <=> $1::vector))::numeric, 3)
+        FROM chunks WHERE model = $2 AND ($3::text IS NULL OR lesson_id = $3)
+        ORDER BY embedding <=> $1::vector LIMIT 5
+        """);
+    cmd.Parameters.Add(new() { Value = "[" + string.Join(",", q.Embedding.Select(f => f.ToString(CultureInfo.InvariantCulture))) + "]" });
+    cmd.Parameters.Add(new() { Value = q.Model });
+    cmd.Parameters.Add(new() { Value = (object?)q.LessonId ?? DBNull.Value, NpgsqlDbType = NpgsqlTypes.NpgsqlDbType.Text });
+    var hits = new List<object>();
+    await using var reader = await cmd.ExecuteReaderAsync();
+    while (await reader.ReadAsync())
+        hits.Add(new { lessonId = reader.GetString(0), content = reader.GetString(1), similarity = reader.GetDecimal(2) });
+    return hits;
+});
+
+app.Run();
+
+public record TitleChange(string Title);
+public record Lesson(string Id, string Title, int Minutes);
+public record Dashboard(int UserId, int Completed, int Points);
+public record ChunkQuery(float[] Embedding, string Model, string? LessonId);
+
+static class VectorSchema
+{
+    public const string Sql = """
+        CREATE EXTENSION IF NOT EXISTS vector;
+        CREATE TABLE IF NOT EXISTS chunks (
+          id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+          lesson_id  text NOT NULL,                 -- filter: "only search this lesson"
+          model      text NOT NULL,                 -- embedding model + version; never mix models in one search
+          lang       text NOT NULL DEFAULT 'en',
+          content    text NOT NULL,
+          embedding  vector(1024) NOT NULL,
+          created_at timestamptz NOT NULL DEFAULT now()
+        );
+        CREATE INDEX IF NOT EXISTS chunks_embedding_hnsw ON chunks USING hnsw (embedding vector_cosine_ops);
+        CREATE INDEX IF NOT EXISTS chunks_model_lesson ON chunks (model, lesson_id);
+        """;
+}
+
+public sealed class LessonStore   // in-memory stand-in so the sample runs; the real one queries MySQL
+{
+    private readonly Dictionary<string, Lesson> _lessons = new() { ["5.3.1"] = new("5.3.1", "Redis caching patterns and pgvector", 75) };
+    private readonly HashSet<(int, string)> _completed = [];
+    public Task<Lesson> GetLessonAsync(string id) => Task.FromResult(_lessons[id]);
+    public Task RenameAsync(string id, string title) { _lessons[id] = _lessons[id] with { Title = title }; return Task.CompletedTask; }
+    public Task<Dashboard> GetDashboardAsync(int userId)
+    {
+        var done = _completed.Count(c => c.Item1 == userId);
+        return Task.FromResult(new Dashboard(userId, done, done * 10));
+    }
+    public Task<int> CompleteAsync(int userId, string lessonId) => Task.FromResult(_completed.Add((userId, lessonId)) ? 10 : 0);
+}`,
+        },
+        pitfalls: [
+          "Creating a new ConnectionMultiplexer per request: it is designed to be shared, so register it once as a singleton",
+          "Counting cache hits in a static field: every instance reports a different hit rate",
+        ],
       },
     },
   },

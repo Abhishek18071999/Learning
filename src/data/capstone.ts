@@ -27,8 +27,8 @@ export const milestones: Milestone[] = lessons.map((l) => ({
   id: `c-${l.id}`,
   lessonId: l.id,
   part: phases.find((p) => l.id.startsWith(`${p.id}.`))?.title ?? "",
-  title: l.homework.capstone.title.replace(/^DevAtlas( step \d+)?:\s*/i, ""),
-  criteria: l.homework.capstone.criteria,
+  title: l.capstone.title.replace(/^DevAtlas( step \d+)?:\s*/i, ""),
+  criteria: l.capstone.criteria,
 }));
 
 /** Mermaid source for the target architecture, kept here so learners can paste it into their repo. */

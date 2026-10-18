@@ -270,8 +270,39 @@ export const lesson: Lesson = {
       hints: ["Common finds: invisible focus, unlabeled icon buttons, focus trapped in modals, missing headings."],
       solution: {
         text: [
-          "Typical findings: (1) 2.4.7 Focus Visible: no focus ring on header links; fix with :focus-visible styles. (2) 4.1.2 Name, Role, Value: icon button announced as 'button'; add aria-label. (3) 2.1.2 No Keyboard Trap: cannot leave a chat widget; return focus and support Escape. (4) 1.4.3 Contrast (Minimum): grey placeholder-like text below 4.5:1; darken it. (5) 1.3.1 Info and Relationships: headings faked with bold paragraphs; use real heading elements.",
+          "A useful audit finding has four parts: what you did and what happened, the WCAG success criterion it fails (number, name and level), how bad it is for users, and a fix specific enough to implement. Below is a complete example. Its target is the DevAtlas prototype page from this lesson's problem statement, rebuilt with the usual mistakes (a div 'Next lesson', outline: none, an icon-only button, a chat box that traps Tab, grey meta text and a fake heading), so every finding could be reproduced. Use the same format for the site you audit.",
+          "Each finding was checked in Chromium 141: the Tab order never reached the div and showed outline-style none on the links and button, a Tab handler kept focus in the chat input on every further Tab, and the accessibility tree showed an unnamed button and 'Next lesson' as plain text. axe-core 4.14 reported button-name, color-contrast, landmark-one-main and page-has-heading-one, but nothing for findings 1, 2 and 4, which is why the manual keyboard pass matters. The 2.6:1 contrast figure is computed for #a0a0a0 on #ffffff.",
+          "This example used the accessibility tree instead of a real screen reader; on your own machine, confirm with VoiceOver or NVDA.",
         ],
+        code: {
+          lang: "markdown",
+          file: "a11y-audit.md",
+          code: `# Keyboard and screen-reader audit: DevAtlas lesson page (prototype)
+
+- **Date / time spent:** 2026-10-18, 15 minutes
+- **Setup:** Chromium 141, keyboard only (Tab, Shift+Tab, Enter, Space, Escape); what a screen reader gets, read from
+  the accessibility tree (DevTools Accessibility pane); axe-core 4.14 for a second opinion.
+  Still to do: confirm with VoiceOver or NVDA using the headings and landmarks lists.
+- **Target:** WCAG 2.2 level AA
+
+## Findings
+
+| # | Finding | WCAG success criterion | Severity | Suggested fix |
+|---|---------|------------------------|----------|---------------|
+| 1 | "Next lesson" is a \`<div onclick>\`. Tab skips it, Enter does nothing, the accessibility tree exposes it as plain text, so keyboard and screen-reader users cannot continue the course. | 2.1.1 Keyboard (A); 4.1.2 Name, Role, Value (A) | Blocker | It navigates, so use \`<a class="btn" href="/lessons/3.2.1">Next lesson</a>\`. |
+| 2 | Focus is invisible on the header links and the search button (\`a:focus, button:focus { outline: none }\`). After two Tabs you cannot tell where you are. | 2.4.7 Focus Visible (AA) | High | Delete the rule; add \`:focus-visible { outline: 3px solid #4b3bd1; outline-offset: 2px; }\`. |
+| 3 | The search button contains only an SVG and is announced as "button" with no name. | 4.1.2 Name, Role, Value (A); 1.1.1 Non-text Content (A) | High | \`<button type="button" aria-label="Search lessons">\` and \`aria-hidden="true" focusable="false"\` on the SVG. |
+| 4 | Once focus enters the help chat, Tab is captured and always returns to the message box; Escape does nothing. The rest of the page becomes unreachable. | 2.1.2 No Keyboard Trap (A) | Blocker | Remove the Tab handler. If it must be modal, use \`<dialog>\` with \`showModal()\` (Escape closes it) and return focus to the opener. Use a visible \`<label>\` instead of the placeholder (3.3.2). |
+| 5 | "Updated 2 days ago · 60 minutes" is \`#a0a0a0\` on white: contrast 2.6:1. The page title is a bold \`<div>\`, so the headings list is empty and there is no \`<main>\` landmark. | 1.4.3 Contrast (Minimum) (AA); 1.3.1 Info and Relationships (A) | Medium | Use \`#4a4d5e\` or darker (at least 4.5:1). Make the title an \`<h1>\` and wrap the content in \`<main>\`; size headings with CSS. |
+
+## What worked
+- The header links are real \`<a href>\` elements with clear names, in a logical DOM order.
+- The page sets \`lang="en"\` and a descriptive \`<title>\`.
+
+## Next steps
+1. Fix the two blockers (1 and 4) first: they stop keyboard users completely.
+2. Add axe to component tests so 3 and 5 cannot come back; repeat this manual pass after the fixes, since automated tools did not flag 1, 2 or 4.`,
+        },
       },
     },
     challenge: {
@@ -319,7 +350,179 @@ export const lesson: Lesson = {
       criteria: ["Landmarks and heading outline correct", "All controls keyboard accessible with visible focus", "Lighthouse a11y score 100 plus notes from manual testing"],
       hints: ["Check the heading outline with a browser extension or the screen reader's headings list."],
       solution: {
-        text: ["A clean semantic shell now makes every later React component easier: components render real buttons, links and labels instead of patching accessibility afterwards."],
+        text: [
+          "Landmarks: a skip link first, then header (brand plus nav with aria-label=\"Main\" and aria-current on the active page), one main, one footer. The lesson is an article with a single h1, h2 per section and h3 below them, so the heading list reads like a table of contents. The signup form uses a visible label for every control, a fieldset/legend for the radio group, autocomplete=\"email\" and a hint tied in with aria-describedby. main has tabindex=\"-1\" so the skip link moves focus there in every browser, and it is excluded from the focus ring because Tab never lands on it.",
+          "Focus is never removed: :focus-visible draws a 3 px outline on every link, input and button. Colours meet WCAG AA contrast (axe checks this), and the 'Next lesson' link carries visually hidden text so its accessible name says where it goes.",
+          "Verified in Chromium 141 with Playwright and axe-core 4.14 (check.mjs below, output underneath) and with Lighthouse 13.5 (mobile, default settings) against the same files: Accessibility 100, SEO 100. Manual pass notes: every control is reachable with Tab in visual order, the focus ring is visible on each (outline=3px in the output), the skip link appears on first Tab and moves focus to main, and the radio group is one Tab stop with arrow keys moving between options, which is native behaviour. A screen-reader pass was not possible in this environment; do it yourself with VoiceOver or NVDA by listing headings and landmarks.",
+        ],
+        code: {
+          lang: "html",
+          file: "site/index.html + site/shell.css + check.mjs",
+          code: `<!-- file: site/index.html -->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="DevAtlas lesson 3.1.1: semantic HTML and accessibility.">
+  <title>Semantic HTML and accessibility · DevAtlas</title>
+  <link rel="stylesheet" href="shell.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <header class="site-header">
+    <a class="brand" href="/">DevAtlas</a>
+    <nav aria-label="Main">
+      <ul>
+        <li><a href="/">Dashboard</a></li>
+        <li><a href="/roadmap" aria-current="page">Roadmap</a></li>
+        <li><a href="/glossary">Glossary</a></li>
+      </ul>
+    </nav>
+  </header>
+
+  <main id="main" tabindex="-1">
+    <article>
+      <h1>Semantic HTML and accessibility</h1>
+      <p class="meta">Phase 3 · 60 minutes · Beginner</p>
+
+      <section aria-labelledby="problem">
+        <h2 id="problem">The real-world problem</h2>
+        <p>A "Next lesson" control built from a <code>div</code> cannot be reached with the keyboard.</p>
+      </section>
+
+      <section aria-labelledby="concept">
+        <h2 id="concept">Concept</h2>
+        <h3>Landmarks</h3>
+        <p>Header, nav, main and footer let screen-reader users jump between regions.</p>
+        <h3>Buttons and links</h3>
+        <p>A link navigates; a button acts on the current page.</p>
+      </section>
+
+      <a class="button" href="/lessons/3.2.1">Next lesson<span class="visually-hidden">: CSS layout</span></a>
+    </article>
+
+    <section aria-labelledby="signup-title" class="signup">
+      <h2 id="signup-title">Get the weekly digest</h2>
+      <form action="/api/signup" method="post" novalidate>
+        <div class="field">
+          <label for="email">Email</label>
+          <input id="email" name="email" type="email" autocomplete="email" required aria-describedby="email-hint">
+          <p id="email-hint" class="hint">One email a week. Unsubscribe any time.</p>
+        </div>
+        <fieldset>
+          <legend>Your goal</legend>
+          <label><input type="radio" name="goal" value="full-stack" checked> Full-stack</label>
+          <label><input type="radio" name="goal" value="ai"> AI engineer</label>
+        </fieldset>
+        <label class="check"><input type="checkbox" name="terms" required> I accept the terms</label>
+        <button type="submit">Sign up</button>
+      </form>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <p>© 2026 DevAtlas · <a href="/accessibility">Accessibility statement</a></p>
+  </footer>
+</body>
+</html>
+
+/* file: site/shell.css */
+:root { --text: #13141c; --muted: #4a4d5e; --bg: #ffffff; --accent: #4b3bd1; --focus: #4b3bd1; }
+*, *::before, *::after { box-sizing: border-box; }
+body { margin: 0; font: 1rem/1.6 system-ui, sans-serif; color: var(--text); background: var(--bg); }
+a { color: var(--accent); }
+
+.skip-link { position: absolute; left: -9999px; top: 0.5rem; padding: 0.5rem 1rem; background: var(--bg); }
+.skip-link:focus { left: 0.5rem; }
+
+.site-header, main, .site-footer { padding: 1rem; max-width: 60rem; margin-inline: auto; }
+.site-header { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; justify-content: space-between; }
+.site-header ul { display: flex; gap: 1rem; list-style: none; margin: 0; padding: 0; }
+.brand { font-weight: 700; text-decoration: none; }
+[aria-current="page"] { font-weight: 700; }
+.meta, .hint { color: var(--muted); }
+
+.button, button { display: inline-block; padding: 0.6rem 1.1rem; border: 0; border-radius: 0.5rem;
+  background: var(--accent); color: #fff; font: inherit; text-decoration: none; cursor: pointer; }
+.field { display: grid; gap: 0.25rem; margin-bottom: 1rem; }
+input[type="email"] { padding: 0.5rem; font: inherit; border: 1px solid var(--muted); border-radius: 0.375rem; }
+fieldset { margin: 0 0 1rem; border: 1px solid var(--muted); border-radius: 0.375rem; }
+.check { display: block; margin-bottom: 1rem; }
+
+/* Visible focus for every interactive element (WCAG 2.4.7) */
+:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+main:focus { outline: none; }   /* main only receives focus from the skip link, never from Tab */
+
+.visually-hidden { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+// file: check.mjs
+// npm i -D vite playwright-core axe-core; CHROME_PATH=/path/to/chrome node check.mjs
+// Serves ./site with Vite, then runs axe-core and a keyboard walk in Chromium.
+import { createRequire } from "node:module";
+import { chromium } from "playwright-core";
+import { createServer } from "vite";
+const require = createRequire(import.meta.url);
+const server = await createServer({ root: "site", server: { port: 4311, strictPort: true }, logLevel: "silent" });
+await server.listen();
+const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH });
+const page = await browser.newPage();
+await page.goto("http://localhost:4311/");
+
+await page.addScriptTag({ path: require.resolve("axe-core") });
+const axe = await page.evaluate(() => window.axe.run(document, { runOnly: ["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa", "best-practice"] }));
+console.log(\`axe-core \${axe.testEngine.version}: \${axe.violations.length} violations, \${axe.passes.length} rules passed\`);
+for (const v of axe.violations) console.log(\` - \${v.id}: \${v.help}\`);
+
+const outline = await page.$$eval("h1, h2, h3, h4", (hs) => hs.map((h) => \`\${"  ".repeat(+h.tagName[1] - 1)}\${h.tagName.toLowerCase()} \${h.textContent.trim()}\`));
+console.log("Heading outline:\\n" + outline.join("\\n"));
+
+console.log("Tab order (focus ring width):");
+for (let i = 0; i < 11; i++) {
+  await page.keyboard.press("Tab");
+  console.log(" " + await page.evaluate(() => {
+    const el = document.activeElement;
+    const name = (el.labels?.[0]?.textContent ?? el.textContent).trim().replace(/\\s+/g, " ");
+    return \`\${el.tagName.toLowerCase()}\${el.type ? \`[\${el.type}]\` : ""} "\${name}" outline=\${getComputedStyle(el).outlineWidth}\`;
+  }));
+}
+await page.goto("http://localhost:4311/");
+await page.keyboard.press("Tab");
+await page.keyboard.press("Enter");
+console.log("After skip link, focus is on:", await page.evaluate(() => document.activeElement.id));
+await browser.close();
+await server.close();`,
+        },
+        output: `$ node check.mjs
+axe-core 4.14.0: 0 violations, 38 rules passed
+Heading outline:
+h1 Semantic HTML and accessibility
+  h2 The real-world problem
+  h2 Concept
+    h3 Landmarks
+    h3 Buttons and links
+  h2 Get the weekly digest
+Tab order (focus ring width):
+ a "Skip to content" outline=3px
+ a "DevAtlas" outline=3px
+ a "Dashboard" outline=3px
+ a "Roadmap" outline=3px
+ a "Glossary" outline=3px
+ a "Next lesson: CSS layout" outline=3px
+ input[email] "Email" outline=3px
+ input[radio] "Full-stack" outline=3px
+ input[checkbox] "I accept the terms" outline=3px
+ button[submit] "Sign up" outline=3px
+ a "Accessibility statement" outline=3px
+After skip link, focus is on: main`,
+        pitfalls: [
+          "Removing the outline on :focus to hide the ring on mouse clicks; :focus-visible already does that without hurting keyboard users",
+          "A Lighthouse score of 100 is not 'accessible': it runs a subset of automated checks, so the keyboard and screen-reader passes still matter",
+        ],
       },
     },
   },

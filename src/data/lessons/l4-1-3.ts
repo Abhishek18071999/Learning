@@ -135,6 +135,7 @@ app.MapDelete("/users/{userId:int}/progress/{lessonId}", async (int userId, stri
         lang: "csharp",
         code: `using Microsoft.AspNetCore.Identity;
 
+// assumes User has a string? PasswordHash property; attemptedPassword comes from the login form
 var hasher = new PasswordHasher<User>();                        // PBKDF2 with salt and many iterations
 string hash = hasher.HashPassword(user, "correct horse battery staple");
 
@@ -234,6 +235,7 @@ Avoid:
           code: `using System.Security.Claims;
 using System.Text.Encodings.Web;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 public sealed class TestAuthHandler(IOptionsMonitor<AuthenticationSchemeOptions> o, ILoggerFactory l, UrlEncoder e)
@@ -261,7 +263,101 @@ public sealed class TestAuthHandler(IOptionsMonitor<AuthenticationSchemeOptions>
       criteria: ["No tokens in localStorage", "API validates issuer and audience", "Logout clears the session at the provider"],
       hints: ["Keycloak: docker run -p 8080:8080 -e KC_BOOTSTRAP_ADMIN_USERNAME=admin -e KC_BOOTSTRAP_ADMIN_PASSWORD=admin quay.io/keycloak/keycloak start-dev (check the Keycloak docs for your version's variables)."],
       solution: {
-        text: ["Steps: create a realm/tenant, a public SPA client with the redirect URI http://localhost:5173/callback and PKCE, an API audience, and a test user. In the API set Auth:Authority to the realm issuer URL and Auth:Audience to the API identifier. Use the provider's SPA SDK (or oidc-client-ts) with in-memory token storage."],
+        text: [
+          "Keycloak (keycloak/keycloak:26.4 in Docker, `start-dev`): create a realm `devatlas` with realm roles learner and content-admin, and a test user. Add a client `devatlas-web` that is public (no secret, since a browser cannot keep one), has only the standard flow (no implicit flow, no direct access grants) and PKCE method S256. Set its redirect URI to http://localhost:5173/*, its web origin to http://localhost:5173 and its post-logout redirect URI to http://localhost:5173/*. Give it two protocol mappers: an Audience mapper that adds `devatlas-api` to access tokens, and a realm-role mapper that writes the roles to a flat `roles` claim.",
+          "API: Auth:Authority = http://localhost:8080/realms/devatlas (the token's `iss`) and Auth:Audience = devatlas-api. JwtBearer downloads the realm's signing keys from the discovery document and rejects tokens with the wrong issuer, audience, signature or expiry. Without the audience mapper, Keycloak access tokens carry no devatlas-api audience and every call returns 401.",
+          "SPA: oidc-client-ts runs Authorization Code + PKCE. The user store is InMemoryWebStorage, so tokens never touch localStorage or sessionStorage; only the transient sign-in state (state and code_verifier) sits in sessionStorage until the callback consumes it. Logout calls the provider's end_session endpoint, so the Keycloak session ends too.",
+          "Verified end to end with a headless Chromium (Playwright) against this code, Keycloak 26.4 and the API from the capstone. The authorize request carried response_type=code and code_challenge_method=S256. After login the page showed asha's progress, fetched with a Bearer token through the proxy. localStorage and sessionStorage were both empty. After logout, signing in again showed the Keycloak password form.",
+        ],
+        code: {
+          lang: "typescript",
+          code: `// ---- web/src/auth/oidc.ts (npm i oidc-client-ts) ----
+import { InMemoryWebStorage, UserManager, WebStorageStateStore, type User } from "oidc-client-ts";
+
+// Authorization Code + PKCE with a public client. oidc-client-ts creates the code_verifier and
+// S256 code_challenge itself; the only thing kept in sessionStorage is that short-lived sign-in state.
+export const userManager = new UserManager({
+  authority: import.meta.env.VITE_OIDC_AUTHORITY,       // http://localhost:8080/realms/devatlas
+  client_id: import.meta.env.VITE_OIDC_CLIENT_ID,       // devatlas-web
+  redirect_uri: \`\${window.location.origin}/callback\`,
+  post_logout_redirect_uri: \`\${window.location.origin}/\`,
+  response_type: "code",
+  scope: "openid profile",
+  userStore: new WebStorageStateStore({ store: new InMemoryWebStorage() }),   // tokens live in memory only
+});
+
+export const login = () => userManager.signinRedirect();
+
+/** On /callback: exchange the one-time code (plus the PKCE verifier) for tokens, then clean the URL. */
+export async function completeLogin(): Promise<User> {
+  const user = await userManager.signinRedirectCallback();
+  window.history.replaceState({}, "", "/");
+  return user;
+}
+
+/** Ends the session at the provider too (end_session_endpoint with id_token_hint), not just in this tab. */
+export const logout = () => userManager.signoutRedirect();
+
+export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const user = await userManager.getUser();
+  if (!user || user.expired) throw new Error("Not signed in");
+  const headers = new Headers(init.headers);
+  headers.set("Authorization", \`Bearer \${user.access_token}\`);
+  return fetch(\`/api\${path}\`, { ...init, headers });     // Vite proxies /api to the .NET API (no CORS needed)
+}
+
+// ---- web/src/App.tsx ----
+import { useEffect, useState } from "react";
+import type { User } from "oidc-client-ts";
+import { apiFetch, completeLogin, login, logout, userManager } from "./auth/oidc";
+
+type Progress = { lessonId: string; status: string; score: number };
+
+export function App() {
+  const [user, setUser] = useState<User | null>(null);
+  const [progress, setProgress] = useState<Progress[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const signIn = window.location.pathname === "/callback" ? completeLogin() : userManager.getUser();
+    signIn.then(setUser).catch((e: Error) => setError(e.message));
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    apiFetch("/me/progress")
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(\`API returned \${r.status}\`))))
+      .then(setProgress)
+      .catch((e: Error) => setError(e.message));
+  }, [user]);
+
+  if (error) return <p role="alert">{error}</p>;
+  if (!user) return <button onClick={() => void login()}>Log in</button>;
+  return (
+    <main>
+      <p>Signed in as {user.profile.preferred_username}</p>
+      <ul>{progress?.map((p) => <li key={p.lessonId}>{p.lessonId}: {p.status} ({p.score})</li>)}</ul>
+      <button onClick={() => void logout()}>Log out</button>
+    </main>
+  );
+}
+
+// ---- web/vite.config.ts (dev proxy: the SPA calls /api/..., Vite forwards to the API) ----
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+export default defineConfig({
+  plugins: [react()],
+  server: { port: 5173, strictPort: true, proxy: { "/api": { target: "http://localhost:5000", rewrite: (p) => p.replace(/^\\/api/, "") } } },
+});
+
+// ---- web/.env (not secret: public client id and issuer URL) ----
+// VITE_OIDC_AUTHORITY=http://localhost:8080/realms/devatlas
+// VITE_OIDC_CLIENT_ID=devatlas-web`,
+        },
+        pitfalls: [
+          "In-memory tokens disappear on page reload; call signinRedirect (or signinSilent) again, and the provider's session cookie makes that quick without retyping the password.",
+          "Keycloak sets its login cookies with Secure. Browsers still send them to http://localhost, but most other hosts need HTTPS.",
+        ],
       },
     },
     challenge: {
@@ -271,8 +367,135 @@ public sealed class TestAuthHandler(IOptionsMonitor<AuthenticationSchemeOptions>
       hints: ["Store only hashes of refresh tokens, like passwords."],
       solution: {
         text: [
-          "Table refresh_tokens(id, user_id, family_id, token_hash, expires_at, replaced_by, revoked_at). On refresh: look up by hash; if revoked or already replaced → token reuse detected → revoke all tokens in family_id and force re-login; else create a new token in the same family, set replaced_by on the old one, return the new one in an HttpOnly cookie. Logout or password change revokes all families for the user.",
+          "Table refresh_tokens(id, user_id, family_id, token_hash, expires_at, replaced_by, revoked_at). On refresh: look up by hash. If the token was already replaced, that is reuse: someone kept a copy, so revoke every token in its family_id and force a new login. If it is revoked or expired, reject it. Otherwise create a new token in the same family, set replaced_by on the old one, and return the new one in an HttpOnly cookie. Logout revokes the family; a password change revokes every active token of the user.",
+          "Only SHA-256 hashes are stored, so a database leak does not hand out usable tokens. A fast hash is enough here, unlike for passwords, because the token is 256 random bits and cannot be brute-forced. Marking the old token is a conditional UPDATE (`WHERE replaced_by IS NULL`) inside the same transaction as the insert. If two refreshes race with the same token, only one changes a row and the other is treated as reuse.",
+          "The demo plays it through: two normal rotations; an attacker replaying the first (stolen) token, which kills the family so the legitimate holder of token #3 is also logged out; logout of one device while another keeps working; a password change; and an expired token. Time is passed in explicitly so the demo is deterministic.",
         ],
+        code: {
+          lang: "csharp", file: "Program.cs (Microsoft.Data.Sqlite 9.0.*)",
+          code: `using System.Security.Cryptography;
+using Microsoft.Data.Sqlite;
+
+using var db = new SqliteConnection("Data Source=:memory:");      // MySQL/PostgreSQL in production; same schema
+db.Open();
+var store = new RefreshTokenStore(db);
+var now = new DateTimeOffset(2026, 10, 1, 9, 0, 0, TimeSpan.Zero);
+
+var t1 = store.Issue("user-42", now);                              // login
+var r2 = store.Refresh(t1, now.AddMinutes(10));
+var r3 = store.Refresh(r2.Token!, now.AddMinutes(20));
+Console.WriteLine($"refresh #1: {r2.Outcome}, refresh #2: {r3.Outcome}");
+Console.WriteLine($"stolen #1 replayed: {store.Refresh(t1, now.AddMinutes(25)).Outcome}");
+Console.WriteLine($"legit #3 after reuse: {store.Refresh(r3.Token!, now.AddMinutes(26)).Outcome}");
+
+var t4 = store.Issue("user-42", now.AddMinutes(30));               // logs in again: new family
+var phone = store.Issue("user-42", now.AddMinutes(31));            // second device
+store.Logout(t4, now.AddMinutes(40));
+Console.WriteLine($"after logout: {store.Refresh(t4, now.AddMinutes(41)).Outcome}, other device: {store.Refresh(phone, now.AddMinutes(41)).Outcome}");
+Console.WriteLine($"password change revoked {store.RevokeAllForUser("user-42", now.AddMinutes(50))} active token(s)");
+Console.WriteLine($"expired: {store.Refresh(store.Issue("user-7", now), now.AddDays(31)).Outcome}");
+
+public enum Outcome { Rotated, Invalid, Expired, Revoked, ReuseDetected }
+public sealed record RefreshResult(Outcome Outcome, string? Token = null);
+
+public sealed class RefreshTokenStore
+{
+    private static readonly TimeSpan Lifetime = TimeSpan.FromDays(30);
+    private readonly SqliteConnection _db;
+
+    public RefreshTokenStore(SqliteConnection db)
+    {
+        _db = db;
+        Exec("""
+            CREATE TABLE IF NOT EXISTS refresh_tokens (
+                id          INTEGER PRIMARY KEY,
+                user_id     TEXT NOT NULL,
+                family_id   TEXT NOT NULL,              -- one family per login; rotation stays inside it
+                token_hash  BLOB NOT NULL UNIQUE,       -- SHA-256 of the token; the token itself is never stored
+                expires_at  INTEGER NOT NULL,           -- unix seconds
+                replaced_by INTEGER NULL REFERENCES refresh_tokens(id),
+                revoked_at  INTEGER NULL);
+            CREATE INDEX IF NOT EXISTS ix_refresh_family ON refresh_tokens(family_id);
+            CREATE INDEX IF NOT EXISTS ix_refresh_user ON refresh_tokens(user_id);
+            """);
+    }
+
+    public string Issue(string userId, DateTimeOffset now) => Insert(userId, Guid.NewGuid().ToString("n"), now).Token;
+
+    public RefreshResult Refresh(string token, DateTimeOffset now)
+    {
+        using var tx = _db.BeginTransaction();
+        using var find = Cmd("SELECT id, user_id, family_id, expires_at, replaced_by, revoked_at FROM refresh_tokens WHERE token_hash = $h",
+            ("$h", Hash(token)));
+        using var row = find.ExecuteReader();
+        if (!row.Read()) return new(Outcome.Invalid);
+        var (id, userId, family, expires) = (row.GetInt64(0), row.GetString(1), row.GetString(2), row.GetInt64(3));
+        bool used = !row.IsDBNull(4), revoked = !row.IsDBNull(5);
+        row.Close();
+
+        if (used)                                                     // an old token came back: someone kept a copy
+        {
+            RevokeFamily(family, now);
+            tx.Commit();
+            return new(Outcome.ReuseDetected);
+        }
+        if (revoked) return new(Outcome.Revoked);
+        if (expires <= now.ToUnixTimeSeconds()) return new(Outcome.Expired);
+
+        var (newId, newToken) = Insert(userId, family, now);
+        // Conditional update: if a concurrent refresh already rotated this token, 0 rows change -> treat as reuse.
+        using var mark = Cmd("UPDATE refresh_tokens SET replaced_by = $n WHERE id = $id AND replaced_by IS NULL AND revoked_at IS NULL",
+            ("$n", newId), ("$id", id));
+        if (mark.ExecuteNonQuery() != 1) { tx.Rollback(); return new(Outcome.ReuseDetected); }
+        tx.Commit();
+        return new(Outcome.Rotated, newToken);                        // send as HttpOnly; Secure; SameSite cookie
+    }
+
+    public void Logout(string token, DateTimeOffset now)
+    {
+        using var find = Cmd("SELECT family_id FROM refresh_tokens WHERE token_hash = $h", ("$h", Hash(token)));
+        if (find.ExecuteScalar() is string family) RevokeFamily(family, now);
+    }
+
+    public int RevokeAllForUser(string userId, DateTimeOffset now)   // password change, "log out everywhere"
+    {
+        using var cmd = Cmd("UPDATE refresh_tokens SET revoked_at = $t WHERE user_id = $u AND revoked_at IS NULL AND replaced_by IS NULL",
+            ("$t", now.ToUnixTimeSeconds()), ("$u", userId));
+        return cmd.ExecuteNonQuery();
+    }
+
+    private void RevokeFamily(string family, DateTimeOffset now)
+    {
+        using var cmd = Cmd("UPDATE refresh_tokens SET revoked_at = $t WHERE family_id = $f AND revoked_at IS NULL",
+            ("$t", now.ToUnixTimeSeconds()), ("$f", family));
+        cmd.ExecuteNonQuery();
+    }
+
+    private (long Id, string Token) Insert(string userId, string family, DateTimeOffset now)
+    {
+        var token = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));   // 256 bits of randomness
+        using var cmd = Cmd("""
+            INSERT INTO refresh_tokens (user_id, family_id, token_hash, expires_at) VALUES ($u, $f, $h, $e)
+            RETURNING id
+            """, ("$u", userId), ("$f", family), ("$h", Hash(token)), ("$e", (now + Lifetime).ToUnixTimeSeconds()));
+        return ((long)cmd.ExecuteScalar()!, token);
+    }
+
+    // A fast hash is fine here (unlike passwords): the token is 256 random bits, so it cannot be guessed offline.
+    private static byte[] Hash(string token) => SHA256.HashData(Convert.FromBase64String(token));
+
+    private SqliteCommand Cmd(string sql, params (string Name, object Value)[] args)
+    {
+        var cmd = _db.CreateCommand();
+        cmd.CommandText = sql;
+        foreach (var (name, value) in args) cmd.Parameters.AddWithValue(name, value);
+        return cmd;
+    }
+
+    private void Exec(string sql) { using var cmd = Cmd(sql); cmd.ExecuteNonQuery(); }
+}`,
+        },
+        output: "refresh #1: Rotated, refresh #2: Rotated\nstolen #1 replayed: ReuseDetected\nlegit #3 after reuse: Revoked\nafter logout: Revoked, other device: Rotated\npassword change revoked 1 active token(s)\nexpired: Expired",
       },
     },
     capstone: {
@@ -281,7 +504,185 @@ public sealed class TestAuthHandler(IOptionsMonitor<AuthenticationSchemeOptions>
       criteria: ["Anonymous access only to /health and public content", "No endpoint accepts a user id it does not verify", "All authz tests pass in CI"],
       hints: ["builder.Services.AddAuthorizationBuilder().SetFallbackPolicy(new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build()); then .AllowAnonymous() on public endpoints."],
       solution: {
-        text: ["A fallback policy makes 'secure by default' structural: forgetting RequireAuthorization on a new endpoint no longer exposes it."],
+        text: [
+          "A fallback policy makes 'secure by default' structural: forgetting RequireAuthorization on a new endpoint no longer exposes it. Only /health and the public lesson list opt out with AllowAnonymous().",
+          "MapInboundClaims = false keeps the JWT claim names as issued (`sub`, `roles`, `preferred_username`) instead of the long Microsoft claim URIs, and NameClaimType/RoleClaimType tell ASP.NET Core which claims hold the name and the roles. IsInRole and RequireRole then work with the flat `roles` claim from the Keycloak mapper in the intermediate task. The user id is the token's `sub`, a string (a UUID in Keycloak), so the store is keyed by it.",
+          "/me endpoints never accept a user id. /users/{userId}/progress does, so it checks per request that the caller is that user or a content admin and returns 403 otherwise.",
+          "The tests replace JwtBearer with a header-driven test scheme that issues the same claim names as real tokens, and cover anonymous access (401), owner, other learner (403) and admin, and the ContentAdmin policy. The same build was also run against real Keycloak 26.4 tokens obtained with Authorization Code + PKCE: anonymous got 401; asha could save and read her own progress; asha creating a lesson got 403; maya (content-admin) creating a lesson got 201 and could read asha's progress; a token with a modified signature got 401.",
+        ],
+        code: {
+          lang: "csharp",
+          code: `// ---- DevAtlas.Api/Program.cs (Microsoft.AspNetCore.Authentication.JwtBearer 9.0.*) ----
+using System.Collections.Concurrent;
+using System.Security.Claims;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
+
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddProblemDetails();
+builder.Services.AddSingleton<IProgressStore, InMemoryProgressStore>();   // EF Core store from 4.1.2 in DevAtlas
+
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer(o =>
+{
+    o.Authority = builder.Configuration["Auth:Authority"];        // e.g. http://localhost:8080/realms/devatlas
+    o.Audience = builder.Configuration["Auth:Audience"];          // e.g. devatlas-api
+    o.RequireHttpsMetadata = !builder.Environment.IsDevelopment(); // plain-http Keycloak only in Development
+    o.MapInboundClaims = false;                                   // keep JWT names: "sub", "roles"
+    o.TokenValidationParameters.NameClaimType = "preferred_username";
+    o.TokenValidationParameters.RoleClaimType = "roles";
+});
+
+builder.Services.AddAuthorizationBuilder()
+    .SetFallbackPolicy(new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build())  // deny by default
+    .AddPolicy("ContentAdmin", p => p.RequireRole("content-admin"));
+
+var app = builder.Build();
+
+app.UseExceptionHandler();
+app.UseStatusCodePages();
+app.UseAuthentication();
+app.UseAuthorization();
+
+// Public: explicitly anonymous
+app.MapGet("/health", () => TypedResults.Ok(new { status = "ok" })).AllowAnonymous();
+app.MapGet("/lessons", () => TypedResults.Ok(new[] { new LessonDto("4.1.3", "Authentication: JWT, OAuth2 and OIDC") }))
+   .AllowAnonymous();
+
+// Admin only
+app.MapPost("/lessons", (LessonDto lesson) => TypedResults.Created($"/lessons/{lesson.Id}", lesson))
+   .RequireAuthorization("ContentAdmin");
+
+// Identity always comes from the validated token, never from the URL or body
+var me = app.MapGroup("/me");
+me.MapGet("/progress", (ClaimsPrincipal user, IProgressStore store) => TypedResults.Ok(store.For(user.UserId())));
+me.MapPut("/progress/{lessonId}", (string lessonId, ProgressUpdate body, ClaimsPrincipal user, IProgressStore store) =>
+{
+    if (body.Score is < 0 or > 1)
+        return Results.ValidationProblem(new Dictionary<string, string[]> { ["score"] = ["Score must be between 0 and 1."] });
+    store.Save(user.UserId(), new ProgressDto(lessonId, "completed", body.Score));
+    return Results.NoContent();
+});
+
+// Someone else's data: owner or content admin, checked per request (403 otherwise)
+app.MapGet("/users/{userId}/progress", (string userId, ClaimsPrincipal user, IProgressStore store) =>
+    user.UserId() == userId || user.IsInRole("content-admin")
+        ? Results.Ok(store.For(userId))
+        : Results.Forbid());
+
+app.Run();
+
+public partial class Program { }
+
+public sealed record LessonDto(string Id, string Title);
+public sealed record ProgressDto(string LessonId, string Status, decimal Score);
+public sealed record ProgressUpdate(decimal Score);
+
+public static class ClaimsPrincipalExtensions
+{
+    public static string UserId(this ClaimsPrincipal user) =>
+        user.FindFirstValue("sub") ?? throw new InvalidOperationException("Authenticated user without a sub claim");
+}
+
+public interface IProgressStore
+{
+    IReadOnlyList<ProgressDto> For(string userId);
+    void Save(string userId, ProgressDto progress);
+}
+
+public sealed class InMemoryProgressStore : IProgressStore
+{
+    private readonly ConcurrentDictionary<(string User, string Lesson), ProgressDto> _rows = new();
+    public IReadOnlyList<ProgressDto> For(string userId) =>
+        _rows.Where(r => r.Key.User == userId).Select(r => r.Value).OrderBy(p => p.LessonId).ToList();
+    public void Save(string userId, ProgressDto progress) => _rows[(userId, progress.LessonId)] = progress;
+}
+
+// ---- DevAtlas.Api.Tests/AuthorizationTests.cs (xunit + Microsoft.AspNetCore.Mvc.Testing 9.0.*) ----
+using System.Net;
+using System.Net.Http.Json;
+using System.Security.Claims;
+using System.Text.Encodings.Web;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+
+// Test scheme: identity from headers, using the same claim names as real tokens ("sub", "roles").
+public sealed class TestAuthHandler(IOptionsMonitor<AuthenticationSchemeOptions> o, ILoggerFactory l, UrlEncoder e)
+    : AuthenticationHandler<AuthenticationSchemeOptions>(o, l, e)
+{
+    protected override Task<AuthenticateResult> HandleAuthenticateAsync()
+    {
+        if (!Request.Headers.TryGetValue("X-Test-User", out var sub))
+            return Task.FromResult(AuthenticateResult.NoResult());
+        var claims = new List<Claim> { new("sub", sub!) };
+        if (Request.Headers.TryGetValue("X-Test-Role", out var role)) claims.Add(new("roles", role!));
+        var identity = new ClaimsIdentity(claims, "Test", nameType: "sub", roleType: "roles");
+        return Task.FromResult(AuthenticateResult.Success(new AuthenticationTicket(new ClaimsPrincipal(identity), "Test")));
+    }
+}
+
+public sealed class TestAuthFactory : WebApplicationFactory<Program>
+{
+    protected override void ConfigureWebHost(IWebHostBuilder builder) =>
+        builder.ConfigureTestServices(s => s
+            .AddAuthentication("Test")
+            .AddScheme<AuthenticationSchemeOptions, TestAuthHandler>("Test", _ => { }));
+}
+
+public class AuthorizationTests(TestAuthFactory factory) : IClassFixture<TestAuthFactory>
+{
+    private HttpClient As(string? user, string? role = null)
+    {
+        var c = factory.CreateClient();
+        if (user is not null) c.DefaultRequestHeaders.Add("X-Test-User", user);
+        if (role is not null) c.DefaultRequestHeaders.Add("X-Test-Role", role);
+        return c;
+    }
+
+    [Theory]
+    [InlineData("/health")]
+    [InlineData("/lessons")]
+    public async Task Public_endpoints_allow_anonymous(string url) =>
+        Assert.Equal(HttpStatusCode.OK, (await As(null).GetAsync(url)).StatusCode);
+
+    [Theory]
+    [InlineData("/me/progress")]
+    [InlineData("/users/alice/progress")]
+    public async Task Everything_else_requires_a_user(string url) =>
+        Assert.Equal(HttpStatusCode.Unauthorized, (await As(null).GetAsync(url)).StatusCode);
+
+    [Fact]
+    public async Task Me_endpoints_use_the_token_identity()
+    {
+        var put = await As("alice").PutAsJsonAsync("/me/progress/4.1.3", new { score = 0.8 });
+        Assert.Equal(HttpStatusCode.NoContent, put.StatusCode);
+        Assert.Contains("4.1.3", await As("alice").GetStringAsync("/me/progress"));
+        Assert.Equal("[]", await As("bob").GetStringAsync("/me/progress"));
+    }
+
+    [Theory]
+    [InlineData("alice", null, HttpStatusCode.OK)]           // owner
+    [InlineData("bob", null, HttpStatusCode.Forbidden)]      // another learner
+    [InlineData("carol", "content-admin", HttpStatusCode.OK)] // admin
+    public async Task Users_progress_is_owner_or_admin(string user, string? role, HttpStatusCode expected) =>
+        Assert.Equal(expected, (await As(user, role).GetAsync("/users/alice/progress")).StatusCode);
+
+    [Theory]
+    [InlineData(null, HttpStatusCode.Forbidden)]
+    [InlineData("content-admin", HttpStatusCode.Created)]
+    public async Task Creating_lessons_needs_ContentAdmin(string? role, HttpStatusCode expected)
+    {
+        var res = await As("dave", role).PostAsJsonAsync("/lessons", new { id = "9.9.9", title = "New" });
+        Assert.Equal(expected, res.StatusCode);
+    }
+}`,
+        },
+        output: "$ dotnet test\nPassed!  - Failed:     0, Passed:    10, Skipped:     0, Total:    10",
       },
     },
   },

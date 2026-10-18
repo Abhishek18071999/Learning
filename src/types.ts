@@ -87,6 +87,19 @@ export interface Lesson {
   nextPreview: Rich;
 }
 
+/**
+ * The small, always-loaded part of a lesson, generated into src/data/lessonMeta.generated.ts by
+ * scripts/gen-lesson-meta.mjs. Lists, search, glossary and revision only need this; the full
+ * Lesson is loaded on demand with loadLesson(id).
+ */
+export interface LessonMeta extends Pick<Lesson, "id" | "title" | "minutes" | "level" | "summary" | "terms" | "interview" | "quickCheck" | "cheatSheet"> {
+  capstone: Pick<HomeworkTask, "title" | "criteria">;
+  /** Hands-on steps with code plus homework tiers whose solution has code. */
+  codeSamples: number;
+  /** Source file name in src/data/lessons, e.g. "l0-1-1.ts". */
+  file: string;
+}
+
 export interface LessonStub {
   id: string;
   title: string;

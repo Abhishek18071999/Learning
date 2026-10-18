@@ -56,10 +56,11 @@ export const lesson: Lesson = {
         lang: "bash",
         code: `dotnet new web -n DevAtlas.Api
 cd DevAtlas.Api
-dotnet add package Microsoft.AspNetCore.OpenApi
+# these samples target .NET 9: set <TargetFramework>net9.0</TargetFramework> in the .csproj if your SDK is newer
+dotnet add package Microsoft.AspNetCore.OpenApi --version "9.0.*"
 dotnet run          # note the http://localhost:<port> printed in the console`,
       },
-      notes: ["`dotnet new webapi` creates a richer template; `web` starts nearly empty so every line is yours. Package versions resolve to ones compatible with your SDK."],
+      notes: ["`dotnet new webapi` creates a richer template; `web` starts nearly empty so every line is yours. Keep ASP.NET Core package versions on the same major version as your target framework: without `--version`, a .NET 10 SDK adds the 10.x OpenApi package, which does not compile against net9.0."],
     },
     {
       title: "Program.cs: the composition root and pipeline",
@@ -197,8 +198,8 @@ curl -i localhost:$PORT/lessons/9.9.9
 curl -i -X POST localhost:$PORT/lessons -H 'Content-Type: application/json' -d '{"id":"4.1.2","title":"EF Core","minutes":70}'
 curl -i -X POST localhost:$PORT/lessons -H 'Content-Type: application/json' -d '{"id":"","title":"","minutes":1}'`,
       },
-      output: "HTTP/1.1 400 Bad Request\nContent-Type: application/problem+json\n\n{\"type\":\"https://tools.ietf.org/html/rfc9110#section-15.5.1\",\"title\":\"One or more validation errors occurred.\",\"status\":400,\"errors\":{\"id\":[\"Id is required.\"],\"title\":[\"Title is required (max 120 characters).\"],\"minutes\":[\"Minutes must be between 5 and 240.\"]}}",
-      notes: ["Exact `type` URLs and field ordering may differ by version; the shape (problem+json with an errors object) is the contract clients rely on."],
+      output: "HTTP/1.1 400 Bad Request\nContent-Type: application/problem+json\n\n{\"type\":\"https://tools.ietf.org/html/rfc9110#section-15.5.1\",\"title\":\"One or more validation errors occurred.\",\"status\":400,\"errors\":{\"id\":[\"Id is required.\"],\"title\":[\"Title is required (max 120 characters).\"],\"minutes\":[\"Minutes must be between 5 and 240.\"]},\"traceId\":\"00-4269dd4eaab30d0d403f2a5350222a9b-c05ccb8901db49c4-00\"}",
+      notes: ["Output of the last request (Date, Server and timing headers omitted); the traceId differs on every request. Exact `type` URLs and field ordering may differ by version; the shape (problem+json with an errors object) is the contract clients rely on."],
     },
     {
       title: "Configuration and structured logging",
@@ -207,6 +208,7 @@ curl -i -X POST localhost:$PORT/lessons -H 'Content-Type: application/json' -d '
         code: `// appsettings.json (non-secret defaults)
 // { "Content": { "MaxSearchResults": 50 }, "Logging": { "LogLevel": { "Default": "Information" } } }
 
+// (declare this class in its own file, or below the top-level statements in Program.cs)
 public sealed class ContentOptions { public int MaxSearchResults { get; init; } = 50; }
 
 builder.Services.Configure<ContentOptions>(builder.Configuration.GetSection("Content"));
@@ -310,7 +312,7 @@ group.MapDelete("/{id}", Results<NoContent, NotFound> (string id, ILessonStore s
       title: "Correlation id middleware",
       brief: ["Write middleware that reads an incoming `X-Correlation-Id` header (or generates one), adds it to the response, and pushes it into the logging scope so every log line for the request includes it."],
       criteria: ["Header echoed on every response", "Generated when missing", "Appears in logs via BeginScope"],
-      hints: ["logger.BeginScope(new Dictionary<string, object> { [\"CorrelationId\"] = id })"],
+      hints: ["logger.BeginScope(\"CorrelationId:{CorrelationId}\", id) creates a scope with a named CorrelationId field.", "The console logger only prints scopes with builder.Logging.AddSimpleConsole(o => o.IncludeScopes = true)."],
       solution: {
         text: ["Correlation ids let you follow one user request across logs of several services; OpenTelemetry traces (lesson 9.5.1) generalise the idea."],
         code: {
@@ -323,11 +325,14 @@ group.MapDelete("/{id}", Results<NoContent, NotFound> (string id, ILessonStore s
         : Guid.NewGuid().ToString("n");
     context.Response.Headers[header] = id;
     var logger = context.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("Correlation");
-    using (logger.BeginScope(new Dictionary<string, object> { ["CorrelationId"] = id }))
+    using (logger.BeginScope("CorrelationId:{CorrelationId}", id))   // structured field + readable console text
     {
         await next(context);
     }
-});`,
+});
+
+// Program.cs, before Build(): make the console logger print scopes
+// builder.Logging.AddSimpleConsole(o => o.IncludeScopes = true);`,
         },
       },
     },
@@ -348,6 +353,13 @@ using DevAtlas.Api.Features.Lessons;
 public class LessonApiTests(WebApplicationFactory<Program> factory) : IClassFixture<WebApplicationFactory<Program>>
 {
     private readonly HttpClient _client = factory.CreateClient();
+
+    [Fact]
+    public async Task Health_returns_ok()
+    {
+        var res = await _client.GetAsync("/health");
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+    }
 
     [Fact]
     public async Task Create_then_get()
@@ -377,7 +389,128 @@ public class LessonApiTests(WebApplicationFactory<Program> factory) : IClassFixt
       criteria: ["dotnet test runs integration tests in CI", "OpenAPI JSON generated", "No secrets in config files"],
       hints: ["Commit appsettings.json with safe defaults only; document required environment variables in .env.example."],
       solution: {
-        text: ["This API becomes the backbone the React app talks to; the next lesson replaces the in-memory store with EF Core and MySQL behind the same interface."],
+        text: [
+          "This API becomes the backbone the React app talks to; the next lesson replaces the in-memory store with EF Core and MySQL behind the same interface.",
+          "Program.cs stays a short composition root: logging with scopes, ProblemDetails, OpenAPI and the store in DI; then the pipeline in order (exception handler outermost, status-code pages, correlation id) and the feature modules. The lessons feature module and store are the ones from the hands-on steps, unchanged.",
+          "The correlation-id middleware is a class so it can take an injected logger. It only echoes a caller-supplied id when it is short and alphanumeric (anything else is replaced with a fresh GUID), because the value ends up in response headers and logs. The template scope `CorrelationId:{CorrelationId}` prints readably in the console and stays a structured field in JSON or OpenTelemetry log providers (a plain Dictionary scope prints as its type name in the simple console logger).",
+          "The integration tests host the whole pipeline in memory with WebApplicationFactory: health, correlation ids, ProblemDetails for 404 and validation errors, and the OpenAPI document, which the test also writes to openapi.json so CI can upload it as a build artifact. CI is a single job: actions/setup-dotnet with 9.0.x, then `dotnet test` and an upload-artifact step for openapi.json.",
+          "Configuration: appsettings.json holds only safe defaults (log levels). Anything secret (connection strings from the next lesson, API keys) is read from environment variables such as `ConnectionStrings__Default`, listed with placeholder values in a committed .env.example.",
+        ],
+        code: {
+          lang: "csharp",
+          code: `// ---- DevAtlas.Api/Program.cs ----
+using DevAtlas.Api.Features.Lessons;
+using DevAtlas.Api.Infrastructure;
+
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Logging.AddSimpleConsole(o => o.IncludeScopes = true);   // show CorrelationId on every log line
+builder.Services.AddProblemDetails();
+builder.Services.AddOpenApi();
+builder.Services.AddSingleton<ILessonStore, InMemoryLessonStore>();
+
+var app = builder.Build();
+
+app.UseExceptionHandler();                // outermost: unhandled exceptions → 500 ProblemDetails
+app.UseStatusCodePages();
+app.UseMiddleware<CorrelationIdMiddleware>();
+if (app.Environment.IsDevelopment())
+{
+    app.MapOpenApi();                     // GET /openapi/v1.json (tests export it for CI)
+}
+
+app.MapGet("/health", () => TypedResults.Ok(new { status = "ok" })).WithTags("Health");
+app.MapLessonEndpoints();
+
+app.Run();
+
+public partial class Program { }
+
+// ---- DevAtlas.Api/Infrastructure/CorrelationIdMiddleware.cs ----
+namespace DevAtlas.Api.Infrastructure;
+
+public sealed class CorrelationIdMiddleware(RequestDelegate next, ILogger<CorrelationIdMiddleware> logger)
+{
+    public const string Header = "X-Correlation-Id";
+
+    public async Task InvokeAsync(HttpContext context)
+    {
+        var incoming = context.Request.Headers[Header].ToString();
+        // Accept a caller's id only if it is short and simple, so it is safe to log and echo back.
+        var id = incoming.Length is > 0 and <= 64 && incoming.All(c => char.IsAsciiLetterOrDigit(c) || c == '-')
+            ? incoming
+            : Guid.NewGuid().ToString("n");
+        context.Response.Headers[Header] = id;
+        // Template scope: printed as "CorrelationId:<id>" by the console logger and kept as a
+        // structured CorrelationId field by JSON/OpenTelemetry log providers.
+        using (logger.BeginScope("CorrelationId:{CorrelationId}", id))
+        {
+            await next(context);
+        }
+    }
+}
+
+// ---- DevAtlas.Api.Tests/ApiSkeletonTests.cs (xunit + Microsoft.AspNetCore.Mvc.Testing 9.0.*) ----
+using System.Net;
+using System.Net.Http.Json;
+using System.Text.Json;
+using Microsoft.AspNetCore.Mvc.Testing;
+
+public class ApiSkeletonTests(WebApplicationFactory<Program> factory) : IClassFixture<WebApplicationFactory<Program>>
+{
+    private readonly HttpClient _client = factory.CreateClient();
+
+    [Fact]
+    public async Task Health_is_ok()
+    {
+        var res = await _client.GetAsync("/health");
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        Assert.Equal("""{"status":"ok"}""", await res.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task Correlation_id_is_echoed_or_generated()
+    {
+        var req = new HttpRequestMessage(HttpMethod.Get, "/health");
+        req.Headers.Add("X-Correlation-Id", "trace-123");
+        var echoed = await _client.SendAsync(req);
+        Assert.Equal("trace-123", echoed.Headers.GetValues("X-Correlation-Id").Single());
+
+        var generated = await _client.GetAsync("/health");
+        Assert.Matches("^[0-9a-f]{32}$", generated.Headers.GetValues("X-Correlation-Id").Single());
+    }
+
+    [Fact]
+    public async Task Unknown_lesson_is_problem_details()
+    {
+        var res = await _client.GetAsync("/lessons/9.9.9");
+        Assert.Equal(HttpStatusCode.NotFound, res.StatusCode);
+        Assert.Equal("application/problem+json", res.Content.Headers.ContentType?.MediaType);
+    }
+
+    [Fact]
+    public async Task Invalid_lesson_lists_field_errors()
+    {
+        var res = await _client.PostAsJsonAsync("/lessons", new { id = "", title = "", minutes = 1 });
+        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        using var body = JsonDocument.Parse(await res.Content.ReadAsStringAsync());
+        var fields = body.RootElement.GetProperty("errors").EnumerateObject().Select(p => p.Name).Order();
+        Assert.Equal(["id", "minutes", "title"], fields);
+    }
+
+    [Fact]
+    public async Task OpenApi_document_is_generated_and_exported()
+    {
+        var json = await _client.GetStringAsync("/openapi/v1.json");
+        using var doc = JsonDocument.Parse(json);
+        var paths = doc.RootElement.GetProperty("paths").EnumerateObject().Select(p => p.Name).ToList();
+        Assert.Contains("/lessons/{id}", paths);
+        Assert.Contains("/health", paths);
+        await File.WriteAllTextAsync("openapi.json", json);   // CI uploads this file as a build artifact
+    }
+}`,
+        },
+        output: "$ dotnet test\nPassed!  - Failed:     0, Passed:     5, Skipped:     0, Total:     5",
       },
     },
   },

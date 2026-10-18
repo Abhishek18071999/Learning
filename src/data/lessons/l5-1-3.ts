@@ -66,7 +66,7 @@ CREATE TABLE enrollments_bad (
       },
     },
     {
-      title: "A normalized schema (MySQL 8 / PostgreSQL compatible SQL)",
+      title: "A normalized schema (MySQL 8; PostgreSQL changes noted in comments)",
       code: {
         lang: "sql",
         file: "schema.sql",
@@ -233,23 +233,26 @@ COMMIT;
       criteria: ["customers, products, orders, order_items tables", "Price at purchase stored on order_items", "No multi-valued columns"],
       hints: ["What happens to the product list? What should happen when a product price changes later?"],
       solution: {
-        text: ["Customers and products become their own tables; orders reference customers; order_items is the junction with quantity and unit_price_cents captured at purchase."],
+        text: ["Customers and products become their own tables; orders reference customers; order_items is the junction with quantity and unit_price_cents captured at purchase.", "Foreign keys are written as table-level FOREIGN KEY clauses: MySQL 8.0 accepts a column-level `REFERENCES` but creates no constraint, so orphan rows would slip in. The script runs unchanged on MySQL 8 and PostgreSQL."],
         code: {
           lang: "sql",
           code: `CREATE TABLE customers (id BIGINT PRIMARY KEY, name VARCHAR(100) NOT NULL, email VARCHAR(254) NOT NULL UNIQUE);
 CREATE TABLE products (id BIGINT PRIMARY KEY, name VARCHAR(200) NOT NULL, price_cents INT NOT NULL CHECK (price_cents >= 0));
 CREATE TABLE orders (
   id BIGINT PRIMARY KEY,
-  customer_id BIGINT NOT NULL REFERENCES customers(id),
+  customer_id BIGINT NOT NULL,
   ordered_at TIMESTAMP NOT NULL,
-  shipping_city VARCHAR(100) NOT NULL          -- a fact about this order's delivery
+  shipping_city VARCHAR(100) NOT NULL,         -- a fact about this order's delivery
+  FOREIGN KEY (customer_id) REFERENCES customers(id)
 );
 CREATE TABLE order_items (
-  order_id BIGINT NOT NULL REFERENCES orders(id),
-  product_id BIGINT NOT NULL REFERENCES products(id),
+  order_id BIGINT NOT NULL,
+  product_id BIGINT NOT NULL,
   quantity INT NOT NULL CHECK (quantity > 0),
-  unit_price_cents INT NOT NULL,                -- price at purchase time
-  PRIMARY KEY (order_id, product_id)
+  unit_price_cents INT NOT NULL CHECK (unit_price_cents >= 0),   -- price at purchase time
+  PRIMARY KEY (order_id, product_id),
+  FOREIGN KEY (order_id) REFERENCES orders(id),
+  FOREIGN KEY (product_id) REFERENCES products(id)
 );`,
         },
       },
@@ -260,20 +263,24 @@ CREATE TABLE order_items (
       criteria: ["tags and lesson_tags tables", "lesson_prerequisites(lesson_id, requires_lesson_id) with a CHECK against self-reference", "Three working queries"],
       hints: ["A self-referencing junction table has two foreign keys to the same table."],
       solution: {
-        text: ["Prerequisites form a graph (lesson 2.3.2); the table stores edges, and cycle checks happen in application code or CI."],
+        text: ["Prerequisites form a graph (lesson 2.3.2); the table stores edges, and cycle checks happen in application code or CI.", "It builds on the lessons table from the hands-on schema and runs unchanged on MySQL 8 and PostgreSQL; as there, foreign keys are table-level clauses so MySQL really enforces them."],
         code: {
           lang: "sql",
           code: `CREATE TABLE tags (id BIGINT PRIMARY KEY, name VARCHAR(50) NOT NULL UNIQUE);
 CREATE TABLE lesson_tags (
-  lesson_id VARCHAR(16) NOT NULL REFERENCES lessons(id),
-  tag_id BIGINT NOT NULL REFERENCES tags(id),
-  PRIMARY KEY (lesson_id, tag_id)
+  lesson_id VARCHAR(16) NOT NULL,
+  tag_id BIGINT NOT NULL,
+  PRIMARY KEY (lesson_id, tag_id),
+  FOREIGN KEY (lesson_id) REFERENCES lessons(id),
+  FOREIGN KEY (tag_id) REFERENCES tags(id)
 );
 CREATE TABLE lesson_prerequisites (
-  lesson_id VARCHAR(16) NOT NULL REFERENCES lessons(id),
-  requires_lesson_id VARCHAR(16) NOT NULL REFERENCES lessons(id),
+  lesson_id VARCHAR(16) NOT NULL,
+  requires_lesson_id VARCHAR(16) NOT NULL,
   PRIMARY KEY (lesson_id, requires_lesson_id),
-  CHECK (lesson_id <> requires_lesson_id)
+  CHECK (lesson_id <> requires_lesson_id),
+  FOREIGN KEY (lesson_id) REFERENCES lessons(id),
+  FOREIGN KEY (requires_lesson_id) REFERENCES lessons(id)
 );
 
 SELECT l.* FROM lessons l JOIN lesson_tags lt ON lt.lesson_id = l.id JOIN tags t ON t.id = lt.tag_id WHERE t.name = 'docker';
@@ -289,7 +296,86 @@ SELECT l.id FROM lessons l WHERE NOT EXISTS (SELECT 1 FROM lesson_prerequisites 
       hints: ["valid_from / valid_to (NULL = current)."],
       solution: {
         text: [
-          "course_prices(course_id, price_cents, valid_from, valid_to NULL, changed_by). As-of query: WHERE course_id = ? AND valid_from <= :d AND (valid_to IS NULL OR valid_to > :d). Changing a price closes the current row (set valid_to) and inserts a new one in one transaction. Alternatives: SQL Server and MariaDB system-versioned temporal tables do this automatically; event sourcing stores every change as an event and derives state.",
+          "course_prices(course_id, price_cents, valid_from, valid_to NULL, changed_by). As-of query: WHERE course_id = ? AND valid_from <= :d AND (valid_to IS NULL OR valid_to > :d). Changing a price closes the current row (set valid_to) and inserts a new one in one transaction.",
+          "Non-overlapping ranges are protected in three layers. The change_price procedure is the only write path: it locks the course row, refuses a start date that is not after the latest one, closes the open row and inserts the new one in one transaction. A stored generated column plus UNIQUE allows at most one open row per course (a second NULL valid_to fails with error 1062). CHECK keeps every range non-empty. MySQL has no exclusion constraints; in PostgreSQL you would add `EXCLUDE USING gist (course_id WITH =, tsrange(valid_from, valid_to) WITH &&)` (needs the btree_gist extension) and let the database reject overlaps directly.",
+          "The rows double as the audit log: they are never deleted and only valid_to is ever updated, and each one records who changed the price, when and why. Enforce that with least privilege: grant the application `SELECT, INSERT, UPDATE (valid_to)` on the table instead of full UPDATE.",
+          "Alternatives: SQL Server and MariaDB system-versioned temporal tables keep history automatically (`FOR SYSTEM_TIME AS OF`); event sourcing stores every change as an event and derives state. Both are more machinery than finance needs for one price column.",
+        ],
+        code: {
+          lang: "sql",
+          file: "price_history.sql",
+          code: `-- Course price history: validity ranges, as-of query and audit trail (MySQL 8)
+CREATE TABLE courses (
+  id    BIGINT PRIMARY KEY,
+  slug  VARCHAR(80) NOT NULL UNIQUE,
+  title VARCHAR(200) NOT NULL                    -- price_cents moves out into course_prices
+);
+
+CREATE TABLE course_prices (
+  id          BIGINT AUTO_INCREMENT PRIMARY KEY,
+  course_id   BIGINT NOT NULL,
+  price_cents INT NOT NULL CHECK (price_cents >= 0),
+  valid_from  DATETIME NOT NULL,
+  valid_to    DATETIME NULL,                     -- NULL = current price; range is [valid_from, valid_to)
+  changed_by  VARCHAR(100) NOT NULL,             -- audit: who
+  changed_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,   -- audit: when it was recorded
+  reason      VARCHAR(200) NULL,
+  -- at most one open (current) row per course: NULLs do not collide in a UNIQUE index
+  current_course_id BIGINT AS (IF(valid_to IS NULL, course_id, NULL)) STORED,
+  CONSTRAINT valid_range CHECK (valid_to IS NULL OR valid_to > valid_from),
+  UNIQUE (current_course_id),
+  UNIQUE (course_id, valid_from),                -- also the index the as-of query uses
+  FOREIGN KEY (course_id) REFERENCES courses (id)
+);
+
+-- The only way to change a price: close the current row and open a new one, atomically
+DELIMITER //
+CREATE PROCEDURE change_price(IN p_course BIGINT, IN p_price INT, IN p_from DATETIME,
+                              IN p_by VARCHAR(100), IN p_reason VARCHAR(200))
+BEGIN
+  DECLARE v_course BIGINT;
+  DECLARE EXIT HANDLER FOR SQLEXCEPTION BEGIN ROLLBACK; RESIGNAL; END;
+  START TRANSACTION;
+  SELECT id INTO v_course FROM courses WHERE id = p_course FOR UPDATE;   -- one change per course at a time
+  IF EXISTS (SELECT 1 FROM course_prices WHERE course_id = p_course AND valid_from >= p_from) THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'new price must start after the current one';
+  END IF;
+  UPDATE course_prices SET valid_to = p_from WHERE course_id = p_course AND valid_to IS NULL;
+  INSERT INTO course_prices (course_id, price_cents, valid_from, changed_by, reason)
+  VALUES (p_course, p_price, p_from, p_by, p_reason);
+  COMMIT;
+END //
+DELIMITER ;
+
+INSERT INTO courses VALUES (1, 'databases', 'Databases in Depth');
+CALL change_price(1, 4900, '2026-01-01 00:00:00', 'asha@devatlas.dev', 'launch price');
+CALL change_price(1, 3900, '2026-03-15 00:00:00', 'ravi@devatlas.dev', 'spring sale');
+CALL change_price(1, 4900, '2026-04-01 00:00:00', 'asha@devatlas.dev', 'sale ended');
+-- Rewriting the past is rejected:
+-- CALL change_price(1, 2900, '2026-02-01 00:00:00', 'mallory', 'oops');
+-- ERROR 1644 (45000): new price must start after the current one
+
+-- Full history (the audit trail finance asks for)
+SELECT valid_from, valid_to, price_cents, changed_by, reason
+FROM course_prices WHERE course_id = 1 ORDER BY valid_from;
+
+-- As-of query: price of course 1 on several dates (no row = no price yet)
+SELECT d.as_of, p.price_cents, p.changed_by
+FROM (SELECT TIMESTAMP '2025-12-31 12:00:00' AS as_of
+      UNION ALL SELECT TIMESTAMP '2026-02-10 09:30:00'
+      UNION ALL SELECT TIMESTAMP '2026-03-15 00:00:00'
+      UNION ALL SELECT TIMESTAMP '2026-03-31 23:59:59'
+      UNION ALL SELECT TIMESTAMP '2026-10-18 08:00:00') AS d
+LEFT JOIN course_prices p
+       ON p.course_id = 1
+      AND p.valid_from <= d.as_of
+      AND (p.valid_to IS NULL OR p.valid_to > d.as_of)
+ORDER BY d.as_of;`,
+        },
+        output: "+---------------------+---------------------+-------------+-------------------+--------------+\n| valid_from          | valid_to            | price_cents | changed_by        | reason       |\n+---------------------+---------------------+-------------+-------------------+--------------+\n| 2026-01-01 00:00:00 | 2026-03-15 00:00:00 |        4900 | asha@devatlas.dev | launch price |\n| 2026-03-15 00:00:00 | 2026-04-01 00:00:00 |        3900 | ravi@devatlas.dev | spring sale  |\n| 2026-04-01 00:00:00 | NULL                |        4900 | asha@devatlas.dev | sale ended   |\n+---------------------+---------------------+-------------+-------------------+--------------+\n+---------------------+-------------+-------------------+\n| as_of               | price_cents | changed_by        |\n+---------------------+-------------+-------------------+\n| 2025-12-31 12:00:00 |        NULL | NULL              |\n| 2026-02-10 09:30:00 |        4900 | asha@devatlas.dev |\n| 2026-03-15 00:00:00 |        3900 | ravi@devatlas.dev |\n| 2026-03-31 23:59:59 |        3900 | ravi@devatlas.dev |\n| 2026-10-18 08:00:00 |        4900 | asha@devatlas.dev |\n+---------------------+-------------+-------------------+",
+        pitfalls: [
+          "Closed ranges (valid_to inclusive): a lookup exactly at the switch moment matches two rows. Use half-open [valid_from, valid_to)",
+          "Updating price_cents in place: the old value, and the fact that it ever existed, is gone",
         ],
       },
     },

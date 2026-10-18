@@ -207,6 +207,73 @@ app.MapGet("/me/progress", async (HttpContext http, ClaimsPrincipal user, WriteD
       solution: {
         text: [
           "1) Migration: add first_name, last_name nullable. 2) Deploy v2: on write, set name and the new columns; on read, prefer new columns, fall back to splitting name. 3) Batched backfill splitting name for rows where first_name IS NULL. 4) Deploy v3: read/write only new columns (still write name if other services read it). 5) After all consumers move, drop name in a later migration.",
+          "The script runs the whole plan on MySQL 8 in order. One extra migration sits between the backfill and v3: once every row has first_name, M2 makes first_name NOT NULL and name nullable, so v3 can insert rows without a name. It uses ALGORITHM=INPLACE, LOCK=NONE, so MySQL rebuilds the table while reads and writes continue, or fails immediately instead of taking a blocking lock.",
+          "Splitting rules are a product decision, not only SQL: everything after the first space becomes last_name ('Ravi Kumar Rao' → 'Kumar Rao'), and mononyms such as 'Cher' get a NULL last_name, which is why last_name stays nullable. The v2 read expression uses the same rule, so users see identical values before and after their row is backfilled.",
+          "Check before each step: before M2, `not_backfilled` must be 0; before M3, the old column must have no readers left (search the code, other services, reports and ETL jobs). MySQL 8.0.29+ can drop a column with ALGORITHM=INSTANT.",
+        ],
+        code: {
+          lang: "sql",
+          file: "split_name.sql",
+          code: `-- Split users.name into first_name + last_name without downtime (MySQL 8.0.29+)
+-- Every step is its own migration, deploy or job, run in this order. [vN] = app versions live during the step.
+
+-- The table today (v1 reads and writes only name)
+CREATE TABLE users (
+  id    BIGINT AUTO_INCREMENT PRIMARY KEY,
+  email VARCHAR(254) NOT NULL UNIQUE,
+  name  VARCHAR(200) NOT NULL
+);
+INSERT INTO users (email, name) VALUES
+  ('asha@x.dev', 'Asha Sharma'), ('ravi@x.dev', 'Ravi Kumar Rao'), ('cher@x.dev', 'Cher'), ('li@x.dev', 'Li Wei');
+
+-- STEP 1, migration M1 [v1]: expand. Nullable columns, metadata-only change, v1 does not notice.
+ALTER TABLE users ADD COLUMN first_name VARCHAR(100) NULL, ADD COLUMN last_name VARCHAR(100) NULL, ALGORITHM=INSTANT;
+
+-- STEP 2, deploy v2 [v1 -> v2 rolling]: dual-write, read new columns with a fallback to name.
+-- v2 signup writes both shapes:
+INSERT INTO users (email, name, first_name, last_name) VALUES ('meera@x.dev', 'Meera Iyer', 'Meera', 'Iyer');
+-- v2 read: works for old rows (not yet backfilled) and new rows alike
+SELECT id,
+       COALESCE(first_name, SUBSTRING_INDEX(name, ' ', 1)) AS first_name,
+       COALESCE(last_name, NULLIF(TRIM(SUBSTRING(name, CHAR_LENGTH(SUBSTRING_INDEX(name, ' ', 1)) + 1)), '')) AS last_name
+FROM users ORDER BY id;
+
+-- STEP 3, backfill job [v2]: small batches by primary key range, one short transaction each, throttled.
+-- Resumable: it only touches rows where first_name IS NULL.
+DELIMITER //
+CREATE PROCEDURE backfill_names(IN batch_size INT, IN pause_seconds DECIMAL(4,2))
+BEGIN
+  DECLARE last_id BIGINT DEFAULT 0;
+  DECLARE max_id BIGINT;
+  SELECT COALESCE(MAX(id), 0) INTO max_id FROM users;
+  WHILE last_id < max_id DO
+    UPDATE users
+       SET first_name = SUBSTRING_INDEX(name, ' ', 1),
+           last_name  = NULLIF(TRIM(SUBSTRING(name, CHAR_LENGTH(SUBSTRING_INDEX(name, ' ', 1)) + 1)), '')
+     WHERE id > last_id AND id <= last_id + batch_size AND first_name IS NULL;   -- autocommit: one txn per batch
+    SET last_id = last_id + batch_size;
+    DO SLEEP(pause_seconds);                      -- protect live traffic and replica lag
+  END WHILE;
+END //
+DELIMITER ;
+CALL backfill_names(2, 0.01);                     -- production: batch_size 1000 or so
+SELECT COUNT(*) AS not_backfilled FROM users WHERE first_name IS NULL;   -- must be 0 before step 4
+
+-- STEP 4, migration M2 [v2]: first_name is now always set; name may stop being written.
+-- In-place rebuild with concurrent reads and writes (fails fast instead of locking if that is not possible).
+ALTER TABLE users MODIFY first_name VARCHAR(100) NOT NULL, MODIFY name VARCHAR(200) NULL, ALGORITHM=INPLACE, LOCK=NONE;
+
+-- STEP 5, deploy v3 [v2 -> v3 rolling]: read and write only first_name/last_name. v2 still writes name; fine.
+INSERT INTO users (email, first_name, last_name) VALUES ('sam@x.dev', 'Sam', 'Okafor');
+
+-- STEP 6, migration M3, a LATER release [v3 only, and every other reader of users.name has moved]: contract.
+ALTER TABLE users DROP COLUMN name, ALGORITHM=INSTANT;
+SELECT id, email, first_name, last_name FROM users ORDER BY id;`,
+        },
+        output: "+----+------------+-----------+\n| id | first_name | last_name |\n+----+------------+-----------+\n|  1 | Asha       | Sharma    |\n|  2 | Ravi       | Kumar Rao |\n|  3 | Cher       | NULL      |\n|  4 | Li         | Wei       |\n|  5 | Meera      | Iyer      |\n+----+------------+-----------+\n+----------------+\n| not_backfilled |\n+----------------+\n|              0 |\n+----------------+\n+----+-------------+------------+-----------+\n| id | email       | first_name | last_name |\n+----+-------------+------------+-----------+\n|  1 | asha@x.dev  | Asha       | Sharma    |\n|  2 | ravi@x.dev  | Ravi       | Kumar Rao |\n|  3 | cher@x.dev  | Cher       | NULL      |\n|  4 | li@x.dev    | Li         | Wei       |\n|  5 | meera@x.dev | Meera      | Iyer      |\n|  6 | sam@x.dev   | Sam        | Okafor    |\n+----+-------------+------------+-----------+",
+        pitfalls: [
+          "Making name nullable in the same release that stops writing it: old v2 pods still running during the rollout are fine, but any code path that still reads name must handle NULL first",
+          "One UPDATE for the whole table as the backfill: a long transaction, a long lock and a burst of replica lag",
         ],
       },
     },

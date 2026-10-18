@@ -248,7 +248,139 @@ export function Profile({ user }: { user: { name: string; website: string; comme
       criteria: ["No violations in normal use", "Enforced header in place", "Proof that an inline <script> is blocked (console error)"],
       hints: ["Vite production builds avoid inline scripts by default; check third-party embeds."],
       solution: {
-        text: ["Typical issues: Google Fonts (allow fonts.googleapis.com for styles and fonts.gstatic.com for fonts), analytics scripts (add their origin to script-src and connect-src), inline style attributes from libraries (may need 'unsafe-inline' for style-src or nonces). Then switch the header name from Report-Only to enforcing."],
+        text: [
+          "Start in Content-Security-Policy-Report-Only with a strict policy: the browser reports what would be blocked but still runs it, so nothing breaks while you look. On this build the only violation was the small inline theme script in index.html (the no-flash script from 3.2.1). Vite's own output is an external module script, so it is covered by 'self'.",
+          "Fix it without 'unsafe-inline': the server hashes each inline <script> in dist/index.html at startup and adds 'sha256-…' to script-src, so the policy always matches the build (the same hash can be pasted into the nginx add_header line from the hands-on). Typical other fixes: for Google Fonts add https://fonts.googleapis.com to style-src and https://fonts.gstatic.com to font-src; for analytics add its origin to script-src and connect-src; replace inline style attributes set by libraries or use nonces. Then switch the header name to Content-Security-Policy.",
+          "check-csp.mjs serves the real build three times and drives it in Chromium 141. (1) Report-only without the hash: the app works and one script-src-elem violation for the inline script is reported (the server also received it at /csp-report). (2) With the hash: no violations in normal use, including clicking 'Mark complete'. (3) Enforced, with a script injected the way an XSS payload would be: it does not run and Chrome logs the 'Refused to execute inline script' error.",
+        ],
+        code: {
+          lang: "javascript",
+          file: "server.mjs + check-csp.mjs (+ inline script in index.html)",
+          code: `// file: index.html (inside <head>, the only inline script)
+// <script>try { const t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch {}</script>
+
+// file: server.mjs
+// Serves the Vite build (dist/) with a Content-Security-Policy.
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import http from "node:http";
+import path from "node:path";
+
+const DIST = path.resolve("dist");
+const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".json": "application/json" };
+
+// Hash every inline <script> in index.html so the policy matches the build without 'unsafe-inline'
+async function inlineScriptHashes() {
+  const html = await readFile(path.join(DIST, "index.html"), "utf8");
+  return [...html.matchAll(/<script>([\\s\\S]*?)<\\/script>/g)]
+    .map((m) => \`'sha256-\${createHash("sha256").update(m[1]).digest("base64")}'\`);
+}
+
+export async function startServer({ port = 8080, enforce = false, hashInline = true } = {}) {
+  const hashes = hashInline ? await inlineScriptHashes() : [];
+  const policy = [
+    "default-src 'self'",
+    \`script-src 'self' \${hashes.join(" ")}\`.trim(),
+    "style-src 'self'",
+    "img-src 'self' data:",
+    "connect-src 'self'",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "frame-ancestors 'none'",
+    "form-action 'self'",
+    "report-uri /csp-report",
+  ].join("; ");
+  const header = enforce ? "Content-Security-Policy" : "Content-Security-Policy-Report-Only";
+
+  const server = http.createServer(async (req, res) => {
+    if (req.method === "POST" && req.url === "/csp-report") {      // violation reports from browsers
+      let body = "";
+      for await (const chunk of req) body += chunk;
+      console.error("CSP report:", body.slice(0, 500));
+      return res.writeHead(204).end();
+    }
+    const urlPath = decodeURIComponent(new URL(req.url ?? "/", "http://x").pathname);
+    let file = path.join(DIST, urlPath);
+    if (!file.startsWith(DIST)) return res.writeHead(400).end();      // no path traversal
+    if (!path.extname(file)) file = path.join(DIST, "index.html");   // SPA fallback
+    try {
+      const body = await readFile(file);
+      res.writeHead(200, {
+        "Content-Type": TYPES[path.extname(file)] ?? "application/octet-stream",
+        [header]: policy,
+        "X-Content-Type-Options": "nosniff",
+      });
+      res.end(body);
+    } catch {
+      res.writeHead(404).end("Not found");
+    }
+  });
+  await new Promise((resolve) => server.listen(port, resolve));
+  return { server, policy, header };
+}
+
+if (import.meta.url === \`file://\${process.argv[1]}\`) {
+  const { header, policy } = await startServer({ enforce: process.env.CSP_ENFORCE === "1" });
+  console.log(\`http://localhost:8080\\n\${header}: \${policy}\`);
+}
+
+// file: check-csp.mjs
+// CHROME_PATH=/path/to/chrome node check-csp.mjs   (after npm run build)
+import { chromium } from "playwright-core";
+import { startServer } from "./server.mjs";
+
+const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH });
+
+async function visit(label, options, attack = false) {
+  const { server, header } = await startServer({ port: 8081, ...options });
+  const page = await browser.newPage();
+  const messages = [];
+  page.on("console", (m) => { if (m.type() === "error" || m.type() === "warning") messages.push(m.text()); });
+  await page.addInitScript(() => {
+    window.__violations = [];
+    document.addEventListener("securitypolicyviolation", (e) => window.__violations.push(\`\${e.effectiveDirective} blocked \${e.blockedURI}\`));
+  });
+  await page.goto("http://localhost:8081/");
+  await page.getByRole("button", { name: "Mark complete" }).first().click();       // normal use
+  if (attack) {
+    await page.evaluate(() => {                                                    // simulate an injected script
+      const s = document.createElement("script");
+      s.textContent = "window.__pwned = true";
+      document.body.append(s);
+    });
+  }
+  await page.waitForTimeout(300);
+  const violations = await page.evaluate(() => window.__violations);
+  const pwned = await page.evaluate(() => window.__pwned === true);
+  console.log(\`\\n[\${label}] \${header}\`);
+  console.log(\`  app rendered: \${await page.getByText("1 of 3 completed").isVisible()}  violations: \${violations.length ? violations.join("; ") : "none"}\`);
+  if (attack) console.log(\`  injected script ran: \${pwned}\`);
+  for (const m of messages.filter((t) => !t.startsWith("Failed to load resource"))) console.log(\`  console: \${m}\`);   // skip favicon 404
+  await page.close();
+  server.close();
+}
+
+await visit("1. report-only, no hash", { enforce: false, hashInline: false });
+await visit("2. report-only, inline theme script hashed", { enforce: false, hashInline: true });
+await visit("3. enforced, plus an injected inline script", { enforce: true, hashInline: true }, true);
+await browser.close();`,
+        },
+        output: `$ node check-csp.mjs
+[1. report-only, no hash] Content-Security-Policy-Report-Only
+  app rendered: true  violations: script-src-elem blocked inline
+
+[2. report-only, inline theme script hashed] Content-Security-Policy-Report-Only
+  app rendered: true  violations: none
+
+[3. enforced, plus an injected inline script] Content-Security-Policy
+  app rendered: true  violations: script-src-elem blocked inline
+  injected script ran: false
+  console: Refused to execute inline script because it violates the following Content Security Policy directive: "script-src 'self' 'sha256-bdyznYulzSGHB3rRO5uV1nvlyFAP4xEFMksag9Ti9zA='". Either the 'unsafe-inline' keyword, a hash ('sha256-p9P13V/N9ceuJE9MsaJmuDIuVOyygVMmpOdZFG+Zcvs='), or a nonce ('nonce-...') is required to enable inline execution.`,
+        pitfalls: [
+          "Adding 'unsafe-inline' to script-src to silence the report: it re-enables exactly the injected scripts CSP is meant to stop",
+          "Hard-coding the hash: any edit to the inline script breaks it; compute it from the build",
+          "Report-only forever: it protects nobody until the header is switched to enforcing",
+        ],
       },
     },
     challenge: {

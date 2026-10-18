@@ -345,7 +345,276 @@ protected = APIRouter(dependencies=[Depends(require_service_key)])
       criteria: ["OpenAPI lists every endpoint with schemas", "pytest suite passes in CI", "Container runs as non-root"],
       hints: ["Use APIRouter per feature: routers/ask.py, routers/quiz.py."],
       solution: {
-        text: ["The stub /ask is replaced with real retrieval and LLM calls in Phase 7; the API contract stays the same, so the .NET API and React app do not change."],
+        text: [
+          "The stub /ask is replaced with real retrieval and LLM calls in Phase 7; the API contract stays the same, so the .NET API and React app do not change.",
+          "Each feature has its own APIRouter (ask, quiz, suggest). main.py mounts all of them under one parent router with `dependencies=[Depends(require_service_key)]`, so a new feature router is protected as soon as it is included. /health sits on the app itself and stays public for container probes. The key is a SecretStr compared with secrets.compare_digest; it has no default, so a container started without DEVATLAS_SERVICE_KEY fails during startup with a validation error instead of serving requests.",
+          "The /suggest trie comes from lesson 2.3.3 (devatlas_ai/suggest.py, unchanged). It is built once in the lifespan and read from app.state.",
+          "The tests cover the public health check; 401, 403 and 200 for the service key; 422 field errors; the SSE framing of /ask/stream; quiz bounds; suggest; the exact list of paths in the OpenAPI document; and the startup failure without a key. The Docker image runs as uid 10001. Built and run locally, it answered /health, returned 401 for /quiz without the key, `docker exec ... id` printed uid=10001(app), and starting it without the key failed with 'service_key Field required'.",
+        ],
+        code: {
+          lang: "python",
+          code: `# ---- services/ai/devatlas_ai/settings.py ----
+from functools import lru_cache
+from typing import Annotated
+
+from fastapi import Depends
+from pydantic import SecretStr
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="DEVATLAS_")
+    service_key: SecretStr            # required: DEVATLAS_SERVICE_KEY, never logged or printed
+    max_question_chars: int = 500
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
+
+
+SettingsDep = Annotated[Settings, Depends(get_settings)]
+
+# ---- services/ai/devatlas_ai/security.py ----
+import secrets
+from typing import Annotated
+
+from fastapi import Header, HTTPException
+
+from devatlas_ai.settings import SettingsDep
+
+
+def require_service_key(settings: SettingsDep, x_service_key: Annotated[str | None, Header()] = None) -> None:
+    if x_service_key is None:
+        raise HTTPException(status_code=401, detail="Missing X-Service-Key")
+    if not secrets.compare_digest(x_service_key.encode(), settings.service_key.get_secret_value().encode()):
+        raise HTTPException(status_code=403, detail="Invalid service key")
+
+# ---- services/ai/devatlas_ai/routers/ask.py ----
+import asyncio
+from collections.abc import AsyncIterator
+
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
+
+from devatlas_ai.settings import SettingsDep
+
+router = APIRouter(tags=["ask"])
+
+
+class AskRequest(BaseModel):
+    question: str = Field(min_length=3, max_length=2000)
+    lesson_id: str | None = Field(default=None, pattern=r"^\\d+\\.\\d+\\.\\d+$")
+    top_k: int = Field(default=3, ge=1, le=10)
+
+
+class Citation(BaseModel):
+    lesson_id: str
+    title: str
+
+
+class AskResponse(BaseModel):
+    answer: str
+    citations: list[Citation]
+
+
+@router.post("/ask")
+async def ask(body: AskRequest, settings: SettingsDep) -> AskResponse:
+    if len(body.question) > settings.max_question_chars:
+        raise HTTPException(status_code=413, detail="Question too long")
+    # Stub until Phase 7 adds retrieval + the LLM call; the contract stays the same.
+    return AskResponse(answer=f"(demo) You asked: {body.question}",
+                       citations=[Citation(lesson_id="0.3.1", title="Git: commits, branches, merges and conflicts")])
+
+
+async def fake_llm_tokens(question: str) -> AsyncIterator[str]:
+    for word in f"Here is how to approach: {question}".split():
+        await asyncio.sleep(0.01)                     # stands in for awaiting the LLM stream
+        yield word + " "
+
+
+@router.post("/ask/stream", response_class=StreamingResponse)
+async def ask_stream(body: AskRequest) -> StreamingResponse:
+    async def events() -> AsyncIterator[str]:
+        async for token in fake_llm_tokens(body.question):
+            yield f"data: {token}\\n\\n"
+        yield "event: done\\ndata: \\n\\n"
+    return StreamingResponse(events(), media_type="text/event-stream")
+
+# ---- services/ai/devatlas_ai/routers/quiz.py ----
+from typing import Literal
+
+from fastapi import APIRouter
+from pydantic import BaseModel, Field
+
+router = APIRouter(tags=["quiz"])
+
+
+class QuizRequest(BaseModel):
+    lesson_id: str = Field(pattern=r"^\\d+\\.\\d+\\.\\d+$")
+    count: int = Field(ge=1, le=10)
+    difficulty: Literal["easy", "medium", "hard"] = "medium"
+
+
+class Question(BaseModel):
+    prompt: str
+    options: list[str]
+    answer: int
+
+
+@router.post("/quiz")
+async def make_quiz(body: QuizRequest) -> list[Question]:
+    return [Question(prompt=f"Q{i + 1} about {body.lesson_id} ({body.difficulty})", options=["A", "B", "C", "D"], answer=0)
+            for i in range(body.count)]
+
+# ---- services/ai/devatlas_ai/routers/suggest.py ----
+from typing import Annotated
+
+from fastapi import APIRouter, Query, Request
+from pydantic import BaseModel
+
+from devatlas_ai.suggest import Suggestion, SuggestTrie   # the trie from lesson 2.3.3
+
+router = APIRouter(tags=["suggest"])
+
+CONTENT = [Suggestion("FastAPI for AI and data services", "lesson", 900), Suggestion("Pydantic", "term", 700),
+           Suggestion("Dependency injection", "lesson", 650), Suggestion("Docker images", "lesson", 500)]
+
+
+def build_trie() -> SuggestTrie:
+    trie = SuggestTrie()
+    for item in CONTENT:                               # in the service: loaded from the content files
+        trie.insert(item)
+    return trie
+
+
+class SuggestionOut(BaseModel):
+    text: str
+    kind: str
+
+
+@router.get("/suggest", response_model=list[SuggestionOut])
+def suggest(request: Request, q: Annotated[str, Query(min_length=1, max_length=64)]) -> list[Suggestion]:
+    return request.app.state.trie.suggest(q, k=5)
+
+# ---- services/ai/devatlas_ai/main.py ----
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
+from fastapi import APIRouter, Depends, FastAPI
+
+from devatlas_ai.routers import ask, quiz, suggest
+from devatlas_ai.security import require_service_key
+from devatlas_ai.settings import get_settings
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    get_settings()                                     # missing DEVATLAS_SERVICE_KEY fails at startup, not per request
+    app.state.trie = suggest.build_trie()
+    yield
+
+
+def create_app() -> FastAPI:
+    app = FastAPI(title="DevAtlas AI service", version="0.1.0", lifespan=lifespan)
+
+    @app.get("/health", tags=["ops"])
+    async def health() -> dict[str, str]:
+        return {"status": "ok"}
+
+    protected = APIRouter(dependencies=[Depends(require_service_key)])   # every feature route needs the key
+    for feature in (ask.router, quiz.router, suggest.router):
+        protected.include_router(feature)
+    app.include_router(protected)
+    return app
+
+
+app = create_app()                                     # uvicorn devatlas_ai.main:app
+
+# ---- services/ai/tests/test_api.py ----
+from collections.abc import Iterator
+
+import pytest
+from fastapi.testclient import TestClient
+from pydantic import ValidationError
+
+from devatlas_ai.main import create_app
+from devatlas_ai.settings import get_settings
+
+KEY = {"X-Service-Key": "test-key"}
+
+
+@pytest.fixture
+def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    monkeypatch.setenv("DEVATLAS_SERVICE_KEY", "test-key")
+    get_settings.cache_clear()
+    with TestClient(create_app()) as c:
+        yield c
+    get_settings.cache_clear()
+
+
+def test_health_is_public(client: TestClient) -> None:
+    assert client.get("/health").json() == {"status": "ok"}
+
+
+@pytest.mark.parametrize(("headers", "status"), [({}, 401), ({"X-Service-Key": "wrong"}, 403), (KEY, 200)])
+def test_service_key(client: TestClient, headers: dict[str, str], status: int) -> None:
+    assert client.post("/ask", json={"question": "What is PKCE?"}, headers=headers).status_code == status
+
+
+def test_ask_validates_input(client: TestClient) -> None:
+    r = client.post("/ask", json={"question": "Hi", "top_k": 50}, headers=KEY)
+    assert r.status_code == 422
+    assert [e["loc"] for e in r.json()["detail"]] == [["body", "question"], ["body", "top_k"]]
+
+
+def test_stream_sends_sse_events(client: TestClient) -> None:
+    with client.stream("POST", "/ask/stream", json={"question": "undo a commit"}, headers=KEY) as r:
+        assert r.headers["content-type"].startswith("text/event-stream")
+        body = "".join(r.iter_text())
+    assert body.startswith("data: Here ") and body.endswith("event: done\\ndata: \\n\\n")
+
+
+def test_quiz_and_suggest(client: TestClient) -> None:
+    assert len(client.post("/quiz", json={"lesson_id": "4.2.1", "count": 3}, headers=KEY).json()) == 3
+    assert client.post("/quiz", json={"lesson_id": "4.2.1", "count": 11}, headers=KEY).status_code == 422
+    assert client.get("/suggest", params={"q": "py"}, headers=KEY).json() == [{"text": "Pydantic", "kind": "term"}]
+
+
+def test_openapi_lists_every_endpoint(client: TestClient) -> None:
+    paths = client.get("/openapi.json").json()["paths"]
+    assert sorted(paths) == ["/ask", "/ask/stream", "/health", "/quiz", "/suggest"]
+
+
+def test_missing_service_key_fails_at_startup(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("DEVATLAS_SERVICE_KEY", raising=False)
+    get_settings.cache_clear()
+    with pytest.raises(ValidationError), TestClient(create_app()):
+        pass
+
+# ---- services/ai/requirements.txt ----
+fastapi==0.146.0
+uvicorn[standard]==0.54.0
+pydantic-settings==2.16.0
+
+# ---- services/ai/Dockerfile ----
+FROM python:3.13-slim
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY devatlas_ai ./devatlas_ai
+RUN useradd --create-home --uid 10001 app
+USER app
+EXPOSE 8000
+CMD ["uvicorn", "devatlas_ai.main:app", "--host", "0.0.0.0", "--port", "8000"]`,
+        },
+        output: "$ python -m pytest -q -p no:warnings\n.........                                                                [100%]\n9 passed",
+        pitfalls: [
+          "Recent Starlette versions print a deprecation warning when TestClient runs on httpx and suggest installing httpx2; the tests pass either way (the output above hides warnings with -p no:warnings).",
+          "get_settings is cached with lru_cache, so tests that change environment variables must call get_settings.cache_clear().",
+        ],
       },
     },
   },

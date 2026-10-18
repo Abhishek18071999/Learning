@@ -329,7 +329,117 @@ async fn stats(State(state): State<AppState>) -> Json<HashMap<String, usize>> {
       criteria: ["Layers applied to the router", "Timeout returns a 408/503-style response (depending on configuration)", "Request id present in response headers and logs"],
       hints: ["cargo add tower-http --features trace,timeout,request-id ; cargo add tracing tracing-subscriber"],
       solution: {
-        text: ["Layers wrap the router like middleware; ordering matters (request id should be set before tracing so logs include it). Check the tower-http docs for the exact constructor signatures of your version."],
+        text: [
+          "Layers wrap the router like middleware, and order matters. In a ServiceBuilder the first layer is the outermost. SetRequestIdLayer comes before TraceLayer, so the span can read the id. PropagateRequestIdLayer comes before TimeoutLayer, so a 408 produced by the timeout passes back through it and still carries the id. Checked against tower-http 0.7.1 with axum 0.8.9: `TimeoutLayer::new(duration)` is deprecated since tower-http 0.6.7; `with_status_code` makes the status explicit.",
+          "The custom make_span_with puts method, URI and request id on the span, so every log line inside the request has them. One request with `curl -H 'x-request-id: demo-1' localhost:3000/items/42` produced (timestamps removed): `DEBUG request{method=GET uri=/items/42 request_id=\"demo-1\"}: tower_http::trace::on_response: finished processing request latency=0 ms status=404`, and the response carried `x-request-id: demo-1`.",
+          "The tests use oneshot as in the lesson. The timeout test runs on a paused Tokio clock (`start_paused = true`, which needs tokio's test-util feature), so a handler sleeping 10 seconds hits the 5-second timeout instantly in virtual time.",
+        ],
+        code: {
+          lang: "rust", file: "src/main.rs",
+          code: `// cargo add tower --features util
+// cargo add tower-http --features trace,timeout,request-id
+// cargo add tracing ; cargo add tracing-subscriber --features env-filter
+// cargo add --dev tokio --features test-util,macros,rt     (paused clock in the timeout test)
+//
+// src/main.rs: NewsItem, AppState, AppError and the handlers are unchanged from the lesson.
+use std::{collections::HashMap, sync::Arc, time::Duration};
+
+use axum::{
+    extract::{Path, Query, State},
+    http::{Request, StatusCode},
+    response::{IntoResponse, Response},
+    routing::get,
+    Json, Router,
+};
+use serde::{Deserialize, Serialize};
+use tokio::sync::RwLock;
+use tower::ServiceBuilder;
+use tower_http::{
+    request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},
+    timeout::TimeoutLayer,
+    trace::TraceLayer,
+};
+
+// ... structs and handlers from the lesson ...
+
+fn routes(state: AppState) -> Router {
+    Router::new()
+        .route("/health", get(|| async { "ok" }))
+        .route("/items", get(list_items).post(create_item))
+        .route("/items/{id}", get(get_item))
+        .with_state(state)
+}
+
+/// Middleware stack. ServiceBuilder applies layers top to bottom, outermost first:
+/// the id is set before tracing (so the span has it) and copied to the response
+/// after the timeout layer (so a 408 also carries it).
+fn with_middleware(router: Router) -> Router {
+    router.layer(
+        ServiceBuilder::new()
+            .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid)) // keeps a caller's x-request-id, else a UUID
+            .layer(TraceLayer::new_for_http().make_span_with(|req: &Request<_>| {
+                let request_id = req.headers().get("x-request-id").and_then(|v| v.to_str().ok()).unwrap_or("-");
+                tracing::info_span!("request", method = %req.method(), uri = %req.uri(), request_id)
+            }))
+            .layer(PropagateRequestIdLayer::x_request_id())
+            .layer(TimeoutLayer::with_status_code(StatusCode::REQUEST_TIMEOUT, Duration::from_secs(5))),
+    )
+}
+
+fn app(state: AppState) -> Router {
+    with_middleware(routes(state))
+}
+
+#[tokio::main]
+async fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "news_service=info,tower_http=debug".into()),
+        )
+        .init();
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.expect("bind port 3000");
+    tracing::info!("listening on {}", listener.local_addr().expect("local addr"));
+    axum::serve(listener, app(AppState::default()))
+        .with_graceful_shutdown(async { tokio::signal::ctrl_c().await.ok(); })
+        .await
+        .expect("server error");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn generates_a_request_id_when_missing() {
+        let res = app(AppState::default()).oneshot(Request::get("/health").body(Body::empty()).unwrap()).await.unwrap();
+        let id = res.headers()["x-request-id"].to_str().unwrap();
+        assert_eq!(id.len(), 36, "expected a UUID, got {id}");
+    }
+
+    #[tokio::test]
+    async fn propagates_the_callers_request_id() {
+        let req = Request::get("/items/7").header("x-request-id", "req-123").body(Body::empty()).unwrap();
+        let res = app(AppState::default()).oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+        assert_eq!(res.headers()["x-request-id"], "req-123");
+    }
+
+    #[tokio::test(start_paused = true)] // paused clock: the 10 s sleep finishes instantly in virtual time
+    async fn slow_handlers_get_408_with_the_request_id() {
+        let slow = Router::new().route("/slow", get(|| async {
+            tokio::time::sleep(Duration::from_secs(10)).await;
+            "too late"
+        }));
+        let req = Request::get("/slow").header("x-request-id", "req-slow").body(Body::empty()).unwrap();
+        let res = with_middleware(slow).oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::REQUEST_TIMEOUT);
+        assert_eq!(res.headers()["x-request-id"], "req-slow");
+    }
+}`,
+        },
+        output: "$ cargo test -q\n\nrunning 3 tests\n...\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
       },
     },
     challenge: {

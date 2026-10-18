@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { allStubs, phases } from "../data/curriculum";
-import { lessons } from "../data/lessons";
+import { lessons } from "./allLessons";
 import { milestones } from "../data/capstone";
 import { classify } from "../data/newsTopics";
 

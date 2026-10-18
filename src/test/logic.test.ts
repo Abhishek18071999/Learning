@@ -3,6 +3,7 @@ import { tokenize } from "../lib/highlight";
 import { buildRoadmap, nextLessonId, progressCard, totalWeeks } from "../lib/roadmap";
 import { initialState, nextCard, streak, type Profile } from "../lib/store";
 import { lessons } from "../data/lessons";
+import { lessons as fullLessons } from "./allLessons";
 
 const profile: Profile = {
   name: "Asha",
@@ -68,7 +69,7 @@ describe("roadmap", () => {
 
 describe("highlighter", () => {
   it("never loses characters", () => {
-    for (const l of lessons)
+    for (const l of fullLessons)
       for (const s of l.handsOn)
         if (s.code) expect(tokenize(s.code.code, s.code.lang).map((t) => t.text).join("")).toBe(s.code.code);
   });

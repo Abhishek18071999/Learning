@@ -146,13 +146,7 @@ export function goalLabel(g: string) {
 
 function Landing() {
   const totalLessons = phases.reduce((n, p) => n + p.modules.reduce((m, mod) => m + mod.lessons.length, 0), 0);
-  const codeSamples = lessons.reduce(
-    (n, l) =>
-      n +
-      l.handsOn.filter((s) => s.code).length +
-      (["basic", "intermediate", "challenge", "capstone"] as const).filter((t) => l.homework[t].solution.code).length,
-    0,
-  );
+  const codeSamples = lessons.reduce((n, l) => n + l.codeSamples, 0);
   return (
     <div className="page landing">
       <section className="hero">

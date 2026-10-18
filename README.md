@@ -23,7 +23,7 @@ All learner data stays in the browser (localStorage). There is no backend and no
 
 ## Run it
 
-Requires Node 20+.
+Requires Node 22.6+ (the lesson metadata generator uses `--experimental-strip-types`).
 
 ```bash
 npm install
@@ -32,6 +32,8 @@ npm test           # content integrity + logic tests
 npm run build      # static site in dist/
 ```
 
+`dev`, `test` and `build` first run `npm run gen:meta`, which regenerates `src/data/lessonMeta.generated.ts`.
+
 The build is a static site with hash routing, so `dist/` can be hosted anywhere: GitHub Pages, S3 + CloudFront, Azure Static Web Apps or nginx.
 
 ## Project layout
@@ -39,7 +41,8 @@ The build is a static site with hash routing, so `dist/` can be hosted anywhere:
 ```
 src/
   data/curriculum.ts     11 phases, modules and lesson objectives
-  data/lessons/          full lessons, one file each, typed by src/types.ts
+  data/lessons/          full lessons, one file each, typed by src/types.ts; loaded on demand
+  data/lessonMeta.generated.ts  titles, terms, quiz questions etc. for every lesson (generated, bundled up front)
   data/capstone.ts       capstone parts, milestones, Mermaid architecture
   data/newsTopics.ts     topic rules and industry notes for Tech News
   data/diagnostic.ts     onboarding placement questions
@@ -51,6 +54,6 @@ src/
 ## Adding a lesson
 
 1. Create `src/data/lessons/lX-Y-Z.ts` exporting a `Lesson` (see `src/types.ts`). Copy an existing lesson for the structure.
-2. Register it in `src/data/lessons/index.ts`, in curriculum order.
+2. Add it to `src/data/curriculum.ts` if it is not listed yet. `src/data/lessons/index.ts` picks the file up automatically and orders it by the curriculum; run `npm run gen:meta` (or any of `dev`, `test`, `build`) to refresh the generated metadata.
 3. Run `npm test`. The content tests check that every section exists, there are at least 4 mistakes, 3 interview questions and 3 quick-check questions, answer indexes are valid, every homework tier has a model solution, and links use https.
 4. Run every code sample yourself and paste real output. Never invent APIs, flags or versions.
