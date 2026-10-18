@@ -1,3 +1,6 @@
+import { phases } from "./curriculum";
+import { lessons } from "./lessons";
+
 // DevAtlas capstone: the real application the learner builds across the course.
 
 export interface Milestone {
@@ -19,18 +22,14 @@ export const capstoneParts = [
   { part: "DevOps", tech: "Docker, GitHub Actions, Terraform, Kubernetes", does: "CI/CD, deploy to AWS and Azure, monitoring and alerts" },
 ];
 
-export const milestones: Milestone[] = [
-  { id: "c1", lessonId: "0.1.1", part: "Docs", title: "Repository and request-journey diagram", criteria: ["README states the goal", "docs/architecture.md with a Mermaid sequence diagram"] },
-  { id: "c2", lessonId: "0.2.1", part: "Tooling", title: "scripts/setup.sh tool checker", criteria: ["Detects git, node, docker, dotnet, python3", "Non-zero exit when something is missing"] },
-  { id: "c3", lessonId: "0.3.1", part: "Tooling", title: "GitHub hygiene and first PR", criteria: [".gitignore for all stacks", "main protected", "First merged PR"] },
-  { id: "c4", lessonId: "1.1.1", part: "AI service", title: "Python AI service skeleton", criteria: ["services/ai with tests", "pytest and mypy pass"] },
-  { id: "c5", lessonId: "1.2.1", part: "Frontend", title: "Resilient dashboard data loader", criteria: ["Promise.allSettled", "Per-request timeouts", "Partial data rendering"] },
-  { id: "c6", lessonId: "2.1.1", part: "AI service", title: "O(n) article dedupe", criteria: ["Set-based lookup", "Benchmark in README"] },
-  { id: "c7", lessonId: "5.1.1", part: "Relational data", title: "Progress schema with indexes", criteria: ["PKs and FKs", "3 hot queries with matching indexes", "EXPLAIN verified"] },
-  { id: "c8", lessonId: "7.1.1", part: "AI service", title: "LLM client wrapper", criteria: ["Keys from env", "Usage logging", "Mocked unit test"] },
-  { id: "c9", lessonId: "7.2.1", part: "AI service", title: "'Ask the course' RAG endpoint", criteria: ["Citations link to lessons", "Not-found path", "Retrieval eval in CI"] },
-  { id: "c10", lessonId: "9.1.1", part: "DevOps", title: "One-command local stack", criteria: ["Compose with healthchecks", ".env.example, no secrets", "Run-locally README"] },
-];
+// One milestone per lesson, taken from that lesson's capstone homework step.
+export const milestones: Milestone[] = lessons.map((l) => ({
+  id: `c-${l.id}`,
+  lessonId: l.id,
+  part: phases.find((p) => l.id.startsWith(`${p.id}.`))?.title ?? "",
+  title: l.homework.capstone.title.replace(/^DevAtlas( step \d+)?:\s*/i, ""),
+  criteria: l.homework.capstone.criteria,
+}));
 
 /** Mermaid source for the target architecture, kept here so learners can paste it into their repo. */
 export const architectureMermaid = `flowchart LR

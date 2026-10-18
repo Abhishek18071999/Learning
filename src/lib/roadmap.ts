@@ -1,5 +1,6 @@
 import { phases } from "../data/curriculum";
 import { lessons } from "../data/lessons";
+import { milestones } from "../data/capstone";
 import type { Area, Phase } from "../types";
 import type { Goal, Profile, State } from "./store";
 
@@ -93,7 +94,7 @@ export function progressCard(state: State): string {
     ...lessons.filter((l) => state.lessons[l.id]?.quizScore !== undefined).map((l) => `${l.id}: ${Math.round((state.lessons[l.id].quizScore ?? 0) * 100)}%`),
     ...state.quizzes.slice(-3).map((q) => `${q.topic}: ${q.score}/${q.total}`),
   ].slice(-5);
-  const capstoneDone = Object.values(state.milestones).filter(Boolean).length;
+  const capstoneDone = milestones.filter((m) => state.milestones[m.id]).length;
   const pad = (s: string) => s.padEnd(20);
   return [
     "PROGRESS CARD",
@@ -103,7 +104,7 @@ export function progressCard(state: State): string {
     `${pad("Homework pending:")}${pendingHw.join(", ") || "none"}`,
     `${pad("Quiz scores:")}${scores.join(", ") || "none yet"}`,
     `${pad("Weak areas:")}${weakAreas(state).join(", ") || "none detected"}`,
-    `${pad("Capstone status:")}${capstoneDone} of 10 milestones`,
+    `${pad("Capstone status:")}${capstoneDone} of ${milestones.length} milestones`,
     `${pad("Next:")}${next ? `Lesson ${next.id}: ${next.title}` : "All available lessons complete"}`,
   ].join("\n");
 }
