@@ -380,7 +380,174 @@ pub fn ingest_all<S: Storage>(store: &mut S, items: Vec<NewsItem>) -> IngestRepo
       criteria: ["cargo test and clippy -D warnings pass", "Malformed feed returns an error, not a panic", "Output is one JSON object per line"],
       hints: ["Check each crate's docs on docs.rs for the current API before using it."],
       solution: {
-        text: ["Structure: lib.rs exposes parse_feed(&str) -> Result<Vec<NewsItem>, IngestError>; main.rs reads a file or URL, calls it, writes JSON lines, and exits with a non-zero code on error. Phase 4 turns this into an Axum service."],
+        text: [
+          "Structure: lib.rs exposes parse_feed(&str) -> Result<Vec<NewsItem>, IngestError>; main.rs reads a file, calls it, writes JSON lines, and exits with a non-zero code on error. Phase 4 turns this into an Axum service that fetches URLs.",
+          "`IngestError` is the error enum from the hands-on, with `thiserror` generating the Display and From code: `#[error(...)]` is the message, `#[from]` lets `?` convert io, rss and serde_json errors. `parse_feed` uses the `rss` crate (`Channel::read_from`), and turns an item without a title or link into `MissingField` with its index. Collecting an iterator of `Result`s into `Result<Vec<_>, _>` stops at the first bad item.",
+          "`write_json_lines` is generic over `Write`, so the tests write into a `Vec<u8>` and main writes to a buffered stdout. main returns `ExitCode`: 0 on success, 1 on any IngestError, 2 for a usage error, with messages on stderr so stdout stays pure JSON Lines.",
+          "Verified with Rust 1.97 (edition 2024, rss 2.1.2, thiserror 2.0.21): `cargo test` 4 passed, `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` clean. `unwrap` appears only in tests. The output is two runs: a small valid feed, then a truncated one.",
+        ],
+        code: {
+          lang: "rust",
+          file: "services/ingester/src/lib.rs",
+          code: `//! Parse an RSS feed into NewsItems and write them as JSON lines.
+use std::io::Write;
+
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+/// Everything that can go wrong while ingesting one feed.
+#[derive(Debug, Error)]
+pub enum IngestError {
+    #[error("could not read feed: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("malformed feed: {0}")]
+    Feed(#[from] rss::Error),
+    #[error("item {index} has no {field}")]
+    MissingField { index: usize, field: &'static str },
+    #[error("could not write JSON: {0}")]
+    Json(#[from] serde_json::Error),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NewsItem {
+    pub title: String,
+    pub url: String,
+    pub published: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+/// Parse RSS XML. A malformed document or an item without title/link is an error, never a panic.
+pub fn parse_feed(xml: &str) -> Result<Vec<NewsItem>, IngestError> {
+    let channel = rss::Channel::read_from(xml.as_bytes())?; // rss::Error -> IngestError via #[from]
+    channel
+        .items()
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            let missing = |field| IngestError::MissingField { index, field };
+            Ok(NewsItem {
+                title: item
+                    .title()
+                    .ok_or_else(|| missing("title"))?
+                    .trim()
+                    .to_string(),
+                url: item
+                    .link()
+                    .ok_or_else(|| missing("link"))?
+                    .trim()
+                    .to_string(),
+                published: item.pub_date().map(str::to_string),
+                tags: item
+                    .categories()
+                    .iter()
+                    .map(|c| c.name().to_lowercase())
+                    .collect(),
+            })
+        })
+        .collect() // Iterator<Item = Result<T, E>> collects into Result<Vec<T>, E>: stops at the first Err
+}
+
+/// Write one JSON object per line (JSON Lines), the format the rest of the pipeline reads.
+pub fn write_json_lines<W: Write>(items: &[NewsItem], out: &mut W) -> Result<(), IngestError> {
+    for item in items {
+        serde_json::to_writer(&mut *out, item)?;
+        out.write_all(b"\\n")?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const FEED: &str = r#"<?xml version="1.0"?>
+<rss version="2.0"><channel><title>DevAtlas</title><link>https://devatlas.dev</link><description>news</description>
+  <item><title>Rust 2.0?</title><link>https://a.dev/rust</link><pubDate>Sat, 17 Oct 2026 09:00:00 GMT</pubDate><category>Rust</category></item>
+  <item><title> Python 4 </title><link>https://a.dev/py</link></item>
+</channel></rss>"#;
+
+    #[test]
+    fn parses_items() {
+        let items = parse_feed(FEED).unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].tags, vec!["rust"]);
+        assert_eq!(items[1].title, "Python 4");
+        assert_eq!(items[1].published, None);
+    }
+
+    #[test]
+    fn malformed_xml_is_an_error_not_a_panic() {
+        let err = parse_feed("<rss><channel><item>").unwrap_err();
+        assert!(matches!(err, IngestError::Feed(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn item_without_link_is_reported() {
+        let xml = FEED.replace("<link>https://a.dev/py</link>", "");
+        let err = parse_feed(&xml).unwrap_err();
+        assert_eq!(err.to_string(), "item 1 has no link");
+    }
+
+    #[test]
+    fn writes_one_json_object_per_line() {
+        let items = parse_feed(FEED).unwrap();
+        let mut out = Vec::new();
+        write_json_lines(&items, &mut out).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        let back: Vec<NewsItem> = text
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(back, items);
+    }
+}
+
+// ---- services/ingester/src/main.rs ----
+use std::io::{self, BufWriter, Write};
+use std::process::ExitCode;
+
+use ingester::{IngestError, parse_feed, write_json_lines};
+
+fn run(path: &str) -> Result<usize, IngestError> {
+    let xml = std::fs::read_to_string(path)?;
+    let items = parse_feed(&xml)?;
+    let mut out = BufWriter::new(io::stdout().lock());
+    write_json_lines(&items, &mut out)?;
+    out.flush()?;
+    Ok(items.len())
+}
+
+fn main() -> ExitCode {
+    let Some(path) = std::env::args().nth(1) else {
+        eprintln!("usage: ingester <feed.xml>");
+        return ExitCode::from(2);
+    };
+    match run(&path) {
+        Ok(count) => {
+            eprintln!("ingested {count} items from {path}");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+// ---- services/ingester/Cargo.toml (dependencies) ----
+[dependencies]
+rss = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"`,
+        },
+        output: "$ cargo run -q -- feed.xml\n{\"title\":\"Rust 1.97 released\",\"url\":\"https://blog.rust-lang.org/\",\"published\":\"Thu, 09 Jul 2026 00:00:00 GMT\",\"tags\":[\"rust\"]}\n{\"title\":\"What is new in .NET\",\"url\":\"https://devblogs.microsoft.com/dotnet/\",\"published\":null,\"tags\":[\"dotnet\",\"csharp\"]}\ningested 2 items from feed.xml\n$ cargo run -q -- broken.xml; echo \"exit=$?\"\nerror: malformed feed: reached end of input without finding a complete channel\nexit=1",
+        pitfalls: [
+          "Printing progress messages to stdout: anything reading the JSON Lines then sees a line that is not JSON. Use stderr",
+          "`item.link().unwrap()`: one feed with a missing link panics the whole ingester. Return MissingField instead",
+          "Writing many items straight to `io::stdout()`: Rust's stdout is line-buffered, so every line becomes a separate write system call. Wrap it in BufWriter and flush at the end",
+        ],
       },
     },
   },

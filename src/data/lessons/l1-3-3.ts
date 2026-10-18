@@ -302,18 +302,20 @@ sealed class TransientId : IdHolder;`,
         text: ["Secrets (SMTP password) come from environment variables or user-secrets locally and a secret manager in the cloud; appsettings holds only non-secret defaults."],
         code: {
           lang: "csharp",
-          code: `public sealed class SmtpOptions
-{
-    public required string Host { get; init; }
-    public int Port { get; init; } = 587;
-    public string? Password { get; init; }       // from env var Smtp__Password, never committed
-}
-
+          code: `// Program.cs, before builder.Build()
 builder.Services.Configure<SmtpOptions>(builder.Configuration.GetSection("Smtp"));
 if (builder.Environment.IsDevelopment())
     builder.Services.AddSingleton<IEmailSender, ConsoleEmailSender>();
 else
     builder.Services.AddSingleton<IEmailSender, SmtpEmailSender>();
+
+// types go after the top-level statements (or in their own files)
+public sealed class SmtpOptions
+{
+    public required string Host { get; init; }
+    public int Port { get; init; } = 587;
+    public string? Password { get; init; }       // from env var Smtp__Password, never committed
+}
 
 public sealed class SmtpEmailSender(Microsoft.Extensions.Options.IOptions<SmtpOptions> options) : IEmailSender
 {
@@ -333,7 +335,7 @@ public sealed class SmtpEmailSender(Microsoft.Extensions.Options.IOptions<SmtpOp
       criteria: ["Test builds the provider with validation options", "Deliberate bug detected", "Bug removed and test green"],
       hints: ["services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = true })"],
       solution: {
-        text: ["Building with ValidateOnBuild checks every registered service can be constructed and ValidateScopes catches singletons depending on scoped services. Running this in CI catches DI mistakes before deployment."],
+        text: ["Building with ValidateOnBuild checks every registered service can be constructed and ValidateScopes catches singletons depending on scoped services. Running this in CI catches DI mistakes before deployment.", "The second test keeps the deliberate bug as a permanent check that validation is really switched on: register a singleton that needs the scoped LeaderboardService and building the provider must throw. To watch the first test fail, add the same `AddSingleton<NightlyReport>()` line inside AddDevAtlasServices; remove it and both tests are green. The capstone below runs these tests against the real AddDevAtlasServices."],
         code: {
           lang: "csharp",
           code: `[Fact]
@@ -347,6 +349,26 @@ public void Service_registrations_are_valid()
         ValidateScopes = true,
         ValidateOnBuild = true,
     });
+}
+
+[Fact]
+public void Validation_catches_a_captive_dependency()
+{
+    var services = new ServiceCollection();
+    services.AddLogging();
+    services.AddDevAtlasServices();
+    services.AddSingleton<NightlyReport>();   // deliberate bug: a singleton that needs a scoped service
+    var ex = Assert.Throws<AggregateException>(() => services.BuildServiceProvider(new ServiceProviderOptions
+    {
+        ValidateScopes = true,
+        ValidateOnBuild = true,
+    }));
+    Assert.Contains("Cannot consume scoped service", ex.Message);
+}
+
+private sealed class NightlyReport(LeaderboardService leaderboard)   // LeaderboardService is scoped
+{
+    public LeaderboardService Leaderboard { get; } = leaderboard;
 }`,
         },
       },
@@ -357,7 +379,167 @@ public void Service_registrations_are_valid()
       criteria: ["All registrations in one extension method", "Correct lifetimes with a comment justifying each", "Validation test from the challenge passes"],
       hints: ["public static IServiceCollection AddDevAtlasServices(this IServiceCollection s)"],
       solution: {
-        text: ["Grouping registrations in an extension method keeps Program.cs short and lets tests reuse the exact same wiring."],
+        text: [
+          "Grouping registrations in an extension method keeps Program.cs short and lets tests reuse the exact same wiring.",
+          "`AddDevAtlasServices` registers four things, each with a comment saying why: TimeProvider and the console email sender are singletons (stateless, thread-safe); the in-memory IAttemptReader is a singleton because it is one shared read-only list; LeaderboardService (from the 1.3.2 capstone) is scoped, so it stays correct when the EF Core reader in lesson 4.1.2 becomes scoped. A singleton LeaderboardService would then capture a scoped reader, which is exactly the bug from this lesson.",
+          "The endpoint receives LeaderboardService as a parameter, validates `top` and returns typed results (200 with the entries, or a 400 validation problem). `public partial class Program;` lets the test project start the app in memory with WebApplicationFactory (package Microsoft.AspNetCore.Mvc.Testing).",
+          "The tests are the challenge's validation test against the real extension method, the same check with a deliberate captive dependency (it must throw), and two endpoint tests. Verified on .NET 9 (`<TargetFramework>net9.0</TargetFramework>` in Directory.Build.props, nullable and warnings-as-errors on): `dotnet test` passed 4 of 4. The output is three curl calls against `dotnet run`.",
+        ],
+        code: {
+          lang: "csharp",
+          file: "services/api/DevAtlas.Api/ServiceCollectionExtensions.cs",
+          code: `using DevAtlas.Core;
+
+namespace DevAtlas.Api;
+
+public static class ServiceCollectionExtensions
+{
+    /// <summary>The composition root: every DevAtlas registration, shared by Program.cs and the tests.</summary>
+    public static IServiceCollection AddDevAtlasServices(this IServiceCollection services)
+    {
+        // Singleton: TimeProvider.System is stateless and thread-safe. Tests swap in a fixed clock.
+        services.AddSingleton(TimeProvider.System);
+
+        // Singleton: ConsoleEmailSender keeps no state and only uses ILogger, which is itself a singleton.
+        services.AddSingleton<IEmailSender, ConsoleEmailSender>();
+
+        // Singleton for now: one shared, read-only in-memory list. The EF Core reader (lesson 4.1.2) wraps a
+        // scoped DbContext, so that registration will become AddScoped; nothing that uses it has to change.
+        services.AddSingleton<IAttemptReader>(_ => new InMemoryAttemptReader(SeedData.Attempts));
+
+        // Scoped: one per request. A scoped service may depend on a singleton or a scoped reader, so this
+        // stays correct when the reader becomes scoped. As a singleton it would capture that reader.
+        services.AddScoped<LeaderboardService>();
+
+        return services;
+    }
+}
+
+public sealed class ConsoleEmailSender(ILogger<ConsoleEmailSender> log) : IEmailSender
+{
+    public Task SendAsync(string to, string body, CancellationToken ct)
+    {
+        log.LogInformation("Email to {To}: {Body}", to, body);
+        return Task.CompletedTask;
+    }
+}
+
+public sealed class InMemoryAttemptReader(IEnumerable<Attempt> attempts) : IAttemptReader
+{
+    private readonly IReadOnlyList<Attempt> _attempts = [.. attempts];   // copied once, never mutated
+
+    public Task<IReadOnlyList<Attempt>> GetForLessonAsync(string lessonId, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        IReadOnlyList<Attempt> result = _attempts.Where(a => a.LessonId == lessonId).ToList();
+        return Task.FromResult(result);
+    }
+}
+
+public static class SeedData
+{
+    public static readonly Attempt[] Attempts =
+    [
+        new("asha", "1.3.1", 90), new("asha", "1.3.1", 70),
+        new("ravi", "1.3.1", 55), new("ravi", "1.3.1", 85),
+        new("meera", "1.3.1", 95), new("zoe", "1.3.1", 80),
+        new("meera", "1.3.2", 60),
+    ];
+}
+
+// ---- services/api/DevAtlas.Api/Program.cs ----
+using DevAtlas.Api;
+using DevAtlas.Core;
+using Microsoft.AspNetCore.Http.HttpResults;
+
+var builder = WebApplication.CreateBuilder(args);
+builder.Services.AddDevAtlasServices();          // Program.cs stays short: wiring lives in one method
+
+var app = builder.Build();
+
+app.MapGet("/leaderboard/{lessonId}",
+    async Task<Results<Ok<IReadOnlyList<LeaderboardEntry>>, ValidationProblem>> (
+        string lessonId, LeaderboardService leaderboard, CancellationToken ct, int top = 10) =>
+    {
+        if (top is < 1 or > 100)
+            return TypedResults.ValidationProblem(new Dictionary<string, string[]> { ["top"] = ["Must be between 1 and 100."] });
+        return TypedResults.Ok(await leaderboard.TopAsync(lessonId, top, ct));
+    });
+
+app.Run();
+
+public partial class Program;   // makes the entry point visible to WebApplicationFactory<Program> in tests
+
+// ---- services/api/DevAtlas.Core/IEmailSender.cs ----
+namespace DevAtlas.Core;
+
+public interface IEmailSender
+{
+    Task SendAsync(string to, string body, CancellationToken ct);
+}
+
+// ---- services/api/DevAtlas.Api.Tests/CompositionRootTests.cs ----
+using System.Net;
+using System.Net.Http.Json;
+using DevAtlas.Api;
+using DevAtlas.Core;
+using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.DependencyInjection;
+
+namespace DevAtlas.Api.Tests;
+
+public class CompositionRootTests
+{
+    private static readonly ServiceProviderOptions Validate = new() { ValidateScopes = true, ValidateOnBuild = true };
+
+    [Fact]
+    public void Service_registrations_are_valid()
+    {
+        var services = new ServiceCollection().AddLogging().AddDevAtlasServices();
+        using var provider = services.BuildServiceProvider(Validate);   // throws if anything is miswired
+        using var scope = provider.CreateScope();
+        Assert.NotNull(scope.ServiceProvider.GetRequiredService<LeaderboardService>());
+    }
+
+    [Fact]
+    public void Validation_catches_a_captive_dependency()
+    {
+        var services = new ServiceCollection().AddLogging().AddDevAtlasServices();
+        services.AddSingleton<NightlyReport>();                          // deliberate bug: singleton -> scoped
+        var ex = Assert.Throws<AggregateException>(() => services.BuildServiceProvider(Validate));
+        Assert.Contains("Cannot consume scoped service 'DevAtlas.Core.LeaderboardService'", ex.Message);
+    }
+
+    private sealed class NightlyReport(LeaderboardService leaderboard)
+    {
+        public LeaderboardService Leaderboard { get; } = leaderboard;
+    }
+}
+
+public class LeaderboardEndpointTests(WebApplicationFactory<Program> factory) : IClassFixture<WebApplicationFactory<Program>>
+{
+    [Fact]
+    public async Task Returns_the_top_learners_for_a_lesson()
+    {
+        var entries = await factory.CreateClient().GetFromJsonAsync<LeaderboardEntry[]>("/leaderboard/1.3.1?top=2");
+        Assert.NotNull(entries);
+        Assert.Equal([new("meera", 95.0), new LeaderboardEntry("asha", 80.0)], entries);
+    }
+
+    [Fact]
+    public async Task Rejects_an_out_of_range_top()
+    {
+        var response = await factory.CreateClient().GetAsync("/leaderboard/1.3.1?top=0");
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+}`,
+        },
+        output: "$ curl \"http://localhost:5055/leaderboard/1.3.1?top=3\"\n[{\"user\":\"meera\",\"average\":95},{\"user\":\"asha\",\"average\":80},{\"user\":\"zoe\",\"average\":80}]\n$ curl \"http://localhost:5055/leaderboard/1.3.1?top=0\"\n{\"type\":\"https://tools.ietf.org/html/rfc9110#section-15.5.1\",\"title\":\"One or more validation errors occurred.\",\"status\":400,\"errors\":{\"top\":[\"Must be between 1 and 100.\"]}}\n$ curl \"http://localhost:5055/leaderboard/9.9.9\"\n[]",
+        pitfalls: [
+          "Registering LeaderboardService as a singleton because it 'has no state': it is only as long-lived as its shortest-lived dependency",
+          "Building a second, different service collection in tests: the validation test must call the same AddDevAtlasServices that Program.cs uses",
+          "Forgetting `public partial class Program;` on .NET 9: the top-level Program class is internal and WebApplicationFactory<Program> does not compile in the test project",
+        ],
       },
     },
   },

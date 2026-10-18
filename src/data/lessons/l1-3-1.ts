@@ -64,7 +64,7 @@ dotnet add DevAtlas.Cli reference DevAtlas.Core
 dotnet add DevAtlas.Core.Tests reference DevAtlas.Core
 dotnet build`,
       },
-      notes: ["Templates and default target framework depend on your installed SDK; .NET 8 is the current long-term support release used in these lessons."],
+      notes: ["Templates and the default target framework depend on your installed SDK (the .NET 10 SDK creates net10.0 projects). The C# samples in these lessons use C# 12 features, run on .NET 8 or later, and were checked on .NET 9."],
     },
     {
       title: "Value vs reference, class vs record",
@@ -225,7 +225,11 @@ public sealed class LessonNotFoundException(string id)
       criteria: ["Validation throws ArgumentException with clear messages", "Course exposes IReadOnlyList<Lesson>", "Tests pass with dotnet test"],
       hints: ["Validate in an explicit constructor or a static Create method."],
       solution: {
-        text: ["Expose a read-only view so callers cannot bypass Course's rules by mutating the list."],
+        text: [
+          "Expose a read-only view so callers cannot bypass Course's rules by mutating the list.",
+          "Lesson validates in its constructor, so an invalid lesson cannot exist. Each ArgumentException names the parameter (`nameof`) and says what is wrong, including the bad value for minutes. Course keeps a private List<Lesson> and exposes `_lessons.AsReadOnly()`. Returning the list itself as IReadOnlyList would compile too, but a caller could cast it back to List<Lesson> and add lessons without going through Add.",
+          "The tests cover the total, every validation message (one Theory with three cases), duplicate ids and the read-only view. Run `dotnet test` from the solution folder. The output below is the real summary on .NET 9 with the timing left out.",
+        ],
         code: {
           lang: "csharp",
           file: "DevAtlas.Core/Course.cs",
@@ -240,7 +244,8 @@ public sealed record Lesson
     public Lesson(string id, string title, int minutes)
     {
         if (string.IsNullOrWhiteSpace(id)) throw new ArgumentException("Id is required", nameof(id));
-        if (minutes <= 0) throw new ArgumentException("Minutes must be > 0", nameof(minutes));
+        if (string.IsNullOrWhiteSpace(title)) throw new ArgumentException("Title is required", nameof(title));
+        if (minutes <= 0) throw new ArgumentException($"Minutes must be > 0, got {minutes}", nameof(minutes));
         (Id, Title, Minutes) = (id, title, minutes);
     }
 }
@@ -249,7 +254,7 @@ public sealed class Course(string title)
 {
     private readonly List<Lesson> _lessons = [];
     public string Title { get; } = title;
-    public IReadOnlyList<Lesson> Lessons => _lessons;
+    public IReadOnlyList<Lesson> Lessons => _lessons.AsReadOnly();   // a wrapper: cannot be cast back to List<T>
     public int TotalMinutes => _lessons.Sum(l => l.Minutes);
 
     public void Add(Lesson lesson)
@@ -260,12 +265,62 @@ public sealed class Course(string title)
     }
 }
 
-// DevAtlas.Core.Tests/CourseTests.cs
-// [Fact] public void Total_minutes_sums_lessons() {
-//     var c = new Course("Phase 1"); c.Add(new Lesson("1.3.1", "C#", 70)); c.Add(new Lesson("1.3.2", "LINQ", 65));
-//     Assert.Equal(135, c.TotalMinutes); }
-// [Fact] public void Rejects_zero_minutes() => Assert.Throws<ArgumentException>(() => new Lesson("x", "y", 0));`,
+// ---- DevAtlas.Core.Tests/CourseTests.cs ----
+using DevAtlas.Core;
+
+namespace DevAtlas.Core.Tests;
+
+public class CourseTests
+{
+    [Fact]
+    public void Total_minutes_sums_lessons()
+    {
+        var course = new Course("Phase 1");
+        course.Add(new Lesson("1.3.1", "C# fundamentals", 70));
+        course.Add(new Lesson("1.3.2", "LINQ", 65));
+
+        Assert.Equal(135, course.TotalMinutes);
+        Assert.Equal(["1.3.1", "1.3.2"], course.Lessons.Select(l => l.Id));
+    }
+
+    [Theory]
+    [InlineData("", "C#", 70, "id", "Id is required")]
+    [InlineData("1.3.1", " ", 70, "title", "Title is required")]
+    [InlineData("1.3.1", "C#", 0, "minutes", "Minutes must be > 0, got 0")]
+    public void Invalid_lessons_are_rejected_with_a_clear_message(
+        string id, string title, int minutes, string param, string message)
+    {
+        var ex = Assert.Throws<ArgumentException>(() => new Lesson(id, title, minutes));
+        Assert.Equal(param, ex.ParamName);
+        Assert.StartsWith(message, ex.Message);   // ArgumentException appends " (Parameter 'x')"
+    }
+
+    [Fact]
+    public void Duplicate_lesson_ids_are_rejected()
+    {
+        var course = new Course("Phase 1");
+        course.Add(new Lesson("1.3.1", "C# fundamentals", 70));
+
+        var ex = Assert.Throws<InvalidOperationException>(() => course.Add(new Lesson("1.3.1", "Again", 10)));
+        Assert.Equal("Lesson 1.3.1 already exists", ex.Message);
+    }
+
+    [Fact]
+    public void Lessons_cannot_be_changed_from_outside()
+    {
+        var course = new Course("Phase 1");
+        course.Add(new Lesson("1.3.1", "C# fundamentals", 70));
+
+        Assert.IsNotType<List<Lesson>>(course.Lessons);                              // no cast back to List<T>
+        Assert.Throws<NotSupportedException>(() => ((IList<Lesson>)course.Lessons).Clear());
+    }
+}`,
         },
+        output: "Passed!  - Failed:     0, Passed:     6, Skipped:     0, Total:     6 - DevAtlas.Core.Tests.dll (net9.0)",
+        pitfalls: [
+          "`public List<Lesson> Lessons { get; }`: callers can Add or Clear directly and skip the duplicate check",
+          "Asserting only the exception type: a test that passes for the wrong ArgumentException (say, the wrong parameter) proves little; check ParamName or the message too",
+        ],
       },
     },
     intermediate: {
@@ -366,19 +421,69 @@ public abstract record Result<T>
       criteria: ["dotnet build and dotnet test pass", "Directory.Build.props applies to all projects", "Added to CI"],
       hints: ["Directory.Build.props in the solution folder is imported by every project below it."],
       solution: {
-        text: ["One shared props file keeps settings consistent across projects."],
+        text: [
+          "One shared props file keeps settings consistent across projects.",
+          "MSBuild imports Directory.Build.props from the project's folder or any parent folder before the project file, so every project under services/api gets net9.0, nullable, implicit usings and warnings-as-errors. Because the project file is read afterwards, a `<TargetFramework>` left in a generated .csproj silently wins. That is why the setup deletes those lines; the library's project file ends up nearly empty.",
+          "Put the Lesson/Course code and tests from the basic homework into DevAtlas.Core and DevAtlas.Core.Tests. The CI workflow installs the .NET 9 SDK and runs build then test on every pull request. It has no `paths:` filter, so it can be a required check (lesson 1.1.4 explains why).",
+          "Verified with the .NET 10 SDK targeting net9.0: `dotnet build DevAtlas.sln` builds all three projects into bin/Debug/net9.0 with 0 warnings, `dotnet test` passes 6 of 6, and adding a possible null dereference to DevAtlas.Api fails the build with error CS8602, which proves the props file reaches every project. The workflow passes actionlint.",
+        ],
         code: {
           lang: "text",
           file: "services/api/Directory.Build.props",
           code: `<Project>
+  <!-- Imported by every project below services/api, so all of them share these settings -->
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net9.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
-</Project>`,
+</Project>
+
+# ---- setup commands (run in services/api; .NET 9 SDK or later) ----
+dotnet new sln -n DevAtlas                 # on the .NET 10 SDK add --format sln (its default is DevAtlas.slnx)
+dotnet new web -n DevAtlas.Api
+dotnet new classlib -n DevAtlas.Core
+dotnet new xunit -n DevAtlas.Core.Tests
+dotnet sln add DevAtlas.Api DevAtlas.Core DevAtlas.Core.Tests
+dotnet add DevAtlas.Api reference DevAtlas.Core
+dotnet add DevAtlas.Core.Tests reference DevAtlas.Core
+# Then delete the <TargetFramework>, <Nullable> and <ImplicitUsings> lines from the three
+# generated .csproj files: a value set in the project file overrides Directory.Build.props.
+
+# ---- services/api/DevAtlas.Core/DevAtlas.Core.csproj (after the edit) ----
+<Project Sdk="Microsoft.NET.Sdk">
+
+</Project>
+
+# ---- .github/workflows/api-tests.yml ----
+name: api tests
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+      - run: dotnet build DevAtlas.sln   # warnings are errors via Directory.Build.props
+      - run: dotnet test DevAtlas.sln --no-build`,
         },
+        output: "$ dotnet build DevAtlas.sln\n  DevAtlas.Core -> DevAtlas.Core/bin/Debug/net9.0/DevAtlas.Core.dll\n  DevAtlas.Core.Tests -> DevAtlas.Core.Tests/bin/Debug/net9.0/DevAtlas.Core.Tests.dll\n  DevAtlas.Api -> DevAtlas.Api/bin/Debug/net9.0/DevAtlas.Api.dll\nBuild succeeded.\n    0 Warning(s)\n    0 Error(s)",
+        pitfalls: [
+          "Leaving `<TargetFramework>net10.0</TargetFramework>` in a generated .csproj: it overrides the props file, and that project quietly targets a different framework",
+          "Naming the file Directory.Build.props.xml or putting it inside one project folder: then only that project, or none, picks it up",
+          "Targeting net9.0 without the .NET 9 runtime on the machine: the build works with a newer SDK, but `dotnet test` and `dotnet run` need the 9.0 runtime (CI installs it with setup-dotnet)",
+        ],
       },
     },
   },

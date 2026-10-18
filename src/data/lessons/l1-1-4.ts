@@ -170,7 +170,7 @@ pip install pytest-cov && python -m pytest --cov=. --cov-report=term-missing`,
     },
   ],
   companies: [
-    "**CI gates**: every pull request runs the test suite; failures block merging (lesson 0.3.2). Fast suites matter: teams split slow integration tests into a separate job so developers get unit feedback in under a minute.",
+    "**CI gates**: every pull request runs the test suite; failures block merging (lesson 0.3.2). Fast suites matter: teams split slow integration tests into a separate job so developers get unit feedback in under a minute. In monorepos, expensive suites run only when their folder changed, behind one always-running result job that branch protection requires.",
     "**Regression tests for every bug**: a common rule is 'every bug fix comes with a test that fails before the fix and passes after', so the same bug never returns.",
     "**Testcontainers** is widely used for integration tests: it starts a real PostgreSQL, MySQL or Redis in Docker for the test run, which catches SQL and driver issues that mocks hide.",
   ],
@@ -179,6 +179,7 @@ pip install pytest-cov && python -m pytest --cov=. --cov-report=term-missing`,
     { mistake: "No boundary cases", why: "Testing only the happy path", wrong: "Off-by-one bugs at thresholds reach production", fix: "Parametrize below, at, and above every threshold" },
     { mistake: "Flaky tests depending on time, randomness or network", why: "Calling datetime.now() or real APIs", wrong: "Random failures; people start ignoring red builds", fix: "Inject clock and randomness (seed); fake the network" },
     { mistake: "Chasing 100% coverage", why: "It is an easy number to track", wrong: "Tests that execute lines without asserting anything meaningful", fix: "Use coverage to find untested important code; review assertions" },
+    { mistake: "A required CI check on a workflow with a `paths:` filter", why: "Skipping the test workflow for docs-only PRs saves CI minutes", wrong: "The skipped workflow never reports, so the required check waits forever and those PRs cannot merge", fix: "Drop `paths:` from the trigger, detect changed files in a job, run the tests conditionally, and require a final `if: always()` job that fails only if the tests failed" },
     { mistake: "Using float for money", why: "It is the default number type", wrong: "Rounding errors in totals", fix: "Decimal (or integer cents) with explicit rounding" },
   ],
   bestPractices: [
@@ -323,7 +324,9 @@ assert paginate([1, 2], 5) == [[1, 2]]`,
         text: [
           "conftest.py holds the fixtures every module shares: sample `Article` objects for dedupe, and a `make_client` fixture that builds an httpx.AsyncClient on MockTransport so the feed tests never touch the network. `make_client` depends on `feed_handler`, so a test can override the fake server by redefining one fixture.",
           "test_feeds.py covers per-feed errors, the empty case and the `devatlas-ingest` CLI (sys.argv and the HTTP boundary are patched, the formatting logic stays real). test_dedupe.py uses the shared `articles` fixture; test_tags.py and test_models.py come from the previous capstones.",
-          "`addopts` in pyproject.toml makes every `pytest` run measure coverage of the devatlas_ai package (with branch coverage), print missing lines and fail under 90%. The suite was at 95.6% when the threshold was set; raise it as coverage grows so it can only go up. The CI job installs the package with its dev extras, runs mypy, then pytest, and any failure fails the job.",
+          "`addopts` in pyproject.toml makes every `pytest` run measure coverage of the devatlas_ai package (with branch coverage), print missing lines and fail under 90%. The suite was at 94.5% when the threshold was set; raise it as coverage grows so it can only go up.",
+          "The workflow has three jobs. `changes` diffs the PR against its base branch with `git diff --name-only` and outputs `ai=true` only when services/ai or the workflow file changed (pushes to main always run). `test` runs only when `ai` is true: it installs the package with its dev extras, runs mypy, then pytest. `ai-tests-result` has `if: always()`, so it runs on every PR; it passes when `test` succeeded or was skipped, and fails if change detection failed or `test` failed or was cancelled.",
+          "Make `ai-tests-result` the required status check in branch protection, not `test`. The trigger deliberately has no `paths:` filter: when a workflow is skipped by `paths:`, its checks are never reported, so a required check stays at 'Expected — Waiting for status to be reported' and blocks every PR that does not touch services/ai.",
         ],
         code: {
           lang: "python", file: "services/ai/tests/conftest.py",
@@ -443,15 +446,38 @@ files = ["src", "tests"]
 
 # ---- .github/workflows/ai-tests.yml ----
 name: ai-service tests
+# No paths: filter on the trigger. A workflow skipped by paths: never reports its
+# checks, so a required check would stay "Expected" and block unrelated PRs forever.
 on:
   pull_request:
-    paths: ["services/ai/**", ".github/workflows/ai-tests.yml"]
   push:
     branches: [main]
 permissions:
   contents: read
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      ai: \${{ steps.diff.outputs.ai }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history, so the PR base commit is available to diff against
+      - id: diff
+        env:
+          EVENT: \${{ github.event_name }}
+          BASE_SHA: \${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "ai=true" >> "$GITHUB_OUTPUT"   # pushes to main always run the suite
+          elif git diff --name-only "$BASE_SHA" HEAD | grep -qE '^(services/ai/|\\.github/workflows/ai-tests\\.yml$)'; then
+            echo "ai=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ai=false" >> "$GITHUB_OUTPUT"
+          fi
   test:
+    needs: changes
+    if: needs.changes.outputs.ai == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -466,10 +492,25 @@ jobs:
       - run: python -m pip install -e ".[dev]"
       - run: mypy
       # addopts in pyproject.toml adds --cov, prints the report and fails under 90%
-      - run: python -m pytest`,
+      - run: python -m pytest
+  # Make THIS job the required status check: it runs on every PR, even when test is skipped.
+  ai-tests-result:
+    needs: [changes, test]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          CHANGES: \${{ needs.changes.result }}
+          TEST: \${{ needs.test.result }}
+        run: |
+          echo "changes=$CHANGES test=$TEST"
+          # test is "skipped" when services/ai did not change: that is a pass
+          if [ "$CHANGES" != "success" ] || [ "$TEST" = "failure" ] || [ "$TEST" = "cancelled" ]; then
+            exit 1
+          fi`,
         },
-        output: "..................                                                       [100%]\n================================ tests coverage ================================\n_______________ coverage: platform linux, python 3.13.16-final-0 _______________\n\nName                          Stmts   Miss Branch BrPart  Cover   Missing\n-------------------------------------------------------------------------\nsrc/devatlas_ai/__init__.py       0      0      0      0   100%\nsrc/devatlas_ai/dedupe.py        19      0      4      0   100%\nsrc/devatlas_ai/feeds.py         24      1      4      1    93%   27\nsrc/devatlas_ai/models.py        53      2     12      2    94%   43, 44->exit, 73\nsrc/devatlas_ai/tags.py          15      0      6      0   100%\n-------------------------------------------------------------------------\nTOTAL                           111      3     26      3    96%\nRequired test coverage of 90% reached. Total coverage: 95.62%\n18 passed in 0.25s",
-        pitfalls: ["`--cov=.` instead of `--cov=devatlas_ai` counts the test files themselves and inflates the number", "Setting the threshold above the current coverage on day one, so the first CI run is red and people learn to ignore it", "Creating an AsyncClient in a fixture without closing it; here fetch_all only closes clients it created, and MockTransport holds no sockets"],
+        output: "...................                                                      [100%]\n================================ tests coverage ================================\n_______________ coverage: platform linux, python 3.13.16-final-0 _______________\n\nName                          Stmts   Miss Branch BrPart  Cover   Missing\n-------------------------------------------------------------------------\nsrc/devatlas_ai/__init__.py       0      0      0      0   100%\nsrc/devatlas_ai/dedupe.py        19      0      4      0   100%\nsrc/devatlas_ai/feeds.py         30      3      6      2    86%   26, 33, 40\nsrc/devatlas_ai/models.py        53      1     12      2    95%   43, 44->exit\nsrc/devatlas_ai/tags.py          15      0      6      0   100%\n-------------------------------------------------------------------------\nTOTAL                           117      4     28      4    94%\nRequired test coverage of 90% reached. Total coverage: 94.48%\n19 passed in 0.11s",
+        pitfalls: ["`--cov=.` instead of `--cov=devatlas_ai` counts the test files themselves and inflates the number", "Setting the threshold above the current coverage on day one, so the first CI run is red and people learn to ignore it", "Creating an AsyncClient in a fixture without closing it; here fetch_all only closes clients it created, and MockTransport holds no sockets", "Putting `paths:` on the trigger of a workflow whose check is required: PRs outside those paths never get the check and can never merge. Filter inside the workflow and require an always-running result job instead"],
       },
     },
   },

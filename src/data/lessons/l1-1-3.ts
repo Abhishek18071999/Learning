@@ -312,7 +312,90 @@ def test_retry():
       hints: ["For I/O with threads use time.sleep in a ThreadPoolExecutor."],
       solution: {
         text: [
+          "One script runs the same 8 work items through each approach: a 300,000-round SHA-256 chain (CPU-bound) and a 0.5 s wait (I/O-bound; `time.sleep` for sequential, threads and processes, `asyncio.sleep` for asyncio). Each runner is a plain function, so the timing code is written once.",
           "Expected pattern (numbers vary by machine): I/O-bound: threads and asyncio ≈ the single longest wait; processes also fast but with startup overhead; sequential = sum. CPU-bound: threads ≈ sequential (GIL, on standard CPython); processes ≈ sequential / cores; asyncio ≈ sequential (nothing awaits). The table is a strong portfolio artefact because it shows you measured instead of guessing.",
+          "One run on a 4-core Linux machine (Python 3.13) printed: sequential 1.07 s CPU / 4.00 s I/O; threads 1.17 s / 0.50 s; processes 0.34 s / 1.01 s; asyncio 1.06 s / 0.50 s. Processes took 1 s on the I/O workload because the default pool has one worker per core: 8 waits on 4 workers is two rounds of 0.5 s, plus process start-up.",
+        ],
+        code: {
+          lang: "python",
+          file: "bench.py",
+          code: `"""Benchmark sequential, threads, processes and asyncio on CPU- and I/O-bound work."""
+import asyncio
+import hashlib
+import time
+from collections.abc import Callable
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+
+JOBS = 8              # number of work items per run
+CHAIN = 300_000       # SHA-256 rounds per CPU item
+WAIT = 0.5            # seconds of simulated network wait per I/O item
+
+
+def cpu_job(n: int = CHAIN) -> str:
+    data = b"x"
+    for _ in range(n):
+        data = hashlib.sha256(data).digest()
+    return data.hex()[:8]
+
+
+def io_job(seconds: float = WAIT) -> str:
+    time.sleep(seconds)            # a blocking "download"
+    return "ok"
+
+
+async def io_job_async(seconds: float = WAIT) -> str:
+    await asyncio.sleep(seconds)   # a non-blocking "download"
+    return "ok"
+
+
+async def cpu_job_async(n: int = CHAIN) -> str:
+    return cpu_job(n)              # no await inside: the loop cannot switch
+
+
+def sequential(job: Callable[[], str]) -> None:
+    for _ in range(JOBS):
+        job()
+
+
+def threads(job: Callable[[], str]) -> None:
+    with ThreadPoolExecutor(max_workers=JOBS) as pool:
+        list(pool.map(lambda _: job(), range(JOBS)))
+
+
+def processes(job: Callable[[], str]) -> None:
+    with ProcessPoolExecutor() as pool:   # one worker per core by default
+        futures = [pool.submit(job) for _ in range(JOBS)]
+        for f in futures:
+            f.result()
+
+
+def with_asyncio(job: Callable[[], str]) -> None:
+    async_job = io_job_async if job is io_job else cpu_job_async
+
+    async def main() -> None:
+        await asyncio.gather(*(async_job() for _ in range(JOBS)))
+
+    asyncio.run(main())
+
+
+def timed(runner: Callable[[Callable[[], str]], None], job: Callable[[], str]) -> float:
+    start = time.perf_counter()
+    runner(job)
+    return time.perf_counter() - start
+
+
+if __name__ == "__main__":     # required for process pools on Windows/macOS
+    runners = [sequential, threads, processes, with_asyncio]
+    print(f"{'approach':<12} {'cpu-bound':>10} {'io-bound':>10}")
+    for runner in runners:
+        cpu = timed(runner, cpu_job)
+        io = timed(runner, io_job)
+        print(f"{runner.__name__:<12} {cpu:>9.2f}s {io:>9.2f}s")`,
+        },
+        pitfalls: [
+          "Running the CPU job \"with asyncio\" inside a coroutine gives no speed-up; that is the point of the cell, not a bug in the benchmark.",
+          "Keep the `if __name__ == \"__main__\":` guard, or ProcessPoolExecutor re-runs the module in every worker on Windows and macOS.",
+          "Do not trust a single run: repeat it and look at the pattern, not the second decimal.",
         ],
       },
     },
@@ -322,14 +405,62 @@ def test_retry():
       criteria: ["pip install -e \".[dev]\" works on a clean venv", "devatlas-ingest command runs", "Unit test with a fake transport (httpx.MockTransport)"],
       hints: ["httpx.MockTransport(lambda request: httpx.Response(200, text='<rss/>')) avoids the network in tests."],
       solution: {
-        text: ["Inject the AsyncClient so tests pass one built on MockTransport; production builds a real one. This is the Protocol/injection idea from the previous lesson, applied to HTTP."],
+        text: [
+          "Inject the AsyncClient so tests pass one built on MockTransport; production builds a real one. This is the Protocol/injection idea from the previous lesson, applied to HTTP.",
+          "Move the package to `services/ai/src/devatlas_ai/` (tags.py, models.py and dedupe.py from the previous capstones come along unchanged) and add feeds.py. `fetch_all` uses the ingest.py pattern: one semaphore, `asyncio.timeout` per request, and every failure turned into an `\"error: <Name>\"` value. It closes the client only if it created it, so a test's injected client is left alone.",
+          "pyproject.toml declares httpx as a runtime dependency, the dev extras, and `[project.scripts]`, which makes `pip install -e \".[dev]\"` create the `devatlas-ingest` command. With a src layout and an installed package, pytest no longer needs `pythonpath`. The output is `pytest -q && mypy` from services/ai in a fresh venv (12 tests including the earlier tags and models tests), then the command run without arguments.",
+        ],
         code: {
           lang: "python",
-          file: "tests/test_feeds.py",
-          code: `import asyncio, httpx
+          file: "services/ai/src/devatlas_ai/feeds.py",
+          code: `"""Fetch many feeds concurrently: bounded, with timeouts, one error never stops the run."""
+import asyncio
+import sys
+
+import httpx
+
+MAX_IN_FLIGHT = 10
+TIMEOUT_S = 5.0
+
+
+async def _fetch_one(client: httpx.AsyncClient, sem: asyncio.Semaphore, url: str) -> tuple[str, str]:
+    async with sem:                                  # at most MAX_IN_FLIGHT requests at once
+        try:
+            async with asyncio.timeout(TIMEOUT_S):
+                r = await client.get(url, follow_redirects=True)
+                r.raise_for_status()
+                return url, r.text
+        except Exception as exc:                     # per-feed error, reported as a value
+            return url, f"error: {type(exc).__name__}"
+
+
+async def fetch_all(urls: list[str], client: httpx.AsyncClient | None = None) -> dict[str, str]:
+    """Return {url: body or 'error: <ExceptionName>'}. Tests inject a client on MockTransport."""
+    own_client = client is None
+    if client is None:
+        client = httpx.AsyncClient(headers={"User-Agent": "devatlas-ingester/0.1"})
+    try:
+        sem = asyncio.Semaphore(MAX_IN_FLIGHT)
+        pairs = await asyncio.gather(*(_fetch_one(client, sem, u) for u in urls))
+        return dict(pairs)
+    finally:
+        if own_client:                               # only close what we created
+            await client.aclose()
+
+
+def cli() -> None:
+    """Entry point for the \`devatlas-ingest\` command: devatlas-ingest URL [URL ...]."""
+    urls = sys.argv[1:]
+    if not urls:
+        sys.exit("usage: devatlas-ingest URL [URL ...]")
+    for url, body in asyncio.run(fetch_all(urls)).items():
+        print(f"{body if body.startswith('error') else len(body)}\\t{url}")
+
+# ---- services/ai/tests/test_feeds.py ----
+import asyncio, httpx
 from devatlas_ai.feeds import fetch_all
 
-def test_fetch_all_reports_errors_per_feed():
+def test_fetch_all_reports_errors_per_feed() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if "bad" in str(request.url):
             return httpx.Response(500)
@@ -337,8 +468,37 @@ def test_fetch_all_reports_errors_per_feed():
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     results = asyncio.run(fetch_all(["https://ok.test/rss", "https://bad.test/rss"], client=client))
     assert results["https://ok.test/rss"] == "<rss/>"
-    assert results["https://bad.test/rss"].startswith("error")`,
+    assert results["https://bad.test/rss"].startswith("error")
+# ---- services/ai/pyproject.toml ----
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "devatlas-ai"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["httpx>=0.27"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "mypy>=1.10"]
+
+[project.scripts]
+devatlas-ingest = "devatlas_ai.feeds:cli"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.mypy]
+strict = true
+files = ["src", "tests"]`,
         },
+        output: "............                                                             [100%]\n12 passed in 0.08s\nSuccess: no issues found in 8 source files\n$ devatlas-ingest\nusage: devatlas-ingest URL [URL ...]",
+        pitfalls: [
+          "Closing a client the caller passed in: the next test (or caller) gets 'client has been closed'",
+          "Forgetting `[build-system]`, or pointing `[project.scripts]` at a module path that does not match the src layout, so the command is not created or fails on import",
+          "A test that reaches the real network: it is slow, flaky and fails in CI without internet. MockTransport keeps it in memory",
+        ],
       },
     },
   },

@@ -233,17 +233,47 @@ var good = await db.Attempts
       criteria: ["Four correct queries", "Each uses method syntax", "Outputs printed"],
       hints: ["GroupBy then All for (1); GroupBy + MaxBy for (2)."],
       solution: {
-        text: ["GroupBy is the workhorse; .NET 6+ MaxBy simplifies 'best per group'."],
+        text: [
+          "GroupBy is the workhorse; .NET 6+ MaxBy simplifies 'best per group'.",
+          "(1) groups by user and keeps groups where All attempts are 60 or more. (2) groups by lesson and takes MaxBy score. (3) orders the lesson groups by Count, with ThenBy on the id so ties come out in a stable order. (4) is the general paging formula Skip((page - 1) * pageSize).Take(pageSize) after an OrderBy; paging without an order gives arbitrary pages.",
+        ],
         code: {
           lang: "csharp",
-          code: `var allPassed = attempts.GroupBy(a => a.User)
-    .Where(g => g.All(a => a.Score >= 60)).Select(g => g.Key);          // asha, meera
+          file: "Program.cs",
+          code: `List<Attempt> attempts =
+[
+    new("asha", "1.3.1", 90), new("ravi", "1.3.1", 55),
+    new("asha", "1.3.2", 70), new("meera", "1.3.1", 95),
+    new("ravi", "1.3.2", 80),
+];
+
+// (1) users who passed every lesson they attempted
+var allPassed = attempts.GroupBy(a => a.User)
+    .Where(g => g.All(a => a.Score >= 60))
+    .Select(g => g.Key);
+
+// (2) best attempt per lesson (MaxBy is built in since .NET 6)
 var bestPerLesson = attempts.GroupBy(a => a.Lesson)
-    .Select(g => g.MaxBy(a => a.Score)!);                              // meera 1.3.1, ravi 1.3.2
+    .Select(g => g.MaxBy(a => a.Score)!);
+
+// (3) lessons by number of attempts, most attempted first (ties by id for a stable order)
 var byPopularity = attempts.GroupBy(a => a.Lesson)
-    .OrderByDescending(g => g.Count()).Select(g => $"{g.Key}:{g.Count()}");
-var page2 = attempts.OrderByDescending(a => a.Score).Skip(2).Take(2);   // 2nd page of size 2`,
+    .OrderByDescending(g => g.Count()).ThenBy(g => g.Key)
+    .Select(g => $"{g.Key}:{g.Count()}");
+
+// (4) page 2 of size 2, ordered by score
+const int page = 2, pageSize = 2;
+var pageItems = attempts.OrderByDescending(a => a.Score)
+    .Skip((page - 1) * pageSize).Take(pageSize);
+
+Console.WriteLine($"passed everything: {string.Join(", ", allPassed)}");
+Console.WriteLine($"best per lesson:   {string.Join(", ", bestPerLesson.Select(a => $"{a.Lesson} {a.User} {a.Score}"))}");
+Console.WriteLine($"by popularity:     {string.Join(", ", byPopularity)}");
+Console.WriteLine($"page {page}:            {string.Join(", ", pageItems.Select(a => $"{a.User}:{a.Score}"))}");
+
+record Attempt(string User, string Lesson, int Score);`,
         },
+        output: "passed everything: asha, meera\nbest per lesson:   1.3.1 meera 95, 1.3.2 ravi 80\nby popularity:     1.3.1:3, 1.3.2:2\npage 2:            ravi:80, asha:70",
       },
     },
     intermediate: {
@@ -252,33 +282,55 @@ var page2 = attempts.OrderByDescending(a => a.Score).Skip(2).Take(2);   // 2nd p
       criteria: ["SemaphoreSlim limits concurrency", "Linked cancellation token with timeout", "Failures logged and skipped"],
       hints: ["CancellationTokenSource.CreateLinkedTokenSource(ct) then CancelAfter(5s)."],
       solution: {
-        text: ["Same pattern as Python's semaphore + timeout from lesson 1.1.3, in C#."],
+        text: [
+          "Same pattern as Python's semaphore + timeout from lesson 1.1.3, in C#.",
+          "A linked CancellationTokenSource combines the caller's token with a 5-second CancelAfter. Every repo is its own task that waits for one of 4 semaphore slots. `WaitAsync` sits inside the try, because the timeout can fire while a task is still queued for a slot, and the slot is released only if it was taken.",
+          "The catch filter decides what 'skip' means: HTTP errors, a body that is not the expected JSON (JsonException), and our own timeout are logged and skipped, so the method returns whatever finished in time. If the caller's token was cancelled, the exception propagates instead: the caller asked to stop, so returning a partial answer would be wrong.",
+          "Checked with a stub HttpMessageHandler (one 404, one HTML body, one response slower than 5 s): the method returned the two good repos after about 5 s and logged the other three.",
+        ],
         code: {
           lang: "csharp",
-          code: `static async Task<Dictionary<string, int>> GetStarsAsync(HttpClient http, IEnumerable<string> repos, CancellationToken ct)
+          code: `using System.Collections.Concurrent;
+using System.Net.Http.Json;
+using System.Text.Json;
+
+static async Task<Dictionary<string, int>> GetStarsAsync(HttpClient http, IEnumerable<string> repos, CancellationToken ct)
 {
     using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-    cts.CancelAfter(TimeSpan.FromSeconds(5));
-    using var gate = new SemaphoreSlim(4);
-    var results = new System.Collections.Concurrent.ConcurrentDictionary<string, int>();
+    cts.CancelAfter(TimeSpan.FromSeconds(5));                 // overall budget for the whole batch
+    using var gate = new SemaphoreSlim(4);                    // at most 4 requests in flight
+    var results = new ConcurrentDictionary<string, int>();
 
     await Task.WhenAll(repos.Select(async name =>
     {
-        await gate.WaitAsync(cts.Token);
+        var acquired = false;
         try
         {
+            await gate.WaitAsync(cts.Token);                  // inside try: the timeout can fire while waiting
+            acquired = true;
             var repo = await http.GetFromJsonAsync<Repo>($"https://api.github.com/repos/{name}", cts.Token);
             if (repo is not null) results[name] = repo.stargazers_count;
         }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        catch (Exception ex) when (ex is HttpRequestException or JsonException
+                                   || (ex is OperationCanceledException && !ct.IsCancellationRequested))
         {
+            // HTTP error, unexpected body, or our 5 s budget ran out: log and skip this repo.
+            // If the CALLER cancelled (ct), the exception propagates instead.
             Console.Error.WriteLine($"skip {name}: {ex.GetType().Name}");
         }
-        finally { gate.Release(); }
+        finally
+        {
+            if (acquired) gate.Release();                     // only release a slot we actually took
+        }
     }));
     return new Dictionary<string, int>(results);
 }`,
         },
+        pitfalls: [
+          "Awaiting `gate.WaitAsync` outside the try: a timeout while queued escapes Task.WhenAll and the whole method throws, losing the results that did arrive",
+          "Catching only HttpRequestException: a proxy error page or HTML body throws JsonException from GetFromJsonAsync and takes down the whole batch",
+          "Swallowing the caller's cancellation as if it were a per-repo failure",
+        ],
       },
     },
     challenge: {
