@@ -57,3 +57,7 @@ src/
 2. Add it to `src/data/curriculum.ts` if it is not listed yet. `src/data/lessons/index.ts` picks the file up automatically and orders it by the curriculum; run `npm run gen:meta` (or any of `dev`, `test`, `build`) to refresh the generated metadata.
 3. Run `npm test`. The content tests check that every section exists, there are at least 4 mistakes, 3 interview questions and 3 quick-check questions, answer indexes are valid, every homework tier has a model solution, and links use https.
 4. Run every code sample yourself and paste real output. Never invent APIs, flags or versions.
+
+## Credits
+
+The Phase 6 system design lessons (6.3.2 onward) follow the topics of the [System Design Primer](https://github.com/donnemartin/system-design-primer) by Donne Martin, licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The lessons are written in our own words, with our own examples and code.

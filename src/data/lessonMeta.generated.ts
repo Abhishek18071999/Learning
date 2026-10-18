@@ -5671,6 +5671,1253 @@ export const lessonMeta: LessonMeta[] = [
   "file": "l6-3-1.ts"
  },
  {
+  "id": "6.3.2",
+  "title": "The design method: requirements, estimates and numbers to know",
+  "minutes": 75,
+  "level": "Advanced",
+  "summary": "A repeatable four-step method for any system design (use cases and constraints, high-level design, core components, scaling), plus the powers of two, time conversions and latency numbers that let you size storage, traffic and speed in your head.",
+  "terms": [
+   {
+    "term": "Functional requirement",
+    "def": "What the system must do for a user, e.g. 'a learner can share a code snippet and get a link'."
+   },
+   {
+    "term": "Non-functional requirement",
+    "def": "How well it must do it: latency, availability, durability, cost, security. These drive most design choices."
+   },
+   {
+    "term": "Read:write ratio",
+    "def": "How many reads happen per write. A 10:1 system needs very different scaling from a 1:10 system."
+   },
+   {
+    "term": "Back-of-the-envelope estimate",
+    "def": "A quick calculation with rounded numbers to get the order of magnitude (10 GB or 10 TB?) before building anything."
+   },
+   {
+    "term": "Powers of two",
+    "def": "2¹⁰ ≈ one thousand (KB), 2²⁰ ≈ one million (MB), 2³⁰ ≈ one billion (GB), 2⁴⁰ ≈ one trillion (TB)."
+   },
+   {
+    "term": "Bottleneck",
+    "def": "The single resource that runs out first (CPU, disk, a database lock, network) and limits the whole system."
+   },
+   {
+    "term": "Order of magnitude",
+    "def": "A factor of 10. Estimates aim to be right within one order of magnitude, not to the last digit."
+   }
+  ],
+  "interview": [
+   {
+    "q": "How do you start a system design interview?",
+    "a": "Clarify use cases and what is out of scope, then constraints: number of users, requests per second, read:write ratio, data size and retention, latency and availability targets. Turn them into rough numbers (requests per second, storage, bandwidth) out loud. Only then draw a high-level design, go deep on the key components, and scale based on the bottlenecks the numbers reveal."
+   },
+   {
+    "q": "How much storage does a service with 10 million 1 KB writes per month need over 3 years?",
+    "a": "10 million × 1 KB = 10 GB per month; × 36 months = 360 GB raw. With a replica and indexes, plan for roughly 1 TB. That fits on one database server, so storage alone does not force sharding."
+   },
+   {
+    "q": "Why do latency numbers matter in design?",
+    "a": "They show where time goes: memory is about 100× faster than an SSD random read, a same-data-centre round trip is about 0.5 ms and a cross-ocean one about 150 ms. So you cache hot data in memory, avoid sequential cross-region calls, parallelise independent calls and put content near users with CDNs."
+   }
+  ],
+  "quickCheck": [
+   {
+    "kind": "output",
+    "prompt": "A service handles 400 requests per second on average. Roughly how many requests per month is that?",
+    "options": [
+     "10 million",
+     "100 million",
+     "1 billion",
+     "100 billion"
+    ],
+    "answer": 2,
+    "explanation": "400 × 2.5 million seconds per month = 1 billion."
+   },
+   {
+    "kind": "mcq",
+    "prompt": "Which should come first in a design discussion?",
+    "options": [
+     "Choosing between PostgreSQL and MongoDB",
+     "Drawing the microservices",
+     "Clarifying use cases, constraints and expected scale",
+     "Picking a cloud provider"
+    ],
+    "answer": 2,
+    "explanation": "Technology choices only make sense once you know the problem and its numbers."
+   },
+   {
+    "kind": "bug",
+    "prompt": "A team expects their '10 Gbps' link to copy a 1 TB backup in about 100 seconds. Why do they miss the window?",
+    "options": [
+     "The link is faulty",
+     "10 Gbps is 10 gigabits, about 1.25 GB/s, so 1 TB takes about 800 seconds or more",
+     "TB means terabits",
+     "Backups cannot use the network"
+    ],
+    "answer": 1,
+    "explanation": "Network speeds are in bits. Divide by 8 and allow for protocol overhead."
+   }
+  ],
+  "cheatSheet": [
+   "Steps: use cases & constraints → high-level design → core components → scale.",
+   "1 req/s ≈ 2.5M/month; 40 req/s ≈ 100M/month; 400 req/s ≈ 1B/month.",
+   "2¹⁰ ≈ KB, 2²⁰ ≈ MB, 2³⁰ ≈ GB, 2⁴⁰ ≈ TB, 2⁵⁰ ≈ PB.",
+   "Memory ~100 ns; SSD random ~150 µs; same-DC round trip ~0.5 ms; cross-ocean ~150 ms.",
+   "Storage = items × size × retention × copies × overhead.",
+   "Design for peak (2–10× average); bits ÷ 8 = bytes.",
+   "Write down assumptions and out-of-scope items."
+  ],
+  "capstone": {
+   "title": "DevAtlas: a design-doc template and one filled-in design",
+   "criteria": [
+    "Template reusable for any feature",
+    "Filled design has real numbers from your capstone's expected usage",
+    "Trade-off table with a chosen option and the reason"
+   ]
+  },
+  "codeSamples": 8,
+  "file": "l6-3-2.ts"
+ },
+ {
+  "id": "6.3.3",
+  "title": "Performance vs scalability, latency vs throughput",
+  "minutes": 80,
+  "level": "Advanced",
+  "summary": "Tell a performance problem (slow for one user) from a scalability problem (fast for one, slow under load). Understand latency vs throughput, why latency explodes near full utilisation, Amdahl's law and the Universal Scalability Law, and find bottlenecks with the USE method.",
+  "terms": [
+   {
+    "term": "Performance problem",
+    "def": "The system is slow even for a single user. Fix the code, query or algorithm."
+   },
+   {
+    "term": "Scalability problem",
+    "def": "The system is fast for one user but slows down or fails as load grows. Fix contention, shared resources or architecture."
+   },
+   {
+    "term": "Latency",
+    "def": "The time to complete one operation, e.g. 120 ms for one request. Measured in percentiles."
+   },
+   {
+    "term": "Throughput",
+    "def": "How many operations complete per unit of time, e.g. 2,000 requests per second."
+   },
+   {
+    "term": "Utilisation",
+    "def": "The fraction of time a resource is busy. At 100% there is no spare capacity and requests queue."
+   },
+   {
+    "term": "Saturation",
+    "def": "Work that is waiting because a resource is fully busy (queue length, run-queue, pending connections)."
+   },
+   {
+    "term": "Amdahl's law",
+    "def": "The speedup from adding workers is limited by the part of the work that cannot run in parallel."
+   },
+   {
+    "term": "Contention",
+    "def": "Workers waiting for the same shared thing: a lock, a database row, a connection pool."
+   }
+  ],
+  "interview": [
+   {
+    "q": "What is the difference between a performance problem and a scalability problem?",
+    "a": "A performance problem means the system is slow even for one user, so you optimise code, queries or algorithms. A scalability problem means it is fast for one user but degrades as load increases, usually because of a saturated shared resource (database, lock, pool, network). You tell them apart by measuring latency at increasing load."
+   },
+   {
+    "q": "Why does latency grow so fast near 100% utilisation?",
+    "a": "Requests arrive in random bursts. Near full utilisation the servers have no spare capacity to drain queues created by bursts, so waiting time grows roughly as service time divided by (1 − utilisation): 10× at 90%, 100× at 99%. Tail latency grows even faster, so systems keep headroom."
+   },
+   {
+    "q": "You added servers but throughput did not increase. What do you check?",
+    "a": "That the app tier was actually the bottleneck. I check utilisation, saturation and errors of shared resources: database CPU and locks, connection pool waits, a single-threaded component, network limits, or a downstream rate limit. Amdahl's law says any serial step caps the speedup, so I look for hot rows, global locks and single leaders."
+   }
+  ],
+  "quickCheck": [
+   {
+    "kind": "mcq",
+    "prompt": "An endpoint takes 3 seconds even with no other traffic. What kind of problem is it?",
+    "options": [
+     "Scalability problem",
+     "Performance problem",
+     "Availability problem",
+     "Consistency problem"
+    ],
+    "answer": 1,
+    "explanation": "Slow for a single user means a performance problem: profile the request."
+   },
+   {
+    "kind": "output",
+    "prompt": "Using average time ≈ S / (1 − U), a request with 10 ms service time at 90% utilisation takes about…",
+    "options": [
+     "11 ms",
+     "19 ms",
+     "100 ms",
+     "900 ms"
+    ],
+    "answer": 2,
+    "explanation": "10 / (1 − 0.9) = 100 ms. Ninety percent of that time is waiting in the queue."
+   },
+   {
+    "kind": "bug",
+    "prompt": "Throughput stays at about 900 requests per second whether you run 4 or 12 API servers, and database CPU is only 30%. What is the most likely cause?",
+    "options": [
+     "The database needs more CPU",
+     "A lock or hot row serialises requests (contention)",
+     "The load balancer is too fast",
+     "The servers need more RAM"
+    ],
+    "answer": 1,
+    "explanation": "Flat throughput with low CPU points to waiting, not work: check lock waits and pool waits."
+   }
+  ],
+  "cheatSheet": [
+   "Performance = slow for one; scalability = slow under load.",
+   "Latency = time per operation; throughput = operations per second. Report both.",
+   "Average time ≈ S / (1 − U): 2× at 50%, 10× at 90%, 100× at 99%.",
+   "Throughput ceiling = slowest stage; latency = sum of stages.",
+   "Amdahl: serial fraction s caps speedup at 1/s.",
+   "USE: Utilisation, Saturation, Errors for every resource.",
+   "Kill contention: shard counters, append-only events, no global locks."
+  ],
+  "capstone": {
+   "title": "DevAtlas: find the knee of your API",
+   "criteria": [
+    "Step profile, not one constant load",
+    "Knee identified with numbers",
+    "Bottleneck named with evidence (metric or log)",
+    "Before/after comparison"
+   ]
+  },
+  "codeSamples": 8,
+  "file": "l6-3-3.ts"
+ },
+ {
+  "id": "6.3.4",
+  "title": "Availability: failover, replication and the nines",
+  "minutes": 80,
+  "level": "Advanced",
+  "summary": "Measure availability in nines and turn it into minutes of allowed downtime, compute the availability of components in series and in parallel, and design failover (active-passive and active-active) with replication, health checks, fencing and error budgets.",
+  "terms": [
+   {
+    "term": "Availability",
+    "def": "The fraction of time (or of requests) a service works correctly, e.g. 99.9%."
+   },
+   {
+    "term": "The nines",
+    "def": "Shorthand for availability: three nines = 99.9% (about 8.8 hours of downtime a year), four nines = 99.99% (about 53 minutes)."
+   },
+   {
+    "term": "Single point of failure (SPOF)",
+    "def": "A component whose failure takes the whole system down because nothing can take over."
+   },
+   {
+    "term": "Failover",
+    "def": "Moving traffic from a failed component to a healthy standby, automatically or by hand."
+   },
+   {
+    "term": "Active-passive",
+    "def": "One node serves traffic; a standby waits and takes over if the active one fails."
+   },
+   {
+    "term": "Active-active",
+    "def": "All nodes serve traffic at the same time; if one fails, the others absorb its share."
+   },
+   {
+    "term": "MTBF / MTTR",
+    "def": "Mean time between failures and mean time to recovery. Availability ≈ MTBF / (MTBF + MTTR)."
+   },
+   {
+    "term": "Split brain",
+    "def": "Two nodes both believe they are the primary and accept writes, so their data diverges."
+   },
+   {
+    "term": "Error budget",
+    "def": "The downtime your SLO allows (100% − SLO). You can 'spend' it on risky releases; when it is gone, you slow down."
+   }
+  ],
+  "interview": [
+   {
+    "q": "What is the availability of three services in series, each 99.9%? And of two in parallel at 99%?",
+    "a": "In series: 0.999³ ≈ 99.7%, so about 26 hours of downtime a year. In parallel: 1 − 0.01² = 99.99%, assuming failures are independent. Series dependencies reduce availability; redundancy increases it."
+   },
+   {
+    "q": "Compare active-passive and active-active.",
+    "a": "Active-passive: one node serves and a standby takes over on failure. It is simpler, avoids write conflicts, but wastes the standby's capacity and has a failover gap. Active-active: all nodes serve, so capacity is used and losing one node just shifts load; easy for stateless services, but for databases it needs multi-writer conflict resolution, so most systems keep a single writer with failover."
+   },
+   {
+    "q": "How do you prevent split brain during failover?",
+    "a": "Do not trust a single observer: require a quorum (majority) to declare the primary dead, then fence the old primary before promoting the new one, for example by revoking its storage or network access, or by using fencing tokens so storage rejects writes from an older leader term."
+   }
+  ],
+  "quickCheck": [
+   {
+    "kind": "output",
+    "prompt": "Roughly how much downtime per month does a 99.9% SLO allow?",
+    "options": [
+     "About 4 minutes",
+     "About 43 minutes",
+     "About 7 hours",
+     "About 1 day"
+    ],
+    "answer": 1,
+    "explanation": "0.1% of a 30.4-day month ≈ 43.8 minutes."
+   },
+   {
+    "kind": "output",
+    "prompt": "A request passes through four components in series, each 99.9% available. What is the end-to-end availability?",
+    "options": [
+     "99.9%",
+     "About 99.6%",
+     "About 99.99%",
+     "96%"
+    ],
+    "answer": 1,
+    "explanation": "0.999⁴ ≈ 0.996. Series components multiply, so availability goes down."
+   },
+   {
+    "kind": "bug",
+    "prompt": "After a network blip, both database nodes accept writes for 10 minutes and the data diverges. What was missing?",
+    "options": [
+     "A bigger disk",
+     "Quorum-based failure detection and fencing of the old primary",
+     "More read replicas",
+     "A CDN"
+    ],
+    "answer": 1,
+    "explanation": "That is split brain. Fencing makes sure only one node can write."
+   }
+  ],
+  "cheatSheet": [
+   "99.9% ≈ 43.8 min/month; 99.99% ≈ 4.4 min/month; 99.999% ≈ 26 s/month.",
+   "Series: multiply. Parallel: 1 − Π(1 − A).",
+   "Active-passive: simple, failover gap. Active-active: uses all capacity, conflicts for writes.",
+   "Hot standby = running and in sync; cold = must start first.",
+   "Async replication can lose recent writes on failover; sync costs latency.",
+   "Availability ≈ MTBF / (MTBF + MTTR); MTTR is often cheaper to fix.",
+   "Quorum + fencing prevent split brain.",
+   "Different zones; drill failover; budget errors."
+  ],
+  "capstone": {
+   "title": "DevAtlas: availability plan and failover runbook",
+   "criteria": [
+    "Ceiling computed from the dependency table",
+    "Every SPOF has a mitigation or an accepted risk",
+    "Runbook has detection, action, verification and communication steps"
+   ]
+  },
+  "codeSamples": 8,
+  "file": "l6-3-4.ts"
+ },
+ {
+  "id": "6.3.5",
+  "title": "Consistency patterns: strong, eventual and weak",
+  "minutes": 80,
+  "level": "Advanced",
+  "summary": "Understand weak, eventual and strong consistency and what CAP really forces you to choose. Fix the classic 'I changed it but still see the old value' bug with read-your-own-writes, reason about quorums (R + W > N), and avoid lost updates with versions and CRDTs.",
+  "terms": [
+   {
+    "term": "Strong consistency",
+    "def": "After a write completes, every read sees it. The system behaves as if there were one copy of the data."
+   },
+   {
+    "term": "Eventual consistency",
+    "def": "If writes stop, all copies converge to the same value after some delay. Reads in the meantime may be stale."
+   },
+   {
+    "term": "Weak consistency",
+    "def": "After a write, reads may or may not see it, and the system makes no effort to make it visible later (best effort, e.g. live video frames)."
+   },
+   {
+    "term": "Replication lag",
+    "def": "How far an asynchronous replica is behind the primary, in time or in log position."
+   },
+   {
+    "term": "Read-your-own-writes",
+    "def": "A guarantee that a user always sees their own changes, even if other users may briefly see old data."
+   },
+   {
+    "term": "Quorum",
+    "def": "With N copies, a write waits for W acknowledgements and a read asks R copies. If R + W > N, every read overlaps the latest write."
+   },
+   {
+    "term": "CAP theorem",
+    "def": "When the network is partitioned, a replicated system must choose: refuse some requests (consistency) or answer with possibly stale data (availability)."
+   },
+   {
+    "term": "CRDT",
+    "def": "Conflict-free replicated data type: a data structure (counter, set) whose copies can be updated independently and always merge to the same result."
+   }
+  ],
+  "interview": [
+   {
+    "q": "Explain strong, eventual and weak consistency with examples.",
+    "a": "Strong: every read after a write sees it, like a bank balance in a relational database. Eventual: reads may be stale for a while but copies converge, like DNS, email or like counts. Weak: no guarantee a read ever sees a write, like dropped frames in a video call or an evicted memcached entry. Choose by the cost of a stale read."
+   },
+   {
+    "q": "Users complain they do not see their changes right after saving. What is happening and how do you fix it?",
+    "a": "Reads are served by asynchronous replicas or caches that lag the primary. Fix with read-your-own-writes: route that user's reads to the primary for a short window after a write, or record the write's log position and only read from replicas that have replayed it. Also invalidate caches on write."
+   },
+   {
+    "q": "What does R + W > N give you?",
+    "a": "With N replicas, writes acknowledged by W and reads querying R, the read set and write set must overlap, so at least one replica in every read has the newest acknowledged write. N = 3, W = 2, R = 2 is common because it tolerates one node down for both reads and writes."
+   }
+  ],
+  "quickCheck": [
+   {
+    "kind": "mcq",
+    "prompt": "Which feature most needs strong consistency?",
+    "options": [
+     "Number of likes on a post",
+     "Search results for 'Python'",
+     "Stock left for an item during checkout",
+     "Recommended lessons"
+    ],
+    "answer": 2,
+    "explanation": "Overselling stock causes real harm; the others tolerate a short delay."
+   },
+   {
+    "kind": "output",
+    "prompt": "N = 5 replicas, writes wait for W = 3. What is the smallest R that guarantees a read sees the latest write?",
+    "options": [
+     "1",
+     "2",
+     "3",
+     "5"
+    ],
+    "answer": 2,
+    "explanation": "R + W > N → R > 2, so R = 3."
+   },
+   {
+    "kind": "bug",
+    "prompt": "An admin removes a user's access, but the user keeps using the admin page for an hour. Most likely cause?",
+    "options": [
+     "The database lost the write",
+     "Permissions are cached with a 1-hour TTL and not invalidated on change",
+     "The CDN is down",
+     "Strong consistency is too slow"
+    ],
+    "answer": 1,
+    "explanation": "Caches are copies too. Invalidate (or version) permission caches on every change."
+   }
+  ],
+  "cheatSheet": [
+   "Weak: best effort (video, games). Eventual: converges (DNS, likes). Strong: always latest (money, stock).",
+   "CAP: during a partition choose CP (block) or AP (serve stale).",
+   "Read-your-own-writes: primary for a window, or LSN-based routing.",
+   "Monotonic reads: stick a user to one replica.",
+   "Quorum: R + W > N; N=3, W=2, R=2 is the classic setting.",
+   "LWW loses concurrent updates; CRDTs merge safely.",
+   "Caches, CDNs and search indexes are eventually consistent copies."
+  ],
+  "capstone": {
+   "title": "DevAtlas: implement read-your-own-writes",
+   "criteria": [
+    "Routing in one place, not in every handler",
+    "Test with a simulated lagging replica",
+    "Metric for primary-routed reads"
+   ]
+  },
+  "codeSamples": 8,
+  "file": "l6-3-5.ts"
+ },
+ {
+  "id": "6.3.6",
+  "title": "DNS and CDNs: getting closer to the user",
+  "minutes": 75,
+  "level": "Advanced",
+  "summary": "How DNS resolution and TTLs really work (and why they bite during migrations), how DNS can route traffic by weight, latency or location, and how push and pull CDNs cut latency and origin load. Includes cache headers, hit-ratio maths and safe cache busting.",
+  "terms": [
+   {
+    "term": "DNS resolver",
+    "def": "The server (often your ISP's, or 1.1.1.1 / 8.8.8.8) that looks up a name on your behalf and caches the answer."
+   },
+   {
+    "term": "Authoritative name server",
+    "def": "The server that holds the official records for a domain (configured with NS records at the registrar)."
+   },
+   {
+    "term": "TTL (time to live)",
+    "def": "How many seconds a resolver may cache a DNS answer (or a CDN may cache a response) before asking again."
+   },
+   {
+    "term": "A / AAAA / CNAME / NS / MX",
+    "def": "Record types: IPv4 address, IPv6 address, alias to another name, the domain's name servers, mail servers."
+   },
+   {
+    "term": "CDN",
+    "def": "Content delivery network: servers in many cities (points of presence) that cache and serve content close to users."
+   },
+   {
+    "term": "Pull CDN",
+    "def": "The CDN fetches a file from your server (the origin) the first time a user asks for it, then caches it until the TTL expires."
+   },
+   {
+    "term": "Push CDN",
+    "def": "You upload files to the CDN yourself whenever they change; the CDN never asks your server."
+   },
+   {
+    "term": "Cache hit ratio",
+    "def": "The share of requests the CDN serves from its cache without contacting the origin."
+   }
+  ],
+  "interview": [
+   {
+    "q": "Walk through what happens when a browser resolves a domain name.",
+    "a": "The browser checks its cache, then the OS cache, then asks a recursive resolver. On a resolver miss, it queries a root server for the TLD's name servers, the TLD server for the domain's authoritative servers, and the authoritative server for the record. Each step is cached for its TTL, so most lookups are answered by a nearby cache."
+   },
+   {
+    "q": "Push CDN or pull CDN?",
+    "a": "Pull: the CDN fetches from the origin on the first request and caches by TTL; easy, ideal for high-traffic sites, but the first request per edge is slow and changes wait for expiry or purge. Push: you upload content on each change; good for low-traffic or rarely changing content and full control over what is cached, but you manage uploads. Most web apps use pull with hashed filenames."
+   },
+   {
+    "q": "How do you deploy a new frontend without users getting stale files from the CDN?",
+    "a": "Bundle with content hashes in filenames and serve them with Cache-Control: public, max-age=31536000, immutable; serve the HTML with no-cache so it is revalidated on each load. A deploy changes the HTML, which references new URLs, so no purge is needed and old pages keep working with their old files."
+   }
+  ],
+  "quickCheck": [
+   {
+    "kind": "mcq",
+    "prompt": "You must move devatlas.dev to a new IP next Saturday. The current TTL is 86,400 seconds. What should you do first?",
+    "options": [
+     "Change the IP on Saturday and wait",
+     "Lower the TTL to e.g. 60 s at least a day before Saturday",
+     "Set the TTL to 0 on Saturday",
+     "Purge the CDN"
+    ],
+    "answer": 1,
+    "explanation": "Resolvers must first pick up the low TTL; that takes up to one old TTL period."
+   },
+   {
+    "kind": "output",
+    "prompt": "A CDN receives 10,000 requests per second with a 95% hit ratio. How many reach the origin?",
+    "options": [
+     "50",
+     "500",
+     "950",
+     "9,500"
+    ],
+    "answer": 1,
+    "explanation": "5% of 10,000 = 500."
+   },
+   {
+    "kind": "bug",
+    "prompt": "After enabling a CDN, some users see another user's name in the header of the dashboard. What went wrong?",
+    "options": [
+     "DNS is misconfigured",
+     "A personalised response was cached by the shared CDN because it lacked Cache-Control: private/no-store",
+     "The TTL is too short",
+     "The CDN uses pull mode"
+    ],
+    "answer": 1,
+    "explanation": "Shared caches must never store user-specific responses."
+   }
+  ],
+  "cheatSheet": [
+   "Resolution: browser → OS → resolver → root → TLD → authoritative; cached per TTL.",
+   "Lower TTL ≥ one old TTL before a change; keep the old server until traffic drains.",
+   "DNS routing: weighted, latency-based, geolocation, failover (never instant).",
+   "Pull CDN: fetch on miss, cache by TTL. Push CDN: you upload on change.",
+   "Hashed assets: public, max-age=31536000, immutable. HTML: no-cache.",
+   "s-maxage for CDNs; stale-while-revalidate hides refreshes.",
+   "Personal data: private, no-store. Keep Vary minimal."
+  ],
+  "capstone": {
+   "title": "DevAtlas: put the frontend and public API behind a CDN",
+   "criteria": [
+    "Correct headers per route",
+    "Cache status visible in curl output",
+    "No personalised response cached (tested with two users)",
+    "Before/after timing"
+   ]
+  },
+  "codeSamples": 8,
+  "file": "l6-3-6.ts"
+ },
+ {
+  "id": "6.3.7",
+  "title": "Load balancers, reverse proxies and service discovery",
+  "minutes": 80,
+  "level": "Advanced",
+  "summary": "Layer 4 vs layer 7 load balancing, health and readiness checks, connection draining, sticky sessions vs stateless servers, what a reverse proxy adds (TLS termination, compression, rate limiting, caching), why 'power of two choices' beats round robin, and how services find each other with service discovery.",
+  "terms": [
+   {
+    "term": "Layer 4 load balancer",
+    "def": "Balances TCP/UDP connections using IP addresses and ports only. Fast, protocol-agnostic, cannot see URLs or headers."
+   },
+   {
+    "term": "Layer 7 load balancer",
+    "def": "Understands HTTP: can route by path, host or header, terminate TLS, retry, and rewrite requests."
+   },
+   {
+    "term": "Reverse proxy",
+    "def": "A server in front of your app servers that receives client requests and forwards them, adding TLS, compression, caching, rate limits and a single public entry point."
+   },
+   {
+    "term": "Health check",
+    "def": "A periodic probe (TCP connect or HTTP GET /healthz) that removes failing backends from rotation."
+   },
+   {
+    "term": "Readiness vs liveness",
+    "def": "Readiness: may this instance receive traffic now? Liveness: is it stuck and should it be restarted?"
+   },
+   {
+    "term": "Connection draining",
+    "def": "When removing an instance, stop sending it new requests but let in-flight ones finish."
+   },
+   {
+    "term": "Sticky session",
+    "def": "The load balancer sends all requests from one user to the same server (via a cookie or IP hash)."
+   },
+   {
+    "term": "Service discovery",
+    "def": "How a service finds the current addresses of healthy instances of another service (DNS, a registry like Consul, or the platform such as Kubernetes)."
+   }
+  ],
+  "interview": [
+   {
+    "q": "What is the difference between a layer 4 and a layer 7 load balancer?",
+    "a": "L4 balances TCP/UDP connections by IP and port without reading the payload: very fast and protocol-agnostic. L7 parses HTTP, so it can route by path or host, terminate TLS, add headers, retry, and balance individual requests within HTTP/2 connections, at some extra cost. Big systems often use L4 in front of a fleet of L7 proxies."
+   },
+   {
+    "q": "Why might users get logged out after you add a second server, and how do you fix it?",
+    "a": "Sessions were stored in each server's memory, so a request routed to the other server has no session. Sticky sessions hide it but unbalance load and fail when a server dies. The real fix is stateless servers: signed tokens or a shared session store like Redis, and shared data-protection keys so every server can validate cookies."
+   },
+   {
+    "q": "What is the difference between a load balancer and a reverse proxy?",
+    "a": "A load balancer spreads requests across several backends and removes unhealthy ones. A reverse proxy is a single entry point that forwards requests and adds features like TLS termination, compression, caching, rate limiting and hiding internal servers; it is useful even with one backend. Tools like NGINX, HAProxy and Envoy do both."
+   }
+  ],
+  "quickCheck": [
+   {
+    "kind": "mcq",
+    "prompt": "You need to route /api/* to one pool and /admin/* to another, and terminate TLS. Which balancer?",
+    "options": [
+     "Layer 4",
+     "Layer 7",
+     "DNS round robin",
+     "Either, they are the same"
+    ],
+    "answer": 1,
+    "explanation": "Path-based routing and TLS termination require reading HTTP: layer 7."
+   },
+   {
+    "kind": "bug",
+    "prompt": "During a short database outage, Kubernetes restarts all API pods in a loop and recovery takes 20 minutes. What is wrong?",
+    "options": [
+     "Too few replicas",
+     "The liveness probe checks the database, so a DB problem kills healthy processes",
+     "The readiness probe is missing",
+     "The Service selector is wrong"
+    ],
+    "answer": 1,
+    "explanation": "Liveness should check only that the process works; dependency checks belong in readiness."
+   },
+   {
+    "kind": "mcq",
+    "prompt": "Why does 'power of two choices' beat round robin when request costs vary?",
+    "options": [
+     "It uses more servers",
+     "It avoids sending new work to a server that is already stuck on slow requests, using only two samples",
+     "It caches responses",
+     "It sorts requests by size"
+    ],
+    "answer": 1,
+    "explanation": "Comparing two random servers avoids most long queues without needing a global view."
+   }
+  ],
+  "cheatSheet": [
+   "L4: connections, fast, any protocol. L7: HTTP-aware routing, TLS, retries.",
+   "Reverse proxy: TLS, compression, limits, caching, single entry point.",
+   "Stateless servers: sessions in cookies/Redis, files in object storage.",
+   "Readiness gates traffic; liveness restarts stuck processes (no dependency checks).",
+   "Deploys: not-ready → drain → SIGTERM → exit.",
+   "Uneven costs: least outstanding or power of two choices.",
+   "Discovery: platform name (k8s Service, LB) or registry (Consul, etcd).",
+   "Retry only idempotent requests; trust X-Forwarded-For only from the proxy."
+  ],
+  "capstone": {
+   "title": "DevAtlas: three stateless API replicas behind a proxy, with zero-downtime deploys",
+   "criteria": [
+    "No in-memory sessions",
+    "Separate liveness and readiness endpoints",
+    "Graceful shutdown implemented",
+    "k6 run during restart with 0% errors"
+   ]
+  },
+  "codeSamples": 8,
+  "file": "l6-3-7.ts"
+ },
+ {
+  "id": "6.3.8",
+  "title": "Scaling relational databases: replication, federation and sharding",
+  "minutes": 90,
+  "level": "Advanced",
+  "summary": "The scaling ladder for relational databases, in the order you should climb it: tune, cache, read replicas, bigger hardware, federation, denormalisation, partitioning and sharding. How to choose a shard key, hash vs range vs directory sharding, cross-shard queries, globally unique ids and resharding.",
+  "terms": [
+   {
+    "term": "Primary-replica replication",
+    "def": "One primary accepts writes and streams changes to read-only replicas that serve reads. (The primer calls it master-slave.)"
+   },
+   {
+    "term": "Multi-primary replication",
+    "def": "Several nodes accept writes and replicate to each other; needs conflict resolution. (The primer calls it master-master.)"
+   },
+   {
+    "term": "Federation",
+    "def": "Splitting databases by function: users in one database, lessons in another, billing in a third."
+   },
+   {
+    "term": "Sharding",
+    "def": "Splitting one large table's rows across several databases by a shard key, so each shard holds a subset."
+   },
+   {
+    "term": "Shard key",
+    "def": "The column used to decide which shard a row lives on, e.g. learner_id or school_id."
+   },
+   {
+    "term": "Hot spot",
+    "def": "A shard (or partition) that gets far more traffic or data than the others, so it saturates first."
+   },
+   {
+    "term": "Denormalisation",
+    "def": "Storing redundant copies of data (e.g. a counter or an author's name) to avoid expensive joins or aggregations on read."
+   },
+   {
+    "term": "Partitioning",
+    "def": "Splitting one table into pieces inside a single database server (e.g. one partition per month)."
+   }
+  ],
+  "interview": [
+   {
+    "q": "Your database is overloaded. What do you do, in order?",
+    "a": "Measure what is overloaded (reads or writes, CPU, I/O, locks). Then: tune queries and indexes, add caching for hot reads, add read replicas for read load, scale up the server, federate by domain, denormalise expensive reads, partition big tables, and only then shard for write throughput or data size. Each step has trade-offs, so I stop as soon as the numbers are met."
+   },
+   {
+    "q": "How do you choose a shard key?",
+    "a": "From the access patterns: the key should have high cardinality, spread writes evenly and keep the data of the most frequent queries together, like tenant_id for a SaaS. Avoid low-cardinality, skewed or sequential keys (with range sharding) and keys that change. Check the distribution on real data and plan for very large tenants."
+   },
+   {
+    "q": "What problems does sharding introduce?",
+    "a": "Cross-shard joins, transactions, unique constraints and aggregates become hard; ids need a global scheme (Snowflake, UUIDv7); migrations, backups and monitoring multiply; hot shards appear if the key is skewed; and resharding moves data. Mitigations: tenant-aligned keys, denormalised read models, logical shards with a routing layer, and tooling like Vitess or Citus."
+   }
+  ],
+  "quickCheck": [
+   {
+    "kind": "mcq",
+    "prompt": "Reads are 95% of the load and the primary's CPU is at 85%. What is usually the best next step?",
+    "options": [
+     "Shard the database",
+     "Add read replicas and cache hot reads",
+     "Switch to multi-primary replication",
+     "Federate by function"
+    ],
+    "answer": 1,
+    "explanation": "Read-heavy load is the cheapest kind to scale: replicas and caches."
+   },
+   {
+    "kind": "bug",
+    "prompt": "Attempts are range-sharded by attempt_id (auto-increment) across 4 shards. Shard 4 is at 100% CPU, shards 1–3 are idle. Why?",
+    "options": [
+     "Shard 4 has a slower disk",
+     "New ids are always in the last range, so all inserts go to the last shard",
+     "Hashing is uneven",
+     "Replication lag"
+    ],
+    "answer": 1,
+    "explanation": "Sequential keys plus range sharding create a write hot spot."
+   },
+   {
+    "kind": "mcq",
+    "prompt": "Which is the best shard key for a multi-school learning platform where almost every query is 'within one school'?",
+    "options": [
+     "country",
+     "created_at",
+     "school_id",
+     "score"
+    ],
+    "answer": 2,
+    "explanation": "Tenant id keeps each school's queries on one shard; watch for very large schools."
+   }
+  ],
+  "cheatSheet": [
+   "Ladder: tune → cache → replicas → scale up → federate → denormalise → partition → shard.",
+   "Replicas scale reads, not writes; mind replication lag.",
+   "Federation: split by function; no cross-DB joins.",
+   "Hash sharding: even, but ranges scatter. Range: ranges stay together, hot spots on sequential keys.",
+   "Directory sharding: lookup table, can move tenants.",
+   "Shard key: high cardinality, even, matches top queries, never changes.",
+   "Ids: Snowflake or UUIDv7, not auto-increment.",
+   "Many logical shards → painless resharding."
+  ],
+  "capstone": {
+   "title": "DevAtlas: a data-scaling plan with triggers",
+   "criteria": [
+    "Numbers for the biggest tables",
+    "Each step has a trigger metric",
+    "Shard key justified by queries",
+    "Id strategy compatible with sharding"
+   ]
+  },
+  "codeSamples": 8,
+  "file": "l6-3-8.ts"
+ },
+ {
+  "id": "6.3.9",
+  "title": "SQL or NoSQL: choosing a data store",
+  "minutes": 85,
+  "level": "Advanced",
+  "summary": "The four NoSQL families (key-value, document, wide-column, graph), what each is fast and slow at, ACID vs BASE, and a method to choose a store from your access patterns. Includes wide-column partition design, single-table key design, LSM trees, graph traversal and PostgreSQL JSONB as the middle ground.",
+  "terms": [
+   {
+    "term": "Key-value store",
+    "def": "Stores values under a key with O(1) get/put by key (Redis, Memcached, DynamoDB at its simplest). No queries by value."
+   },
+   {
+    "term": "Document store",
+    "def": "Stores JSON-like documents with nested fields and secondary indexes (MongoDB, Couchbase, Firestore, Cosmos DB)."
+   },
+   {
+    "term": "Wide-column store",
+    "def": "Rows grouped into partitions by a partition key and sorted by clustering columns inside each partition (Cassandra, ScyllaDB, HBase, Bigtable)."
+   },
+   {
+    "term": "Graph database",
+    "def": "Stores nodes and relationships directly, so traversing many hops is cheap (Neo4j, Amazon Neptune)."
+   },
+   {
+    "term": "ACID",
+    "def": "Atomicity, consistency, isolation, durability: the transaction guarantees of relational databases."
+   },
+   {
+    "term": "BASE",
+    "def": "Basically available, soft state, eventually consistent: the trade-off many distributed NoSQL stores make for availability and scale."
+   },
+   {
+    "term": "Access pattern",
+    "def": "A concrete query the application runs, e.g. 'last 50 messages of a conversation, newest first'. NoSQL schemas are designed from these."
+   },
+   {
+    "term": "LSM tree",
+    "def": "Log-structured merge tree: writes go to memory and are flushed as sorted immutable files that are merged later. Makes writes very fast (Cassandra, RocksDB)."
+   }
+  ],
+  "interview": [
+   {
+    "q": "When would you choose a NoSQL store over a relational database?",
+    "a": "When the access patterns are simple and known (by key or partition), volume or write throughput is beyond a comfortable single relational server, the data is semi-structured, and I do not need joins or multi-row transactions on that data. Examples: chat messages and events in a wide-column store, sessions and counters in a key-value store, relationship traversals in a graph store. Otherwise I default to SQL."
+   },
+   {
+    "q": "How do you design a Cassandra or DynamoDB table?",
+    "a": "Start from the access patterns, not entities. For each query, choose a partition key that gives every query exactly one partition and spreads load evenly, and a sort or clustering key that returns rows in the needed order. Denormalise into one table per pattern if needed, bound partition size with time buckets, and avoid scans."
+   },
+   {
+    "q": "Why are writes so fast in LSM-based stores?",
+    "a": "Writes go to a sequential commit log and an in-memory memtable; full memtables are flushed as immutable sorted files. Nothing is updated in place, so writes are sequential I/O. Reads may check several files (helped by Bloom filters) and compaction later merges files and removes old versions."
+   }
+  ],
+  "quickCheck": [
+   {
+    "kind": "mcq",
+    "prompt": "Which store fits 'all clicks from every learner, 50,000 writes per second, queried per learner per day'?",
+    "options": [
+     "A graph database",
+     "A wide-column store partitioned by (learner, day)",
+     "A single PostgreSQL table without indexes",
+     "Memcached"
+    ],
+    "answer": 1,
+    "explanation": "High-volume appends with a known per-partition query is the wide-column sweet spot."
+   },
+   {
+    "kind": "bug",
+    "prompt": "A MongoDB 'course' document embeds every learner's progress. Writes start failing for popular courses. Why?",
+    "options": [
+     "MongoDB cannot store arrays",
+     "The document grows without bound and hits the 16 MB limit (and every update rewrites a huge document)",
+     "Indexes are missing",
+     "Replication lag"
+    ],
+    "answer": 1,
+    "explanation": "Unbounded embedded arrays are an anti-pattern: reference progress in its own collection."
+   },
+   {
+    "kind": "mcq",
+    "prompt": "You need flexible per-learner settings plus joins with the learners table and transactions. Best fit?",
+    "options": [
+     "A separate document database",
+     "A JSONB column in PostgreSQL",
+     "A graph database",
+     "A wide-column store"
+    ],
+    "answer": 1,
+    "explanation": "JSONB gives schema flexibility inside the relational system you already run."
+   }
+  ],
+  "cheatSheet": [
+   "Key-value: by key only; caches, sessions, counters, leaderboards.",
+   "Document: whole aggregates; flexible schema; avoid unbounded arrays.",
+   "Wide-column: partition key + clustering order; huge append-heavy data; one table per query.",
+   "Graph: multi-hop relationships (social, fraud, recommendations).",
+   "SQL default: joins, transactions, constraints, ad-hoc queries; JSONB for flexibility.",
+   "LSM = fast writes; B-tree = fast reads.",
+   "Design NoSQL from access patterns; bound partitions; no scans.",
+   "One system of record; other stores are derived views."
+  ],
+  "capstone": {
+   "title": "DevAtlas: an architecture decision record for your data stores",
+   "criteria": [
+    "ADR format",
+    "Access patterns and volumes as evidence",
+    "At least one rejected alternative with reasons",
+    "Consequences include operational cost"
+   ]
+  },
+  "codeSamples": 8,
+  "file": "l6-3-9.ts"
+ },
+ {
+  "id": "6.3.10",
+  "title": "Caching strategies: cache-aside, write-through, write-behind, refresh-ahead",
+  "minutes": 90,
+  "level": "Advanced",
+  "summary": "Where to cache (client, CDN, web server, database, application) and what (query results or objects), the four update strategies and their trade-offs, safe invalidation (including the cache-aside race), eviction policies, hot keys, TTL jitter and stampede protection with locks and probabilistic early refresh.",
+  "terms": [
+   {
+    "term": "Cache-aside (lazy loading)",
+    "def": "The application reads the cache; on a miss it reads the database and fills the cache. Writes go to the database and invalidate the cache."
+   },
+   {
+    "term": "Write-through",
+    "def": "Every write goes to the cache and the database synchronously, so the cache is always populated and fresh."
+   },
+   {
+    "term": "Write-behind (write-back)",
+    "def": "Writes go to the cache and are flushed to the database later, asynchronously and often in batches."
+   },
+   {
+    "term": "Refresh-ahead",
+    "def": "The cache refreshes popular entries shortly before they expire, so readers rarely see a miss."
+   },
+   {
+    "term": "Eviction policy",
+    "def": "How a full cache chooses what to remove: LRU (least recently used), LFU (least frequently used), TTL-based, random."
+   },
+   {
+    "term": "Cache stampede",
+    "def": "A popular key expires and many requests miss at once, all hitting the database together (also called dogpile or thundering herd)."
+   },
+   {
+    "term": "Negative caching",
+    "def": "Caching 'not found' results briefly, so repeated lookups for missing data do not hit the database."
+   },
+   {
+    "term": "Hot key",
+    "def": "A single cache key that receives a large share of traffic and can overload one cache node."
+   }
+  ],
+  "interview": [
+   {
+    "q": "Compare cache-aside, write-through and write-behind.",
+    "a": "Cache-aside: the app reads the cache, on a miss loads from the DB and fills the cache; writes go to the DB and delete the key. Simple and resilient, but misses are slow and data can be stale. Write-through: writes update cache and DB synchronously; fresh cache, slower writes, caches unread data. Write-behind: writes go to the cache and are flushed later in batches; fastest writes, but data is at risk until flushed and it is more complex."
+   },
+   {
+    "q": "What is a cache stampede and how do you prevent it?",
+    "a": "When a hot key expires, many concurrent requests miss and all rebuild it from the database at once. Prevent it with TTL jitter so keys do not expire together, a lock or single-flight so only one request rebuilds while others wait or get a stale copy, and probabilistic early refresh so one reader refreshes slightly before expiry."
+   },
+   {
+    "q": "Why delete the cache key on write instead of updating it?",
+    "a": "Updating can race: two writers or a reader with an old value can leave a stale value in the cache. Deleting means the next read loads the current value. There is still a small race with a concurrent reader's late fill, which short TTLs, versioned keys or leases close."
+   }
+  ],
+  "quickCheck": [
+   {
+    "kind": "mcq",
+    "prompt": "Which strategy risks losing acknowledged writes if the cache crashes?",
+    "options": [
+     "Cache-aside",
+     "Write-through",
+     "Write-behind",
+     "Refresh-ahead"
+    ],
+    "answer": 2,
+    "explanation": "Write-behind acknowledges before the database has the data."
+   },
+   {
+    "kind": "bug",
+    "prompt": "Every 10 minutes the database spikes to 100% CPU for a few seconds. All cache keys are set with TTL 600 at deploy time. Cause?",
+    "options": [
+     "Redis is too small",
+     "Keys expire together and many requests rebuild them at once",
+     "Replication lag",
+     "The CDN is purging"
+    ],
+    "answer": 1,
+    "explanation": "Synchronised expiry causes stampedes; add jitter and single-flight."
+   },
+   {
+    "kind": "mcq",
+    "prompt": "A Redis instance used purely as a cache fills up. Which maxmemory-policy is usually right?",
+    "options": [
+     "noeviction",
+     "allkeys-lru or allkeys-lfu",
+     "volatile-ttl only",
+     "No policy, add RAM forever"
+    ],
+    "answer": 1,
+    "explanation": "For a cache, evicting the least useful keys is correct; noeviction makes writes fail."
+   }
+  ],
+  "cheatSheet": [
+   "Layers: client → CDN → web server → app (in-process / Redis) → DB buffer.",
+   "Cache objects, not arbitrary query results.",
+   "Cache-aside: default. Write-through: fresh, slower writes. Write-behind: fast, risky. Refresh-ahead: no miss latency for hot keys.",
+   "On write: delete the key (or bump a version); always keep a TTL.",
+   "Stampede: TTL jitter + single-flight lock + early refresh.",
+   "Pure cache: allkeys-lru / allkeys-lfu; set maxmemory.",
+   "Hot key: in-process cache or key replicas.",
+   "Test the cache-down fallback under load."
+  ],
+  "capstone": {
+   "title": "DevAtlas: a production cache module",
+   "criteria": [
+    "All six features present",
+    "Works with redis-py's API",
+    "Tests cover hit, miss, lock contention and Redis down"
+   ]
+  },
+  "codeSamples": 8,
+  "file": "l6-3-10.ts"
+ },
+ {
+  "id": "6.3.11",
+  "title": "Asynchronism: message queues, task queues and back pressure",
+  "minutes": 90,
+  "level": "Advanced",
+  "summary": "Take slow work off the request path with message and task queues. Understand delivery guarantees (at-least-once), visibility timeouts, idempotent consumers, retries with backoff and jitter, dead-letter queues, the outbox pattern, back pressure with bounded queues, and how to size workers with Little's law.",
+  "terms": [
+   {
+    "term": "Message queue",
+    "def": "A buffer that stores messages from producers until consumers process them (RabbitMQ, Amazon SQS, Azure Service Bus, Redis streams)."
+   },
+   {
+    "term": "Task queue",
+    "def": "A queue plus a worker framework that runs jobs (functions with arguments), with retries and scheduling (Celery, Sidekiq, Hangfire, BullMQ)."
+   },
+   {
+    "term": "At-least-once delivery",
+    "def": "Every message is delivered one or more times; duplicates are possible, so consumers must be idempotent."
+   },
+   {
+    "term": "Visibility timeout / ack",
+    "def": "A consumer must acknowledge a message within a time limit; otherwise the queue assumes it failed and delivers it again."
+   },
+   {
+    "term": "Dead-letter queue (DLQ)",
+    "def": "Where messages go after too many failed attempts, so one bad message cannot block or loop forever."
+   },
+   {
+    "term": "Back pressure",
+    "def": "Pushing back on producers when consumers cannot keep up (rejecting, slowing, or buffering with a limit) instead of letting queues grow without bound."
+   },
+   {
+    "term": "Idempotent consumer",
+    "def": "A consumer that produces the same result whether a message is processed once or several times."
+   },
+   {
+    "term": "Outbox pattern",
+    "def": "Writing an event to an 'outbox' table in the same database transaction as the business change, then publishing it from there, so the two never disagree."
+   }
+  ],
+  "interview": [
+   {
+    "q": "When do you use a queue, and what problems does it introduce?",
+    "a": "For work that is slow, unreliable or not needed for the immediate response, and to absorb bursts. It introduces eventual completion (the user needs status or notifications), duplicates under at-least-once delivery, ordering questions, poison messages, monitoring of queue depth, and the need for back pressure when consumers fall behind."
+   },
+   {
+    "q": "How do you make message processing effectively exactly-once?",
+    "a": "Accept at-least-once delivery and make processing idempotent: record processed message ids in the same transaction as the side effect, use upserts or conditional writes, and pass idempotency keys to external APIs. On the publishing side, use the outbox pattern so events and database changes are committed together."
+   },
+   {
+    "q": "What is back pressure and how do you implement it?",
+    "a": "It is how a system pushes back when it cannot keep up, instead of buffering without limit. Implement with bounded queues, rejecting or slowing producers when full (HTTP 429/503 with Retry-After, blocking publishers), autoscaling consumers on queue depth, and clients that retry with exponential backoff and jitter."
+   }
+  ],
+  "quickCheck": [
+   {
+    "kind": "mcq",
+    "prompt": "A worker crashes after sending an email but before acknowledging the message. What happens with an SQS-style queue?",
+    "options": [
+     "The message is lost",
+     "The message becomes visible again after the visibility timeout and is redelivered, so the email may be sent twice",
+     "The queue deletes it automatically",
+     "The producer resends it"
+    ],
+    "answer": 1,
+    "explanation": "That is at-least-once delivery; idempotency prevents the duplicate side effect."
+   },
+   {
+    "kind": "output",
+    "prompt": "Jobs arrive at 50 per second and each takes 0.4 s of worker time. Ignoring headroom, how many workers are busy on average?",
+    "options": [
+     "8",
+     "20",
+     "50",
+     "125"
+    ],
+    "answer": 1,
+    "explanation": "Little's law: 50 × 0.4 = 20 jobs in progress at any moment."
+   },
+   {
+    "kind": "bug",
+    "prompt": "One malformed message makes the consumer throw. Queue depth keeps growing and workers are at 100% CPU. What is missing?",
+    "options": [
+     "More workers",
+     "A maximum delivery count with a dead-letter queue",
+     "A bigger queue",
+     "Ordering guarantees"
+    ],
+    "answer": 1,
+    "explanation": "The poison message is retried forever; cap attempts and dead-letter it."
+   }
+  ],
+  "cheatSheet": [
+   "Async for slow, unreliable, non-immediate work; return 202 + job id.",
+   "Queue (one consumer per message) vs log (replayable, many consumer groups).",
+   "At-least-once → idempotent consumers; ack after success.",
+   "Retries: exponential backoff + full jitter + cap; then DLQ.",
+   "Bound queues; scale on depth/age; 429/503 + Retry-After when full.",
+   "Workers ≈ rate × time ÷ utilisation (Little's law).",
+   "Outbox: event row in the same transaction; relay publishes.",
+   "Order per key: FIFO groups, sessions or Kafka partitions."
+  ],
+  "capstone": {
+   "title": "DevAtlas: move slow work off the request path",
+   "criteria": [
+    "202 + status endpoint",
+    "Idempotent job with a test",
+    "Bounded retries with backoff",
+    "Dead-letter handling",
+    "Queue depth visible"
+   ]
+  },
+  "codeSamples": 9,
+  "file": "l6-3-11.ts"
+ },
+ {
+  "id": "6.3.12",
+  "title": "Communication: TCP, UDP, RPC and REST between services",
+  "minutes": 85,
+  "level": "Advanced",
+  "summary": "Pick TCP or UDP, RPC or REST for each kind of communication, then make service-to-service calls survive real networks: connection reuse, timeouts and deadline propagation, retry budgets, circuit breakers, bulkheads and hedged requests.",
+  "terms": [
+   {
+    "term": "TCP",
+    "def": "Connection-oriented transport: handshake, ordered and reliable byte stream, flow and congestion control. Used by HTTP/1.1, HTTP/2, databases, SSH."
+   },
+   {
+    "term": "UDP",
+    "def": "Connectionless datagrams: no handshake, no ordering or delivery guarantee, low overhead. Used by DNS, VoIP, video calls, games, and QUIC (HTTP/3)."
+   },
+   {
+    "term": "RPC",
+    "def": "Remote procedure call: calling a function on another machine as if it were local (gRPC, Thrift). Contract-first, efficient binary encoding."
+   },
+   {
+    "term": "REST",
+    "def": "Resource-oriented HTTP APIs: nouns in URLs, standard methods (GET, PUT, DELETE…), status codes, cacheable responses."
+   },
+   {
+    "term": "Deadline",
+    "def": "An absolute time by which the whole request must finish; each downstream call gets only the time that remains."
+   },
+   {
+    "term": "Circuit breaker",
+    "def": "Stops calling a failing dependency for a while (open), tries a few calls (half-open), and resumes when they succeed (closed)."
+   },
+   {
+    "term": "Bulkhead",
+    "def": "Separate pools (connections, threads) per dependency so one slow dependency cannot use up all resources."
+   },
+   {
+    "term": "Retry amplification",
+    "def": "Retries at several layers multiply: 3 layers × 3 attempts = up to 27 calls to the bottom service."
+   }
+  ],
+  "interview": [
+   {
+    "q": "When would you use UDP instead of TCP?",
+    "a": "When low latency matters more than reliability and late data is useless: voice and video calls, multiplayer game state, live metrics, DNS lookups. The application handles loss (or ignores it). QUIC/HTTP/3 also runs on UDP but rebuilds reliability per stream to avoid head-of-line blocking."
+   },
+   {
+    "q": "RPC or REST for communication between your services?",
+    "a": "Internally I prefer gRPC: typed contracts, generated clients, efficient binary encoding, streaming, deadlines and HTTP/2 multiplexing. For public or browser-facing APIs, REST (or GraphQL) is easier to consume, cache and debug. The decision is less important than consistent timeouts, retries and versioning."
+   },
+   {
+    "q": "How do you stop one slow service from taking down the others?",
+    "a": "Tight timeouts and deadline propagation so callers stop waiting, retries only at one layer with a budget, circuit breakers with fallbacks so callers fail fast while the dependency is unhealthy, bulkheads so it can only exhaust its own pool, and load shedding at the edge. Then test it by injecting latency."
+   }
+  ],
+  "quickCheck": [
+   {
+    "kind": "mcq",
+    "prompt": "A multiplayer game sends player positions 30 times per second. Which transport fits best?",
+    "options": [
+     "TCP, because it is reliable",
+     "UDP, because a late position is useless and the next update replaces it",
+     "SMTP",
+     "HTTP/1.1 polling"
+    ],
+    "answer": 1,
+    "explanation": "Retransmitting old positions only adds delay; UDP lets the game use the newest data."
+   },
+   {
+    "kind": "output",
+    "prompt": "Three service layers each retry failed calls up to 3 attempts. How many calls can one user request cause at the bottom service?",
+    "options": [
+     "3",
+     "9",
+     "27",
+     "81"
+    ],
+    "answer": 2,
+    "explanation": "3 × 3 × 3 = 27. Retry at one layer only."
+   },
+   {
+    "kind": "bug",
+    "prompt": "The AI ranking service slows to 8 s. Login (which never calls it) starts failing too. Most likely cause?",
+    "options": [
+     "Login has a bug",
+     "Calls to ranking have no tight timeout and share the same thread/connection pool, so they exhaust it",
+     "DNS failure",
+     "The database is down"
+    ],
+    "answer": 1,
+    "explanation": "Slow calls hold shared resources; add timeouts, a breaker and a bulkhead."
+   }
+  ],
+  "cheatSheet": [
+   "TCP: reliable, ordered, handshake. UDP: fast, lossy; voice, games, DNS. QUIC = reliable streams over UDP.",
+   "gRPC inside (typed, fast, deadlines); REST outside (simple, cacheable).",
+   "New HTTPS connection ≈ 2 RTT before the request: pool and keep alive.",
+   "Every call: timeout; better: propagate a deadline.",
+   "Retry: idempotent only, transient errors only, one layer, backoff + jitter, budget.",
+   "Circuit breaker: closed → open → half-open; serve a fallback.",
+   "Bulkheads: per-dependency pools and concurrency limits."
+  ],
+  "capstone": {
+   "title": "DevAtlas: a resilient HTTP client",
+   "criteria": [
+    "Single shared client",
+    "Timeouts and deadline header",
+    "Retries only for safe methods and transient failures",
+    "Breaker opens and serves fallback",
+    "Tests with a mock transport"
+   ]
+  },
+  "codeSamples": 8,
+  "file": "l6-3-12.ts"
+ },
+ {
   "id": "6.4.1",
   "title": "URL shortener, chat, news feed, rate limiter",
   "minutes": 90,
