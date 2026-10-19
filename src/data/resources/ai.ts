@@ -20,6 +20,7 @@ export const ai: ResourceSection = {
           ],
           read: { label: "Introduction to Machine Learning (Google for Developers, Hindi)", url: "https://developers.google.com/machine-learning/intro-to-ml?hl=hi", kind: "docs" },
           video: { label: "AI Vs ML Vs DL for Beginners in Hindi", url: "https://www.youtube.com/watch?v=1v3_AQ26jZ0", channel: "CampusX", lang: "Hindi" },
+          practice: { label: "CodeForGeek: Top 100 AI/ML MCQs with answers (starts with AI vs ML vs DL)", url: "https://codeforgeek.com/top-100-ai-ml-mcqs/" },
         },
         {
           id: "ml-basics",
@@ -144,6 +145,7 @@ export const ai: ResourceSection = {
           ],
           read: { label: "Diffusers (Hugging Face docs)", url: "https://huggingface.co/docs/diffusers/index", kind: "docs" },
           video: { label: "How Diffusion Models Work: A short course by DeepLearning.AI", url: "https://www.youtube.com/watch?v=obdVesVsGQI", channel: "DeepLearningAI", lang: "English" },
+          practice: { label: "Hugging Face Diffusion Course, Unit 1: Introduction to Diffusers (Colab notebook, train your first diffusion model)", url: "https://huggingface.co/learn/diffusion-course/unit1/2" },
         },
         {
           id: "ai-agents-tool-use",
@@ -195,6 +197,7 @@ export const ai: ResourceSection = {
           ],
           read: { label: "Safety and factuality guidance (Gemini API docs)", url: "https://ai.google.dev/gemini-api/docs/safety-guidance", kind: "docs" },
           video: { label: "AI Prompt Injection Explained | How Attackers Trick LLMs in 2026", url: "https://www.youtube.com/watch?v=i8mkaO3ur0U", channel: "LearnITGuide Tutorials", lang: "English" },
+          practice: { label: "PortSwigger Web Security Academy Lab: Indirect prompt injection (free hands-on LLM attack lab)", url: "https://portswigger.net/web-security/llm-attacks/lab-indirect-prompt-injection" },
         },
         {
           id: "open-source-local-llms",

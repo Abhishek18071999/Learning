@@ -2618,3 +2618,13 @@ a.res-link:hover {
   color: var(--accent-text);
   border-color: var(--accent);
 }
+@media (max-width: 640px) {
+  .res-sections {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .filter-pill {
+    white-space: nowrap;
+  }
+}
