@@ -50,6 +50,7 @@ export const rag: ResourceSection = {
           ],
           read: { label: "What Is a Vector Database? Similarity Search & Semantic Search for AI (Weaviate)", url: "https://weaviate.io/blog/what-is-a-vector-database", kind: "article" },
           video: { label: "Vector Stores in LangChain | Generative AI using LangChain | Video 12 | CampusX", url: "https://www.youtube.com/watch?v=k13WK0bxQP0", channel: "CampusX", lang: "Hindi" },
+          practice: { label: "APXML Practice: Basic Vector Database Interaction (ChromaDB add/query/update/delete)", url: "https://apxml.com/courses/vector-databases-semantic-search/chapter-2-introducing-vector-databases/practice-basic-vector-db-interaction" },
         },
         {
           id: "document-loading",
@@ -130,6 +131,7 @@ export const rag: ResourceSection = {
           ],
           read: { label: "Improving Retrieval Performance in RAG Pipelines with Hybrid Search (Leonie Monigatti)", url: "https://www.leoniemonigatti.com/blog/hybrid-search.html", kind: "article" },
           video: { label: "Hybrid Search in RAG Explained | BM25 + Semantic Search + RRF (Complete Guide)", url: "https://www.youtube.com/watch?v=D8LmsEOJvPI", channel: "Yash Patil", lang: "English" },
+          practice: { label: "Qdrant course Module 3: Sparse vs Dense vs Hybrid Search (set up hybrid search with fusion, plus knowledge check)", url: "https://qdrant.tech/course/beginners/module-3/" },
         },
         {
           id: "reranking",
@@ -143,7 +145,7 @@ export const rag: ResourceSection = {
           ],
           read: { label: "Advanced RAG Techniques (Weaviate)", url: "https://weaviate.io/blog/advanced-rag", kind: "article" },
           video: { label: "RAG Reranking Explained: How To Improve RAG Results", url: "https://www.youtube.com/watch?v=R5MPqm0V6aQ", channel: "pixegami", lang: "English" },
-          practice: { label: "Advanced RAG notebook with a BAAI cross-encoder reranker (weaviate/recipes, LlamaIndex)", url: "https://github.com/weaviate/recipes/blob/main/integrations/llamaindex/retrieval-augmented-generation/advanced_rag.ipynb" },
+          practice: { label: "Sentence Transformers: Retrieve & Re-Rank (bi-encoder + cross-encoder, with runnable Colab notebook)", url: "https://sbert.net/examples/sentence_transformer/applications/retrieve_rerank/README.html" },
         },
         {
           id: "query-transformation",
