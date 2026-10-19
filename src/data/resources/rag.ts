@@ -36,6 +36,7 @@ export const rag: ResourceSection = {
           ],
           read: { label: "Vector Embeddings Explained (Weaviate)", url: "https://weaviate.io/blog/vector-embeddings-explained", kind: "article" },
           video: { label: "Tutorial 10-Introduction To Word Embeddings- Krish Naik Hindi", url: "https://www.youtube.com/watch?v=pDIXI4hRkhU", channel: "Krish Naik Hindi", lang: "Hindi" },
+          practice: { label: "Build a Semantic Search Engine with FAISS and Sentence Transformers (hands-on Python tutorial)", url: "https://www.thepythoncode.com/article/semantic-search-engine-faiss-python" },
         },
         {
           id: "vector-databases",
