@@ -647,6 +647,9 @@ flowchart LR
   },
   deeper: [
     { label: "System Design Primer (GitHub)", url: "https://github.com/donnemartin/system-design-primer" },
+    { label: "Video: TinyURL / URL shortener system design (codeKarle, 2020)", url: "https://www.youtube.com/watch?v=AVztRY77xxA" },
+    { label: "Video: Rate limiter system design, token bucket and leaky bucket (ByteByteGo, 2025)", url: "https://www.youtube.com/watch?v=YXkOdWBwqaA" },
+    { label: "System Design Primer: Design Pastebin.com (or Bit.ly)", url: "https://github.com/donnemartin/system-design-primer/blob/master/solutions/system_design/pastebin/README.md" },
     { label: "High Scalability: real architectures", url: "https://highscalability.com/" },
     { label: "Google SRE Book (free online)", url: "https://sre.google/sre-book/table-of-contents/" },
   ],
