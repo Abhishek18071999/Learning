@@ -7022,6 +7022,116 @@ export const lessonMeta: LessonMeta[] = [
   "file": "l6-4-1.ts"
  },
  {
+  "id": "6.4.2",
+  "title": "Scale from one server to millions of users",
+  "minutes": 80,
+  "level": "Advanced",
+  "summary": "Take one app on one machine and grow it to millions of daily users, adding one building block at a time (separate database, CDN, load balancer, cache, read replicas, queues, sharding) only when a measured bottleneck asks for it, and naming the price of each step.",
+  "terms": [
+   {
+    "term": "DAU",
+    "def": "Daily active users: distinct users who use the product on a given day. Traffic estimates start from it."
+   },
+   {
+    "term": "Peak factor",
+    "def": "Peak traffic divided by average traffic. Usually 2 to 10; design for the peak, budget for the average."
+   },
+   {
+    "term": "Stateless app server",
+    "def": "A server that keeps no user data in memory or on local disk between requests, so any server can handle any request and you can add or remove servers freely."
+   },
+   {
+    "term": "Cache-aside",
+    "def": "The app reads the cache first; on a miss it reads the database and stores the result in the cache with a TTL. On a write it updates the database and deletes the cached key."
+   },
+   {
+    "term": "Read replica",
+    "def": "A copy of the database that receives the primary's changes asynchronously and serves reads. It scales reads, not writes, and can lag behind."
+   },
+   {
+    "term": "Sharding",
+    "def": "Splitting rows across several independent primaries by a shard key (often user_id). The only building block here that scales writes, and the most expensive one to undo."
+   },
+   {
+    "term": "Cache stampede",
+    "def": "Many requests miss the same expired hot key at once and all query the database together."
+   }
+  ],
+  "interview": [
+   {
+    "q": "Walk me through scaling a web app from one server to ten million users.",
+    "a": "Start with numbers: 10M DAU × ~20 requests ≈ 2,500 rps average, ~7,500 at peak, with a 10:1 read:write ratio. Then step by step, each triggered by a bottleneck: move the database to its own server; put static files on object storage and a CDN; add a load balancer and make app servers stateless (sessions in Redis) so I can scale out and autoscale; add a cache-aside layer for hot reads; add read replicas when cached reads still overload the database, handling replica lag with read-your-own-writes; move slow work like emails and image processing to queues; shard by user_id only when one primary can't take the writes. At each step I'd name the trade-off: statelessness, staleness, lag, eventual consistency, lost joins."
+   },
+   {
+    "q": "Your read replicas are healthy but users complain they don't see their own updates. What is happening and how do you fix it?",
+    "a": "Replication is asynchronous, so a replica can be a second or more behind; a read right after a write may hit a replica that hasn't applied it. Fixes: route a user's reads to the primary for a few seconds after they write (track the last write time in a cookie or Redis); or record the primary's log position after the write and only read from a replica that has replayed past it (in PostgreSQL, compare against pg_last_wal_replay_lsn()); or update the client's local state from the write response. Monitor lag and alert on it."
+   },
+   {
+    "q": "When would you shard, and how would you choose the shard key?",
+    "a": "Only when a single tuned primary can't handle the write rate or the data size, after indexing, query fixes, vertical scaling, caching, replicas and batching. Choose a key that spreads load evenly and keeps the queries that run together on one shard: for a user-centric app, user_id, so a user's data is co-located. Watch for hot keys (a celebrity account) and plan how to split them; use many logical shards mapped to fewer physical servers so you can move them later, as Pinterest did with 4,096 logical shards."
+   }
+  ],
+  "quickCheck": [
+   {
+    "kind": "mcq",
+    "prompt": "The primary database is at 90% CPU and 80% of its time is spent on INSERT and UPDATE statements. The cache hit ratio is 95%. What helps most?",
+    "options": [
+     "Add two more read replicas",
+     "Increase the cache TTL",
+     "Batch writes through a queue, and plan sharding by user_id",
+     "Add a CDN"
+    ],
+    "answer": 2,
+    "explanation": "The load is writes. Replicas, cache and CDN all offload reads; only doing fewer writes (batching) or spreading them (sharding) helps."
+   },
+   {
+    "kind": "bug",
+    "prompt": "After adding a second app server behind a load balancer, some users are randomly logged out and some uploaded avatars return 404. What is the root cause?",
+    "options": [
+     "The load balancer algorithm is round robin",
+     "Sessions and uploads are stored on each app server's memory and disk",
+     "The database needs a read replica",
+     "The CDN cache is stale"
+    ],
+    "answer": 1,
+    "explanation": "State on the app server breaks as soon as requests can land on a different server. Move sessions to Redis or signed tokens and files to object storage."
+   },
+   {
+    "kind": "output",
+    "prompt": "10 million DAU, each making 20 reads and 2 writes per day. Roughly how many requests per second is that on average?",
+    "options": [
+     "About 250",
+     "About 2,500",
+     "About 25,000",
+     "About 250,000"
+    ],
+    "answer": 1,
+    "explanation": "220 million requests a day ÷ 86,400 seconds ≈ 2,546 per second on average (about 7,600 at a 3× peak)."
+   }
+  ],
+  "cheatSheet": [
+   "Loop: estimate → find the saturated resource → smallest fix → re-measure.",
+   "Users to load: DAU × requests per user ÷ 86,400 = average rps; × 2 to 10 for peak.",
+   "Usual order: split DB → CDN → LB + stateless servers → cache → replicas → queues → shards.",
+   "Reads scale with cache and replicas; writes only with batching or sharding.",
+   "Stateless servers: sessions in Redis or tokens, files in object storage.",
+   "Replicas lag: read-your-own-writes by routing recent writers to the primary.",
+   "Cache-aside: delete on write, TTL with jitter, protect hot keys from stampedes.",
+   "Every block has a price: say it (staleness, lag, eventual consistency, lost joins)."
+  ],
+  "capstone": {
+   "title": "DevAtlas: a scaling plan from 10k to 1M learners",
+   "criteria": [
+    "Assumptions and estimates with numbers",
+    "At least five triggers, each with a metric, a threshold and a trade-off",
+    "An explicit 'not yet' list with reasons",
+    "A load-test and review plan"
+   ]
+  },
+  "codeSamples": 8,
+  "file": "l6-4-2.ts"
+ },
+ {
   "id": "7.1.1",
   "title": "How LLMs work: tokens, embeddings, attention, temperature",
   "minutes": 70,

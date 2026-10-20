@@ -653,5 +653,5 @@ flowchart LR
     { label: "High Scalability: real architectures", url: "https://highscalability.com/" },
     { label: "Google SRE Book (free online)", url: "https://sre.google/sre-book/table-of-contents/" },
   ],
-  nextPreview: "Next phase: AI engineering. How LLMs really work: tokens, embeddings, attention and sampling, and what that means for cost, latency and hallucinations.",
+  nextPreview: "Next: scale from one server to millions of users. Grow one box into a load-balanced, cached, replicated and finally sharded system, one measured bottleneck at a time.",
 };
