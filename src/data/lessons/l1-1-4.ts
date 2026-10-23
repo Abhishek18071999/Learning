@@ -6,36 +6,47 @@ export const lesson: Lesson = {
   minutes: 65,
   level: "Beginner",
   prerequisites: ["1.1.2 OOP, dataclasses and protocols"],
-  summary: "Write fast, readable tests with pytest: arrange-act-assert, fixtures, parametrize, testing errors, and mocking only at the boundaries of your system.",
+  summary: "Use pytest as a tool: arrange-act-assert, fixtures and scopes, parametrize, errors and warnings, monkeypatch at the boundary, tmp_path, conftest.py, markers and coverage that is honest.",
   terms: [
-    { term: "Unit test", def: "Tests one small piece (a function or class) in isolation, in milliseconds." },
-    { term: "Integration test", def: "Tests several pieces together, often with a real database or HTTP layer." },
-    { term: "Assertion", def: "A check that must be true, e.g. `assert total == 30`. pytest shows a detailed diff when it fails." },
+    { term: "Unit test", def: "Tests one small piece (a function or class) in isolation, in milliseconds. Its failure should point at one behaviour." },
+    { term: "Integration test", def: "Tests several pieces together, often with a real database or HTTP layer, to catch wiring and SQL mistakes." },
+    { term: "Assertion", def: "A check that must be true, e.g. `assert total == 30`. pytest rewrites assertions so a failure shows the values on both sides." },
+    { term: "Arrange-act-assert", def: "The three visible parts of a test: build inputs, call the behaviour once, check the observable result. Often shortened to AAA." },
     { term: "Fixture", def: "A function that prepares something a test needs (data, a temp folder, a fake client). Tests receive it by naming it as a parameter." },
-    { term: "Parametrize", def: "Running the same test with many input/expected pairs." },
-    { term: "Mock / fake", def: "A stand-in for a real dependency. A fake has working simple logic; a mock records how it was called." },
-    { term: "Coverage", def: "The percentage of code lines executed by tests. Useful to find untested code, not proof of quality." },
+    { term: "Fixture scope", def: "How often a fixture runs: `function` (default), `class`, `module`, `package` or `session`. Wider scopes are faster but share state, so they must be read-only or carefully reset." },
+    { term: "Parametrize", def: "Running the same test body with many input/expected pairs; each pair becomes its own test id in the report." },
+    { term: "Test double", def: "A stand-in for a real dependency. A stub returns canned answers, a fake has working simple logic, a spy records calls, and a mock is pre-programmed with expectations." },
+    { term: "monkeypatch", def: "A built-in pytest fixture that temporarily changes an attribute, dictionary entry or environment variable and undoes it automatically after the test." },
+    { term: "tmp_path", def: "A built-in fixture giving each test a unique `pathlib.Path` under pytest's temporary base directory; it disappears from your repo and is cleaned up by the OS." },
+    { term: "conftest.py", def: "A file pytest loads automatically. Fixtures and hooks defined there are shared by every test in that directory and below, without imports." },
+    { term: "Coverage", def: "The share of statements (line coverage) or branches executed by tests. It shows what was not run, not whether the assertions were any good." },
   ],
   problem: [
     "A teammate changes the discount calculation to fix a rounding bug. Two weeks later finance notices that customers with exactly 100 points were charged full price. Nobody tested the boundary, and nobody dared refactor the function because there were no tests at all.",
-    "Tests are how teams change code quickly without breaking it. The goal is not 100% coverage; it is confidence that the important behaviour still works after every change, checked automatically in CI.",
+    "Tests are how teams change code quickly without breaking it. The goal is not 100% coverage; it is confidence that the important behaviour still works after every change, checked automatically in CI. This lesson is about the tool that makes that cheap: pytest. The testing *method* - which level to test, which double to use, how to design seams - is lesson 1.5.1; here you learn how to drive the tool.",
   ],
   concept: {
     analogy: [
       "Tests are the **safety net under a trapeze**. Without it, performers move slowly and carefully, and every fall is a disaster. With it, they try ambitious moves daily. A good net is in the right places (critical behaviour) and does not get in the way (fast, no flakiness).",
+      "A **fixture is a prepared lab bench**. The bench is laid out before the experiment (setup), the experiment runs once (the test), and the bench is cleaned afterwards (teardown). A module-scoped fixture is a shared lab that is prepared once for a whole class of experiments; a session-scoped one is the building itself. Parameterized tests are labelled sample racks: the same procedure runs on every sample, and the label tells you which sample failed.",
     ],
     precise: [
-      "Every test follows **Arrange–Act–Assert**: set up inputs, call the code, check the result. One behaviour per test, named after the behaviour (`test_discount_applies_at_exactly_100_points`).",
-      "The **test pyramid**: many fast unit tests, fewer integration tests, very few end-to-end tests. Unit tests give quick, precise feedback; integration tests catch wiring problems; E2E tests catch what users actually see but are slow and brittle.",
-      "**Mock at the boundaries**: replace things that are slow, non-deterministic or external (network, clock, randomness, email, payment) and keep your own logic real. Mocking your own internal functions makes tests pass while the real code is broken, and makes refactoring painful.",
-      "**Test boundaries and edge cases**: empty inputs, one element, exactly at a threshold, negative numbers, None, very large values, duplicates, unicode.",
+      "Every test follows **Arrange-Act-Assert**: set up inputs and doubles, call the behaviour once, check the observable result. One behaviour per test, named after the behaviour (`test_discount_applies_at_exactly_100_points`). A test that fails should fail for one readable reason; if the assertion diff needs a paragraph of explanation, split the test.",
+      "**Fixtures are dependency injection for tests.** A test asks for a fixture by naming it as a parameter; pytest resolves the name, runs the fixture, caches it for the scope, and runs teardown after `yield`. Fixtures can depend on other fixtures, and `conftest.py` shares them with a directory tree. Scopes trade isolation for speed: function scope is the safe default, module or session scope is for expensive, read-only resources.",
+      "**Parametrize and the built-ins remove repetition.** `@pytest.mark.parametrize` turns one test body into many reported cases. `pytest.raises(Error, match=...)` asserts both the exception type and its message. `pytest.warns(Warning, match=...)` asserts that a warning is emitted. `tmp_path` gives real filesystem access without writing into the repository, and `monkeypatch` changes environment variables or attributes for one test only.",
+      "**Mock at the boundaries, and prefer a seam to a patch.** Replace things that are slow, non-deterministic or external (network, clock, randomness, email, payment), and keep your own logic real. Passing the clock or client in is easier to read than patching a module global, and it survives refactors. Coverage finds untested code; it cannot tell whether an assertion is meaningful. Use it to guide review and to floor critical modules, never as a target on its own.",
     ],
   },
   underTheHood: {
     text: [
-      "pytest discovers files named `test_*.py`, functions named `test_*`, and rewrites `assert` statements at import time so a failure shows both sides of the comparison. That is why plain `assert` is enough, with no special assertEqual methods.",
-      "Fixtures are resolved by parameter name. A fixture can depend on other fixtures, and has a **scope** (function by default; module or session for expensive setup). Code after `yield` in a fixture is teardown.",
-      "`conftest.py` holds fixtures shared by all tests in that directory and below. Built-in fixtures include `tmp_path` (a fresh temp folder), `monkeypatch` (set env vars, replace attributes safely) and `capsys` (capture printed output).",
+      "**Collection and assertion rewriting.** pytest walks `testpaths`, imports files named `test_*.py` or `*_test.py`, and collects functions named `test_*` plus classes named `Test*` (without an `__init__`). At import time it rewrites every `assert` into a form that records the sub-expressions, so a failure can print `assert Decimal('225.00') == Decimal('200.00')` and explain where each side came from. That is why plain `assert` is enough and why assertion rewriting must be enabled for the test modules (plugins and some import hooks can interfere).",
+      "**Fixture resolution.** pytest builds a dependency graph from fixture parameter names. A fixture is looked up in the test module, then in `conftest.py` files from the test's directory upward, then in plugins. The first definition wins. A fixture is instantiated once per scope and cached for that scope; teardown registered with `yield` or `request.addfinalizer` runs in reverse order of setup. A session-scoped fixture requested by three modules runs once, so mutable state in it leaks across files unless the fixture resets it.",
+      "**Parametrization is test generation.** `@pytest.mark.parametrize('points, expected', [...])` creates one test item per row at collection time. Ids are built from the values (`test_parse_points[100-100]`), which is why a failing id points straight at the input. `pytest.param(..., id='at-threshold')` gives a readable label, and `marks=pytest.mark.xfail` on a row documents a known-bad case without hiding the rest.",
+      "**Exceptions and warnings.** `pytest.raises` runs the block and fails if the expected exception is not raised, if a different exception escapes, or if `match` does not find the regex in `str(exception)`. It returns an `ExceptionInfo` object, so you can assert on `exc.value.args` afterwards. `pytest.warns` is the warning equivalent and also fails if no warning is issued. Warnings are collected in a summary; `filterwarnings = ['error']` in configuration turns them into failures, which is how teams stop new deprecations from accumulating.",
+      "**monkeypatch is temporary by construction.** `monkeypatch.setenv`, `delenv`, `setattr`, `delattr`, `setitem` and `chdir` record an undo action, and pytest replays those actions after the test, in reverse order, even when the test fails. That makes it safe for environment variables and third-party globals, but it is still a patch: if the code reads the value at import time, patching later changes nothing. A constructor parameter is still the better seam.",
+      "**tmp_path and its family.** Each test gets a fresh directory under pytest's base temp directory (`tmp_path`), plus `tmp_path_factory` for making directories at a wider scope. pytest keeps the last three runs' base directories and deletes older ones; the OS eventually removes the rest. Because the path is unique per test, tests can write files in parallel (`pytest-xdist`) without colliding. Never write test output into the repository and then clean it up by hand.",
+      "**conftest.py, markers and strictness.** `conftest.py` is imported before the tests in its directory; hooks such as `pytest_collection_modifyitems` and fixtures live there. Markers (`@pytest.mark.slow`, `integration`, `smoke`) are free-form labels until you register them in `[tool.pytest.ini_options] markers = [...]`. With `--strict-markers`, a typo like `@pytest.mark.slwo` becomes an error instead of a silently ignored test. `-m 'not slow'` then gives a fast local loop while CI runs everything.",
+      "**Coverage is a tracer, not a judge.** pytest-cov starts coverage.py, which installs a trace function and records executed lines and branch arcs. Line coverage can be 100% while every assertion is `assert True`; branch coverage catches untested `if` paths but still not weak assertions. Mutation testing changes the code and checks that a test fails, which measures the assertions themselves. Use coverage to find risky untested code, set floors for critical modules, and read the `Missing` column rather than celebrating a single number (lesson 1.5.1 covers the method).",
     ],
     diagram: {
       title: "The test pyramid",
@@ -45,27 +56,59 @@ export const lesson: Lesson = {
         { label: "End-to-end", sub: "few · slow · user view" },
       ],
       edges: ["fewer", "fewer"],
+      caption: "pytest is the runner for all three levels; the pyramid decides how many of each you write. The method is lesson 1.5.1.",
     },
   },
   handsOn: [
     {
-      title: "Code under test",
+      title: "Install pytest and read a failing assertion",
+      text: [
+        "Create a virtual environment so the versions are yours: `python -m venv .venv`, activate it, then `python -m pip install pytest pytest-cov`. Save the pricing module from lesson 1.1.2 and the test below. The test is deliberately wrong: 10% off 250 is 225, not 200. Run it before fixing it - a test you have never seen fail is a test you cannot trust.",
+      ],
       code: {
         lang: "python",
-        file: "pricing.py",
-        code: `from decimal import Decimal, ROUND_HALF_UP
+        file: "test_discount_story.py",
+        code: `# pricing.py
+from decimal import Decimal, ROUND_HALF_UP
+import warnings
 
 def loyalty_discount(price: Decimal, points: int) -> Decimal:
     """10% off at 100+ points, 20% off at 500+ points. Rounded to 2 decimals."""
     if price < 0:
         raise ValueError("price cannot be negative")
     rate = Decimal("0.20") if points >= 500 else Decimal("0.10") if points >= 100 else Decimal("0")
-    return (price * (1 - rate)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)`,
+    return (price * (1 - rate)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+def parse_points(raw: str) -> int:
+    """Parse a points string. Above 10,000 the value is capped, with a warning."""
+    if not raw.isdigit():
+        raise ValueError(f"points must be a whole number, got {raw!r}")
+    value = int(raw)
+    if value > 10_000:
+        warnings.warn("points above 10000 are capped at 10000", UserWarning, stacklevel=2)
+        return 10_000
+    return value
+
+# test_discount_story.py
+from decimal import Decimal
+from pricing import loyalty_discount
+
+def test_discount_at_exactly_100_points():
+    # deliberately wrong: 10% off 250 is 225.00, not 200.00
+    assert loyalty_discount(Decimal("250"), 100) == Decimal("200.00")`,
       },
-      notes: ["Money uses Decimal, never float: `0.1 + 0.2 != 0.3` in binary floating point."],
+      output: "$ python -m pytest -q test_discount_story.py\nF                                                                        [100%]\n================================== FAILURES ===================================\n_____________________ test_discount_at_exactly_100_points _____________________\n\n    def test_discount_at_exactly_100_points():\n        # deliberately wrong: 10% off 250 is 225.00, not 200.00\n>       assert loyalty_discount(Decimal(\"250\"), 100) == Decimal(\"200.00\")\nE       AssertionError: assert Decimal('225.00') == Decimal('200.00')\nE        +  where Decimal('225.00') = loyalty_discount(Decimal('250'), 100)\nE        +    where Decimal('250') = Decimal('250')\nE        +  and   Decimal('200.00') = Decimal('200.00')\n\ntest_discount_story.py:6: AssertionError\n=========================== short test summary info ===========================\nFAILED test_discount_story.py::test_discount_at_exactly_100_points - Assertio...\n1 failed in 0.11s",
+      notes: [
+        "pytest prints the left value, the right value and the call that produced the left one. You do not need `assertEqual` or a message: the diff is the message.",
+        "The correct fix here is the expectation (225.00), not the implementation. When a test fails, first decide which side is wrong; changing production code to satisfy a wrong test is how bugs get locked in.",
+        "Exit codes matter to CI: 0 means all selected tests passed, 1 means failures, 2 means interrupted, 5 means no tests were collected. A green pipeline must never treat 5 as success.",
+      ],
     },
     {
-      title: "Parametrized boundary tests and error tests",
+      title: "Run the passing suite; parametrize the boundary cases",
+      text: [
+        "The boundary is the whole point of the story: 99, 100, 499 and 500 must behave differently. `parametrize` keeps one test body and reports every case separately, so a failure names the exact input. The last two tests cover an exception and a warning with the same tool.",
+      ],
       code: {
         lang: "python",
         file: "test_pricing.py",
@@ -91,62 +134,86 @@ def test_rounding_half_up():
 
 def test_negative_price_rejected():
     with pytest.raises(ValueError, match="negative"):
-        loyalty_discount(Decimal("-1"), 0)`,
+        loyalty_discount(Decimal("-1"), 0)
+
+# test_parse.py
+import pytest
+from pricing import parse_points
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [("0", 0), ("99", 99), ("100", 100), ("10000", 10000)],
+)
+def test_parse_points(raw, expected):
+    assert parse_points(raw) == expected
+
+def test_points_above_cap_warn():
+    with pytest.warns(UserWarning, match="capped"):
+        assert parse_points("10001") == 10_000
+
+def test_non_numeric_points_rejected():
+    with pytest.raises(ValueError, match="whole number"):
+        parse_points("1O0")`,
       },
-      output: "$ python -m pytest -q\n.......                                     [100%]\n7 passed in 0.02s",
+      output: "$ python -m pytest -q test_pricing.py\n.......                                                                  [100%]\n7 passed in 0.03s\n\n$ python -m pytest -v --no-header test_parse.py\n============================= test session starts =============================\ncollecting ... collected 6 items\n\ntest_parse.py::test_parse_points[0-0] PASSED                             [ 16%]\ntest_parse.py::test_parse_points[99-99] PASSED                           [ 33%]\ntest_parse.py::test_parse_points[100-100] PASSED                         [ 50%]\ntest_parse.py::test_parse_points[10000-10000] PASSED                     [ 66%]\ntest_parse.py::test_points_above_cap_warn PASSED                         [ 83%]\ntest_parse.py::test_non_numeric_points_rejected PASSED                   [100%]\n\n============================== 6 passed in 0.03s ==============================",
+      notes: [
+        "Each id is generated from the parameter values. `[100-100]` is the case that would have shipped the bug; with `pytest.param(..., id='at-threshold')` it would read `[at-threshold]` instead.",
+        "`pytest.raises` fails if no exception is raised or if the type differs. Add `match` so a `ValueError` from an unrelated bug does not satisfy the test accidentally. After the block, `exc.value` lets you assert on the message or attributes.",
+        "`pytest.warns` is stricter than reading `warnings.catch_warnings()` yourself: it fails when the warning is missing and checks the text. Run `python -m pytest -W error` to see which warnings your suite would turn into failures in CI.",
+        "Fast feedback flags: `-k discount` selects by name, `-x` stops at the first failure, `--lf` reruns the last failures, `-vv` keeps full diffs, and `-q` prints one character per test.",
+      ],
     },
     {
-      title: "Fixtures and tmp_path",
+      title: "Fixtures, tmp_path, monkeypatch - and coverage",
+      text: [
+        "`scores` is function-scoped, so each test gets a fresh dictionary; `module_cfg` is module-scoped, so its setup runs once and its teardown runs after the last test in the file. `tmp_path` is a real directory unique to each test, and `monkeypatch` edits an environment variable without leaking it. `-s` shows the prints so you can see the lifecycle; normally pytest captures them.",
+      ],
       code: {
         lang: "python",
         file: "test_report.py",
-        code: `import json
-import pytest
+        code: `# report.py
+import json
+import os
 
 def save_report(path, scores: dict[str, float]) -> None:
     path.write_text(json.dumps(scores, sort_keys=True))
 
-@pytest.fixture
-def scores() -> dict[str, float]:
-    return {"0.1.1": 1.0, "0.2.1": 0.67}
-
-def test_save_report_writes_sorted_json(tmp_path, scores):
-    out = tmp_path / "report.json"
-    save_report(out, scores)
-    assert json.loads(out.read_text()) == scores
-    assert out.read_text().startswith('{"0.1.1"')`,
-      },
-    },
-    {
-      title: "Mock the boundary, not your logic",
-      code: {
-        lang: "python",
-        file: "test_welcome.py",
-        code: `from datetime import datetime
-from unittest.mock import Mock
-
-def welcome(user: str, now: datetime, mailer) -> str:
-    greeting = "Good morning" if now.hour < 12 else "Good evening"
-    text = f"{greeting}, {user}!"
-    mailer.send(user, text)
-    return text
-
-def test_morning_greeting_is_mailed():
-    mailer = Mock()                                       # boundary: email
-    text = welcome("asha", datetime(2026, 10, 18, 9), mailer)   # boundary: clock, passed in
-    assert text == "Good morning, asha!"
-    mailer.send.assert_called_once_with("asha", "Good morning, asha!")`,
-      },
-      notes: ["Passing `now` in (instead of calling datetime.now() inside) makes time controllable. Designing for testability usually means injecting the clock, randomness and I/O."],
-    },
-    {
-      title: "monkeypatch environment variables",
-      code: {
-        lang: "python",
-        code: `import os
+def load_report(path, default=None):
+    if not path.exists():
+        return default
+    return json.loads(path.read_text())
 
 def api_base() -> str:
     return os.environ.get("API_BASE", "http://localhost:8000")
+
+# test_report.py
+import json
+import pytest
+from report import save_report, load_report
+
+@pytest.fixture
+def scores():
+    print("\\nSETUP: scores fixture built")
+    yield {"0.1.1": 1.0, "0.2.1": 0.67}
+    print("\\nTEARDOWN: scores fixture dropped")
+
+@pytest.fixture(scope="module")
+def module_cfg():
+    print("SETUP: module_cfg built once")
+    yield {"mode": "test"}
+    print("\\nTEARDOWN: module_cfg dropped once")
+
+def test_save_report_writes_sorted_json(tmp_path, scores, module_cfg):
+    out = tmp_path / "report.json"
+    save_report(out, scores)
+    assert json.loads(out.read_text()) == scores
+    assert out.read_text().startswith('{"0.1.1"')
+
+def test_load_report_missing_returns_default(tmp_path, module_cfg):
+    assert load_report(tmp_path / "missing.json", default={}) == {}
+
+# test_env.py
+from report import api_base
 
 def test_api_base_from_env(monkeypatch):
     monkeypatch.setenv("API_BASE", "https://api.devatlas.dev")
@@ -154,44 +221,118 @@ def test_api_base_from_env(monkeypatch):
 
 def test_api_base_default(monkeypatch):
     monkeypatch.delenv("API_BASE", raising=False)
-    assert api_base() == "http://localhost:8000"`,
+    assert api_base() == "http://localhost:8000"
+
+# welcome.py
+from datetime import datetime
+
+def welcome(user: str, now: datetime, mailer) -> str:
+    greeting = "Good morning" if now.hour < 12 else "Good evening"
+    text = f"{greeting}, {user}!"
+    mailer.send(user, text)
+    return text
+
+# test_welcome.py
+from datetime import datetime
+from unittest.mock import Mock
+from welcome import welcome
+
+def test_morning_greeting_is_mailed():
+    mailer = Mock()                                           # boundary: email
+    text = welcome("asha", datetime(2026, 10, 18, 9), mailer)  # boundary: clock, passed in
+    assert text == "Good morning, asha!"
+    mailer.send.assert_called_once_with("asha", "Good morning, asha!")`,
       },
+      output: "$ python -m pytest -v --no-header -s test_report.py test_env.py\n============================= test session starts =============================\ncollecting ... collected 4 items\n\ntest_report.py::test_save_report_writes_sorted_json SETUP: module_cfg built once\n\nSETUP: scores fixture built\nPASSED\nTEARDOWN: scores fixture dropped\n\ntest_report.py::test_load_report_missing_returns_default PASSED\nTEARDOWN: module_cfg dropped once\n\ntest_env.py::test_api_base_from_env PASSED\ntest_env.py::test_api_base_default PASSED\n\n============================== 4 passed in 0.08s ==============================\n\n$ python -m pytest -q test_pricing.py test_parse.py test_report.py test_env.py test_welcome.py --cov=pricing --cov=report --cov-branch --cov-report=term-missing\n..................                                                       [100%]\n=============================== tests coverage ================================\n______________ coverage: platform win32, python 3.11.15-final-0 _______________\n\nName         Stmts   Miss Branch BrPart  Cover   Missing\n--------------------------------------------------------\npricing.py      15      0      6      0   100%\nreport.py       10      1      2      1    83%   10\n--------------------------------------------------------\nTOTAL           25      1      8      1    94%\n18 passed in 0.17s",
+      notes: [
+        "Setup order is dependency order: `module_cfg` is built before the first test, then the function-scoped `scores`; teardown is reverse order. The module fixture's teardown runs after the last test in the file, which is why it appears at the end.",
+        "`tmp_path` avoids `open('test.json', 'w')` in the repository. It is unique per test, so parallel runs with `pytest-xdist` cannot collide, and pytest keeps only the last few runs for debugging.",
+        "`monkeypatch` records an undo for every change and replays it after the test, even on failure. It is the right tool for environment variables and third-party globals; a constructor argument is still a better seam when you control the code.",
+        "In `test_welcome`, the clock and the mailer are parameters, so no patching is needed. `Mock()` is used only for the email boundary, and `assert_called_once_with` checks the exact message that would have been sent. That is the difference between testing your logic and testing a mock.",
+        "The coverage report is not an instruction to reach 100%. `report.py` line 10 (reading an existing report) is not exercised by these tests. Either add a test for that path or decide it is not worth it - but make that a decision, not an accident.",
+        "`conftest.py` is where the `scores` and `module_cfg` fixtures belong once more than one file needs them; pytest finds them without an import. Keep it small: a 500-line conftest is a sign that fixtures are doing too much.",
+      ],
     },
     {
-      title: "Useful commands",
+      title: "Compare scopes, doubles and patching",
+      text: [
+        "Pick fixture scope by the cost of setup and the risk of shared state. Pick the double by the question the test asks. Patching is the last resort, not the default.",
+      ],
       code: {
-        lang: "bash",
-        code: `python -m pytest -q                  # quiet summary
-python -m pytest -k discount         # only tests whose name matches
-python -m pytest -x --lf             # stop at first failure; rerun last failures
-python -m pytest -vv                 # verbose diffs
-pip install pytest-cov && python -m pytest --cov=. --cov-report=term-missing`,
+        lang: "text",
+        file: "decisions.txt",
+        code: `FIXTURE SCOPES
+scope      runs                     good for                        risk
+function   once per test            most fixtures                   none extra
+class      once per test class      shared class setup             state between methods
+module     once per module file     schema, seed data, server      state between tests
+package    once per package         package-wide resources         hidden ordering
+session    once per pytest run      app, connection pool, browser  state across files
+
+DOUBLE / PATCH CHOICES
+approach          what it is                                  use when
+dependency inj.   pass a real or fake collaborator in          first choice; creates a seam
+fake              small working implementation                store/client with real logic
+stub              canned answers, no logic                     force one branch/response
+spy               records calls, real work still happens        assert a side effect happened
+mock              pre-programmed expectations                  interaction itself is the contract
+monkeypatch       temporary attribute/env patch, auto-undone    third-party global or environment`,
       },
+      notes: [
+        "A session-scoped fixture that returns a mutable list is a bug waiting for a second test file. Return immutable data, or reset inside the fixture before each test.",
+        "`Mock()` from `unittest.mock` and `mocker` from pytest-mock both work; pytest-mock only adds automatic undo. Use whichever your project already standardises on.",
+      ],
+    },
+    {
+      title: "Trace one pytest run",
+      text: [
+        "This is the lifecycle behind the outputs above. Collection happens before any test runs, fixtures are resolved by name and cached per scope, and teardown runs even when the test fails. Coverage hooks into the same run.",
+      ],
+      code: {
+        lang: "mermaid",
+        file: "pytest-run.mmd",
+        code: `flowchart TD
+  A["Collect test_*.py, test_* functions"] --> B["Resolve fixture names via conftest and plugins"]
+  B --> C["Setup: run fixture code before yield"]
+  C --> D["Call test: arrange, act, assert"]
+  D --> E["Teardown: after yield; monkeypatch undo"]
+  E --> F["Report: dots, traceback, coverage, exit code"]`,
+      },
+      notes: [
+        "A failure in setup is reported as an ERROR, not a FAILED test; that distinction tells you whether the test body ever ran.",
+        "The same lifecycle applies to a class, a module and a session. Only the scope and the cache lifetime change.",
+      ],
     },
   ],
   companies: [
-    "**CI gates**: every pull request runs the test suite; failures block merging (lesson 0.3.2). Fast suites matter: teams split slow integration tests into a separate job so developers get unit feedback in under a minute. In monorepos, expensive suites run only when their folder changed, behind one always-running result job that branch protection requires.",
-    "**Regression tests for every bug**: a common rule is 'every bug fix comes with a test that fails before the fix and passes after', so the same bug never returns.",
-    "**Testcontainers** is widely used for integration tests: it starts a real PostgreSQL, MySQL or Redis in Docker for the test run, which catches SQL and driver issues that mocks hide.",
+    "**CI gates (GitHub Actions, GitLab CI, Buildkite, illustrative):** every pull request runs the test suite and a failure blocks merging (lesson 0.3.2). Fast suites matter: teams split slow integration tests into a separate job so developers get unit feedback in under a minute. In monorepos, expensive suites run only when their folder changed, behind one always-running result job that branch protection requires.",
+    "**Regression tests for every bug (widely adopted practice, illustrative):** a common rule is 'every bug fix comes with a test that fails before the fix and passes after', so the same bug never returns. The 100-point discount story is exactly this case: the test is written at the boundary first, and the fix is verified against it.",
+    "**Testcontainers (Docker-based integration tests, illustrative):** it starts a real PostgreSQL, MySQL, Redis or Kafka in a container for the test run, which catches SQL, driver and migration issues that mocks hide. pytest fixtures start and stop the container once per session, keeping the fast unit suite separate.",
+    "**pytest plugin ecosystem (pytest-cov, pytest-xdist, pytest-randomly, pytest-mock, illustrative):** coverage, parallel workers, random test order and mock cleanup are plugins rather than core features. Pin their versions in CI: a plugin upgrade can change collection or warning behaviour without any change in your code.",
   ],
   mistakes: [
-    { mistake: "Testing implementation details", why: "Mocking every internal call feels thorough", wrong: "Refactors break tests although behaviour is unchanged", fix: "Assert on outputs and observable side effects at boundaries" },
-    { mistake: "No boundary cases", why: "Testing only the happy path", wrong: "Off-by-one bugs at thresholds reach production", fix: "Parametrize below, at, and above every threshold" },
-    { mistake: "Flaky tests depending on time, randomness or network", why: "Calling datetime.now() or real APIs", wrong: "Random failures; people start ignoring red builds", fix: "Inject clock and randomness (seed); fake the network" },
-    { mistake: "Chasing 100% coverage", why: "It is an easy number to track", wrong: "Tests that execute lines without asserting anything meaningful", fix: "Use coverage to find untested important code; review assertions" },
+    { mistake: "Testing implementation details", why: "Mocking every internal call feels thorough", wrong: "Refactors break tests although behaviour is unchanged", fix: "Assert on outputs and observable side effects at boundaries; inject collaborators instead of patching internals" },
+    { mistake: "No boundary cases", why: "Testing only the happy path", wrong: "Off-by-one bugs at thresholds reach production", fix: "Parametrize below, at, and above every threshold: 99, 100, 101" },
+    { mistake: "Flaky tests depending on time, randomness or network", why: "Calling datetime.now() or real APIs", wrong: "Random failures; people start ignoring red builds", fix: "Inject clock and randomness (seed); fake the network; run the suite in random order to expose shared state" },
+    { mistake: "Chasing 100% coverage", why: "It is an easy number to track", wrong: "Tests that execute lines without asserting anything meaningful, and time spent on unreachable error branches", fix: "Use coverage to find untested important code; review assertions and missing lines; floor only critical modules" },
     { mistake: "A required CI check on a workflow with a `paths:` filter", why: "Skipping the test workflow for docs-only PRs saves CI minutes", wrong: "The skipped workflow never reports, so the required check waits forever and those PRs cannot merge", fix: "Drop `paths:` from the trigger, detect changed files in a job, run the tests conditionally, and require a final `if: always()` job that fails only if the tests failed" },
     { mistake: "Using float for money", why: "It is the default number type", wrong: "Rounding errors in totals", fix: "Decimal (or integer cents) with explicit rounding" },
+    { mistake: "Putting mutable state in a session-scoped fixture", why: "Setup is expensive and sharing feels efficient", wrong: "One test's changes leak into another; the failure depends on file order", fix: "Keep module/session fixtures immutable or read-only, or reset the state inside the fixture for each test" },
+    { mistake: "Using pytest.raises without a match", why: "Any exception of that type appears to prove the behaviour", wrong: "An unrelated ValueError elsewhere satisfies the test", fix: "Assert the type and the message (`match='negative'`), and check `exc.value` when the payload matters" },
+    { mistake: "Writing test files into the repository", why: "It is the shortest path to a file", wrong: "Dirty working trees, collisions in parallel runs, and tests that pass only on one machine", fix: "Use tmp_path for per-test files and tmp_path_factory for wider scopes" },
+    { mistake: "Silencing warnings globally", why: "The warning summary is noisy", wrong: "A real deprecation or a resource leak is hidden until it breaks in production", fix: "Assert expected warnings with pytest.warns, and turn the rest into errors with `-W error` or `filterwarnings = ['error']`" },
   ],
   bestPractices: [
-    { tag: "Maintainability", text: "One behaviour per test, named after the behaviour; Arrange–Act–Assert layout." },
-    { tag: "Reliability", text: "Every bug fix ships with a regression test." },
-    { tag: "Performance", text: "Keep the unit suite under a minute; mark slow tests and run them in a separate CI job." },
-    { tag: "Reliability", text: "Inject time, randomness and I/O so tests are deterministic." },
+    { tag: "Maintainability", text: "One behaviour per test, named after the behaviour; Arrange-Act-Assert layout; a failing assertion should explain itself." },
+    { tag: "Reliability", text: "Inject time, randomness and I/O so tests are deterministic; every bug fix ships with a regression test." },
+    { tag: "Performance", text: "Keep the unit suite under a minute; mark slow tests and run them in a separate CI job; use function scope unless setup is genuinely expensive." },
+    { tag: "Reliability", text: "Pin pytest and its plugins, register markers and enable `--strict-markers`, and treat unexpected warnings as errors." },
+    { tag: "Maintainability", text: "Measure branch coverage on critical packages, review the missing lines, and never reward a percentage without reading the assertions." },
   ],
   interview: [
-    { q: "What makes a good unit test?", a: "Fast, deterministic, independent of other tests, testing one behaviour through the public interface, with a descriptive name and clear Arrange–Act–Assert structure. It should fail for the right reason and survive refactors that keep behaviour." },
-    { q: "When do you use mocks?", a: "At system boundaries: network, email, payment, clock, randomness, slow or non-deterministic dependencies. I avoid mocking my own internal code; I prefer simple fakes for complex collaborators and real implementations where they are fast." },
-    { q: "Unit vs integration tests?", a: "Unit tests isolate a small piece and run in milliseconds; integration tests check pieces working together, like code plus a real database. You want many unit tests for fast feedback and enough integration tests to catch wiring, SQL and configuration issues." },
+    { q: "What makes a good pytest test?", a: "Fast, deterministic, independent of other tests, testing one behaviour through the public interface, with a descriptive name and a clear Arrange-Act-Assert structure. It fails for the right reason, and it survives refactors that keep behaviour. In pytest terms: plain `assert` with informative values, fixtures instead of duplicated setup, parametrize for input tables, and no hidden dependence on execution order." },
+    { q: "How do fixture scopes and teardown work, and when is monkeypatch the right tool?", a: "Fixtures are resolved by parameter name from the module, then conftest.py upward, then plugins; the first definition wins. A fixture is cached once per scope and its teardown (code after `yield`, or `request.addfinalizer`) runs in reverse setup order. Use function scope by default, module or session for expensive read-only resources such as a container or connection pool, and reset any mutable state. `monkeypatch` is for temporary changes to environment variables or third-party globals that you cannot pass in; it records an undo and replays it after the test. If you control the code, inject the dependency instead." },
+    { q: "How do you test exceptions and warnings, and what does coverage prove?", a: "Use `pytest.raises(ValueError, match='negative')` around the call: it fails if nothing is raised, if the type differs, or if the message does not match, and `exc.value` lets you assert on details. Use `pytest.warns(UserWarning, match='capped')` for warnings, and turn unexpected warnings into errors in CI. Coverage tells you which lines and branches ran; it does not tell you whether the assertions are meaningful. Read the `Missing` column, set floors for critical modules, and use mutation testing when the assertions themselves need checking." },
   ],
   quickCheck: [
     {
@@ -219,14 +360,16 @@ pip install pytest-cov && python -m pytest --cov=. --cov-report=term-missing`,
     },
   ],
   cheatSheet: [
-    "Files test_*.py, functions test_*; plain assert.",
-    "Arrange–Act–Assert; one behaviour per test.",
-    "@pytest.mark.parametrize for many cases; test thresholds -1, =, +1.",
-    "pytest.raises(Error, match=...) for errors.",
-    "Fixtures by parameter name; yield for teardown; conftest.py to share.",
-    "tmp_path, monkeypatch, capsys are built in.",
-    "Mock boundaries (network, clock, email), not your own logic.",
-    "Money: Decimal. Bug fix → regression test.",
+    "Files `test_*.py`, functions `test_*`; plain `assert`; one behaviour per test.",
+    "Arrange-Act-Assert; name the behaviour, not the function.",
+    "@pytest.mark.parametrize for many cases; test thresholds -1, =, +1; `-k`, `-x`, `--lf`.",
+    "pytest.raises(Error, match=...) for errors; pytest.warns(Warning, match=...) for warnings.",
+    "Fixtures by parameter name; `yield` for teardown; scopes function (default), class, module, package, session.",
+    "tmp_path per test, tmp_path_factory for wider scopes; monkeypatch for env/attributes, auto-undone.",
+    "conftest.py shares fixtures without imports; keep it small and local.",
+    "Mock boundaries (network, clock, email), not your own logic; dependency injection before patching.",
+    "Markers: `@pytest.mark.slow`, run `-m 'not slow'`; register markers and use `--strict-markers`.",
+    "Coverage: `--cov=pkg --cov-branch --cov-report=term-missing`; read Missing, do not chase 100%.",
   ],
   homework: {
     basic: {
@@ -517,8 +660,10 @@ jobs:
   deeper: [
     { label: "pytest documentation", url: "https://docs.pytest.org/" },
     { label: "pytest: How to use fixtures", url: "https://docs.pytest.org/en/stable/how-to/fixtures.html" },
-    { label: "Python docs: unittest.mock", url: "https://docs.python.org/3/library/unittest.mock.html" },
-    { label: "Testcontainers for Python", url: "https://testcontainers-python.readthedocs.io/" },
+    { label: "pytest: How to parametrize", url: "https://docs.pytest.org/en/stable/how-to/parametrize.html" },
+    { label: "pytest: How to monkeypatch", url: "https://docs.pytest.org/en/stable/how-to/monkeypatch.html" },
+    { label: "pytest: tmp_path", url: "https://docs.pytest.org/en/stable/how-to/tmp_path.html" },
+    { label: "pytest-cov documentation", url: "https://pytest-cov.readthedocs.io/en/latest/" },
   ],
   nextPreview: "Next: JavaScript's event loop. Why setTimeout(fn, 0) does not run immediately, and how to run async work in parallel without bugs.",
 };

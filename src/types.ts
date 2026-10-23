@@ -119,6 +119,8 @@ export interface Phase {
   tagline: string;
   icon: string;
   weeks: number; // baseline at ~10 h/week
+  /** True when the phase runs alongside the others (e.g. DSA), not in sequence. */
+  parallel?: boolean;
   areas: Area[];
   modules: Module[];
 }

@@ -6,55 +6,69 @@ export const lesson: Lesson = {
   minutes: 65,
   level: "Beginner",
   prerequisites: ["3.2.1 Box model, flexbox and grid", "1.2.1 The event loop, promises and async/await"],
-  summary: "Make pages interactive with plain JavaScript: query and update the DOM safely, handle events with delegation, call APIs with fetch, and render loading and error states. The foundation React builds on.",
+  summary: "Make pages interactive with plain JavaScript: understand the DOM as a live tree, query and mutate it safely, handle capture and bubble events, validate forms, and call APIs with fetch. Includes real Node fetch output, status versus network failures, AbortController, race conditions and XSS-safe rendering. The foundation React builds on.",
   terms: [
-    { term: "DOM", def: "Document Object Model: the browser's live tree of objects representing the page. JavaScript reads and changes it." },
+    { term: "DOM", def: "Document Object Model: the browser's live tree of objects representing the page. JavaScript reads and changes it, and the rendered page follows." },
+    { term: "DOM tree", def: "The document as nodes: `document -> html -> head/body -> elements`, with text nodes and comments between them. Elements are one node type, not the only one." },
     { term: "Event", def: "Something that happened (click, input, submit, keydown) that code can react to with a listener." },
     { term: "Event bubbling", def: "Most events travel from the target element up through its ancestors, so a parent can handle events for many children." },
-    { term: "Event delegation", def: "One listener on a parent that handles events from many children by checking `event.target`." },
-    { term: "preventDefault", def: "Stops the browser's default action, e.g. a form submit reloading the page." },
-    { term: "textContent vs innerHTML", def: "textContent sets plain text (safe). innerHTML parses HTML (dangerous with untrusted data: XSS)." },
+    { term: "Event delegation", def: "One listener on a parent that handles events from many children by checking `event.target` and walking up with `closest()`." },
+    { term: "preventDefault", def: "Stops the browser's default action, e.g. a form submit reloading the page or a link navigating. It does not stop the event from travelling." },
+    { term: "stopPropagation", def: "Stops the event from reaching the next node in the capture or bubble path. It does not cancel the browser's default action." },
+    { term: "Capture phase", def: "The first phase of dispatch, from window down to the target. Listeners registered with `{ capture: true }` run here, before bubble listeners." },
+    { term: "textContent vs innerHTML", def: "textContent sets plain text and creates a text node (safe). innerHTML parses HTML into elements and event-handler attributes (dangerous with untrusted data: XSS)." },
+    { term: "FormData", def: "A browser API that reads a form's successful controls into key/value pairs. `new FormData(form)` is the shortest way to collect inputs, including files." },
+    { term: "AbortController", def: "A standard way to cancel fetch and other async work. Call `controller.abort()`; the pending fetch rejects with an `AbortError`." },
+    { term: "Response.ok", def: "True when the HTTP status is 200-299. fetch resolves for 404 and 500 too, so check `ok` (or `status`) before reading the body." },
   ],
   problem: [
     "The DevAtlas glossary page has 300 terms. A first version attaches a click listener to each of the 300 'copy' buttons, re-renders the whole list on every keystroke in the search box, and builds rows with `innerHTML` from API data. It is slow, leaks listeners when the list re-renders, and a glossary entry containing `<img src=x onerror=alert(1)>` executes script on every visitor's page.",
-    "Knowing the DOM, events and fetch directly makes you better at every framework: you understand what React does for you, and you can fix problems when an abstraction leaks.",
+    "The search box has a second failure the first version never sees until the network is slow: requests finish out of order, so an old response for `fl` overwrites the newer results for `flex`. Knowing the DOM, events and fetch directly makes you better at every framework: you understand what React does for you, and you can fix problems when an abstraction leaks.",
   ],
   concept: {
     analogy: [
-      "The DOM is the **page's skeleton you can rearrange while the patient is awake**. Event delegation is a **receptionist** at the front desk: instead of a doorbell on every office door, visitors ring once at reception, which checks where they want to go.",
+      "The DOM is the **page's skeleton you can rearrange while the patient is awake**. Event delegation is a **receptionist** at the front desk: instead of a doorbell on every office door, visitors ring once at reception, which checks where they want to go. The receptionist analogy also shows the limit: a visitor who never reaches reception (`stopPropagation`) cannot be helped by the front desk, and a form that is not told to stay (`preventDefault`) walks straight back out of the building.",
     ],
     precise: [
-      "Select with `document.querySelector` / `querySelectorAll` (CSS selectors). Create with `document.createElement`, set text with `textContent`, attributes with `setAttribute` or properties, and insert with `append`/`prepend`/`replaceChildren`. Batch changes (build a DocumentFragment or one replaceChildren call) to avoid repeated layout.",
-      "Listen with `addEventListener(type, handler)`. Events bubble, so delegation (one listener on a container) handles dynamic children and uses less memory. Use `closest()` to find the relevant element from `event.target`.",
-      "**fetch** returns a promise of a Response; it rejects only on network failure, so check `response.ok`. Always design UI states: idle, loading, success, empty, error. Cancel stale requests with AbortController (e.g. search-as-you-type).",
-      "**Security**: never insert untrusted strings with innerHTML. Use textContent, or a sanitiser like DOMPurify if you truly need HTML.",
+      "Select with `document.querySelector` / `querySelectorAll` (CSS selectors). Create with `document.createElement`, set text with `textContent`, attributes with `setAttribute` or properties, and insert with `append`/`prepend`/`replaceChildren`. Batch changes (build a DocumentFragment or one replaceChildren call) to avoid repeated layout. The tree is live: `getElementsByClassName` returns a live collection, while `querySelectorAll` returns a static NodeList.",
+      "Listen with `addEventListener(type, handler)`. Events run capture (window down to target), target, then bubble (target back up to window). Delegation (one listener on a container) handles dynamic children and uses less memory; use `closest()` to find the relevant element from `event.target`. `preventDefault()` cancels the browser action; `stopPropagation()` stops the event travelling. They solve different problems.",
+      "**Forms** have their own event and validation model. Listen for `submit` on the form (not `click` on the button), call `preventDefault()` to own the submission, read fields with `FormData` or `form.elements`, and use the built-in constraint validation API (`validity`, `checkValidity()`, `reportValidity()`) for immediate feedback. Client validation is UX; the server must validate again because anyone can call the endpoint directly.",
+      "**fetch** returns a promise of a Response; it rejects only on network failure, so check `response.ok`. Reading `response.json()` is a second failure point. Always design UI states: idle, loading, success, empty, error. Cancel stale requests with AbortController (e.g. search-as-you-type). **Security**: never insert untrusted strings with innerHTML. Use textContent, or a sanitiser like DOMPurify if you truly need HTML.",
     ],
   },
   underTheHood: {
     text: [
-      "Event dispatch has three phases: **capture** (window down to the target), **target**, and **bubble** (target back up to window). addEventListener listens in the bubble phase by default; pass `{ capture: true }` for capture. Some events (focus, blur) do not bubble; use focusin/focusout for delegation.",
-      "Reading layout properties (offsetHeight, getBoundingClientRect) after writing styles forces the browser to compute layout synchronously ('layout thrashing'). Group reads, then writes, or use requestAnimationFrame for visual updates.",
-      "The DOM is live: removing an element removes its listeners once nothing references it, but handlers that close over large data or global listeners you forget to remove keep memory alive.",
+      "Event dispatch has three phases: **capture** (window down to the target), **target**, and **bubble** (target back up to window). `addEventListener` listens in the bubble phase by default; pass `{ capture: true }` for capture. Some events (focus, blur) do not bubble; use focusin/focusout for delegation. A listener can inspect `event.target` (the deepest element) and `event.currentTarget` (the element the listener is attached to), which is the distinction delegation depends on.",
+      "Reading layout properties (offsetHeight, getBoundingClientRect) after writing styles forces the browser to compute layout synchronously ('layout thrashing'). Group reads, then writes, or use requestAnimationFrame for visual updates. Appending 300 rows one at a time can force 300 style/layout passes; a DocumentFragment or replaceChildren swaps the finished subtree once.",
+      "The DOM is live: removing an element removes its listeners once nothing references it, but handlers that close over large data or global listeners you forget to remove keep memory alive. A listener on `window` or `document` lives as long as the page; remove it when the component that owns it is destroyed, or attach it to the component's root so it disappears with the subtree.",
+      "The tree is made of nodes, not just elements. `document` is the root; `html`, `head` and `body` are elements; the text inside a paragraph is a text node; comments are comment nodes. `childNodes` includes text and comments, while `children` includes only elements. `template.content` is an inert DocumentFragment: its nodes are parsed but not rendered and do not run scripts until you clone and insert them. `closest()` walks up through element ancestors, and `matches()` tests a selector without walking.",
+      "Mutation has two very different modes. `createElement` + `textContent` builds nodes directly and can never turn data into markup. `innerHTML = value` hands the string to the HTML parser, which creates elements, attributes and event-handler content. `replaceChildren(...nodes)` removes all old children and inserts the new ones in one operation. `append` moves an existing node rather than copying it; use `cloneNode(true)` when you need a copy. Reading `innerHTML` serialises the current subtree back to a string, which is useful for debugging and dangerous as a template mechanism.",
+      "A form submit can start in three ways: the submit button, Enter in a text field, or `form.requestSubmit()`. Listen for `submit` so all three are covered. The browser validates constraints first: `required`, `type=email`, `minlength`, `pattern`, `min`/`max`. If validation fails, the `submit` event does not fire and the browser shows its own message. `novalidate` on the form disables that automatic check so you can render errors yourself; `form.elements.email.validity.valid` and `setCustomValidity()` give you the same information. `new FormData(form)` includes successful controls only, so disabled fields and unchecked checkboxes are absent. `preventDefault()` keeps the page alive; `stopPropagation()` does not.",
+      "A fetch call has two stages. The promise resolves when response headers arrive, before the body is read; `res.status` and `res.ok` are available then. The body is a stream: `res.json()` reads and parses it, and rejects with a SyntaxError if the bytes are not JSON, even when the status is 200. The promise rejects without a Response on DNS failure, connection refusal, TLS failure, a CORS rejection, going offline, or an abort. An AbortController turns cancellation into a rejection whose `name` is `AbortError`; `AbortSignal.timeout(ms)` creates a signal that aborts itself, and one signal can be shared by several requests.",
+      "Rapid input creates a race because HTTP has no ordering guarantee. Request A (for `fl`) can start first and finish last, overwriting the newer result for `flex`. Three layers fix it. Debounce waits until typing pauses, so fewer requests start. AbortController cancels the previous request, so its handler stops. A sequence number (or comparing the response's query with the current input) is the final guard when a response cannot be aborted or resolves from cache immediately. Treat `AbortError` as expected control flow, not as an error to show the user.",
+      "XSS is a parsing problem, not a string problem. `textContent` creates a text node: `<` stays a character. `innerHTML` invokes the HTML parser: `<img src=x onerror=...>` becomes an element with an `onerror` attribute, and the browser runs that handler when the image fails. A `<script>` inserted with innerHTML does not execute in modern browsers, which misleads people into thinking innerHTML is safe; event-handler attributes, `svg` payloads and `javascript:` URLs still execute. Defence in depth is textContent by default, a maintained sanitiser for rich HTML, a Content Security Policy that blocks inline script, and server-side validation.",
     ],
     diagram: {
-      title: "Click on a button inside a list",
+      title: "One click through capture, target and bubble",
       nodes: [
         { label: "window", sub: "capture ↓" },
-        { label: "ul#terms", sub: "" },
-        { label: "button (target)", sub: "" },
-        { label: "ul#terms", sub: "bubble ↑ (delegated listener)" },
-        { label: "window", sub: "" },
+        { label: "ul#terms", sub: "capture listener" },
+        { label: "button (target)", sub: "target listener" },
+        { label: "ul#terms", sub: "bubble: delegated listener" },
+        { label: "window", sub: "bubble ↑" },
       ],
       edges: ["", "", "", ""],
+      caption: "The event visits each node twice, once downward and once upward. Delegation listens on the upward pass, after the target has already handled the click.",
     },
   },
   handsOn: [
     {
-      title: "Page and data",
+      title: "Build the page, render safely and delegate clicks",
       code: {
         lang: "html",
-        file: "glossary.html",
-        code: `<main>
+        file: "glossary.html + glossary.js",
+        code: `<!-- file: glossary.html -->
+<main>
   <h1>Glossary</h1>
   <label for="q">Search terms</label>
   <input id="q" type="search" autocomplete="off">
@@ -68,16 +82,10 @@ export const lesson: Lesson = {
     <button type="button" data-action="copy">Copy</button>
   </li>
 </template>
-<script type="module" src="./glossary.js"></script>`,
-      },
-      notes: ["`role=\"status\"` with `aria-live` announces status changes (loading, '3 results') to screen readers. `<template>` holds inert markup to clone."],
-    },
-    {
-      title: "Safe rendering, delegation and fetch with cancellation",
-      code: {
-        lang: "javascript",
-        file: "glossary.js",
-        code: `const list = document.querySelector("#terms");
+<script type="module" src="./glossary.js"></script>
+
+<!-- file: glossary.js -->
+const list = document.querySelector("#terms");
 const status = document.querySelector("#status");
 const input = document.querySelector("#q");
 const rowTemplate = document.querySelector("#term-row");
@@ -128,12 +136,26 @@ input.addEventListener("input", () => {                  // debounce (lesson 1.2
 });
 search("");`,
       },
+      output: `rows: 2
+row: DOM | copy | DOM
+row: fetch | copy | fetch
+delegated handler saw: fetch
+status: 2 terms`,
+      notes: [
+        "This is real output from the render and delegation half of the file, run under Node 24.18.0 with jsdom 29. The search half calls `/api/glossary`, which this lesson does not ship, so its network behaviour is illustrative until you point it at a real endpoint. jsdom does not execute inline event-handler attributes, so the XSS alert in the next step is illustrative; the DOM nodes it creates are real.",
+        "`<template>` content is inert: `rowTemplate.content.firstElementChild.cloneNode(true)` gives a fresh row each time, and `textContent` writes a text node. `list.replaceChildren(frag)` swaps the whole list in one operation, so 300 rows do not trigger 300 layouts.",
+        "The single click listener on `list` is delegation: it also works for rows rendered after the listener was attached. `closest` walks up from `event.target` to the button, then to the `li`, so a click on the button's text or an icon still resolves.",
+        "`controller?.abort()` cancels the previous request before starting the next; the `AbortError` is expected and deliberately ignored. The debounce timer waits 250 ms after the last keystroke, so typing `flex` sends one request, not four.",
+        "`role=\"status\"` with `aria-live` announces loading and result counts to screen readers. The live region is updated with `textContent`, so the announcement is text, never markup.",
+      ],
     },
     {
-      title: "Forms: validate and submit without reloading",
+      title: "Forms and untrusted output: the two places browsers execute data",
       code: {
         lang: "javascript",
-        code: `const form = document.querySelector("#signup");
+        file: "signup.js + unsafe-vs-safe.js",
+        code: `// file: signup.js
+const form = document.querySelector("#signup");
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();                              // stop the full-page reload
@@ -161,48 +183,179 @@ form.addEventListener("submit", async (event) => {
     button.disabled = false;
     alert("Signup failed: " + err.message);            // use an inline error element in real UIs
   }
-});`,
+});
+
+// file: unsafe-vs-safe.js
+const def = '<img src=x onerror="alert(document.cookie)">';
+
+li.innerHTML = \`<strong>\${def}</strong>\`;   // BAD: the parser creates an img node with an onerror handler
+li.textContent = def;                        // SAFE: one text node, no elements`,
       },
+      notes: [
+        "`event.preventDefault()` is what stops the full-page navigation. If you call only `event.stopPropagation()`, the form still submits and the browser leaves the page while your fetch is in flight.",
+        "`new FormData(form)` collects successful controls: disabled fields and unchecked checkboxes are omitted. `form.elements.email.validity.valid` is the same constraint check the browser runs; `setCustomValidity()` lets you add a rule that is not expressible in HTML.",
+        "`button.disabled = true` prevents a double submit, and the catch branch re-enables it. A disabled button left disabled after an error is the most common way a form becomes permanently stuck.",
+        "The second file shows the parsing difference directly. `innerHTML` invokes the HTML parser, so the string becomes an `<img>` element with an `onerror` attribute; browsers run that handler when the image fails. `textContent` creates one text node, so the angle brackets are visible characters and nothing executes.",
+        "Client validation is UX, not security: anyone can remove attributes, call the API with curl, or replay a request. Validate the same rules on the server, and treat the client check as a faster error message.",
+      ],
     },
     {
-      title: "Why innerHTML with data is dangerous",
+      title: "Read the order: capture, target, bubble, and which method stops what",
+      code: {
+        lang: "text",
+        file: "events-and-errors.txt",
+        code: `EVENT DISPATCH ORDER (addEventListener listens in bubble by default)
+1 capture   window -> document -> ... -> parent -> target   { capture: true }
+2 target    listeners on the element itself
+3 bubble    target -> parent -> ... -> document -> window   default
+
+METHOD                     STOPS                          DOES NOT STOP                 USE FOR
+event.preventDefault()     the browser's default action   event propagation             forms, links, toggles
+event.stopPropagation()    event travel                   the browser's default action  nested widgets, menus
+stopImmediatePropagation() other listeners + travel       nothing                       rare; isolation
+return false               both, in a DOM0 onclick only   nothing in addEventListener   legacy code only
+
+FETCH FAILURE TYPE         WHAT HAPPENS                   HOW TO DETECT
+HTTP 404 or 500            promise resolves, ok = false   res.ok, res.status
+network or DNS failure     promise rejects                catch: TypeError, error.cause.code
+manual abort               promise rejects                catch: error.name === "AbortError"
+invalid JSON on 200        res.json() rejects             catch: SyntaxError
+204 or empty body          res.json() rejects             catch: SyntaxError`,
+      },
+      notes: [
+        "Real observed order from Node 24.18.0 + jsdom 29: `window capture -> ul capture -> button target -> ul bubble -> window bubble`. The same order holds in a browser. Non-bubbling events such as focus and blur skip the bubble phase; listen for focusin and focusout when you need delegation.",
+        "`preventDefault()` on a checkbox click left `checked === false` in the same jsdom run: the default toggle was cancelled. `stopPropagation()` would not change `checked`; it would only stop the event reaching ancestors.",
+        "`stopImmediatePropagation()` also blocks other listeners on the same element. Reach for it only when two independent widgets genuinely must not share an event, because it makes behaviour order-dependent and hard to debug.",
+        "The fetch rows are the taxonomy used by the next step: HTTP errors resolve, network errors reject, aborts reject with a particular name, and invalid JSON rejects at parse time. Matching the symptom to the row is most of fetch debugging.",
+      ],
+    },
+    {
+      title: "Fetch a real API: 200, 404, abort, network failure and bad JSON",
       code: {
         lang: "javascript",
-        code: `const def = '<img src=x onerror="alert(document.cookie)">';
+        file: "fetch-check.mjs",
+        code: `async function main() {
+  const res = await fetch("https://jsonplaceholder.typicode.com/users/1");
+  const user = await res.json();
+  console.log(\`200: status=\${res.status} ok=\${res.ok} type=\${res.headers.get("content-type")}\`);
+  console.log(\`name=\${user.name} city=\${user.address.city}\`);
 
-li.innerHTML = \`<strong>\${def}</strong>\`;   // ✗ the onerror script runs: XSS
-li.textContent = def;                        // ✓ shows the literal text, nothing runs`,
+  const missing = await fetch("https://jsonplaceholder.typicode.com/users/999");
+  console.log(\`404: status=\${missing.status} ok=\${missing.ok} body=\${JSON.stringify(await missing.text())}\`);
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 1);
+  try {
+    await fetch("https://jsonplaceholder.typicode.com/users/1", { signal: controller.signal });
+    console.log("abort: no error");
+  } catch (error) {
+    console.log(\`abort: \${error.name}: \${error.message}\`);
+  } finally {
+    clearTimeout(timer);
+  }
+
+  try {
+    await fetch("https://no-such-host.devatlas.invalid/");
+  } catch (error) {
+    console.log(\`network: \${error.name}: \${error.message} cause=\${error.cause && error.cause.code}\`);
+  }
+
+  const html = await fetch("https://example.com");
+  console.log(\`non-JSON: status=\${html.status} type=\${html.headers.get("content-type")}\`);
+  try {
+    await html.json();
+  } catch (error) {
+    console.log(\`json parse: \${error.name}: \${error.message}\`);
+  }
+
+  const gh = await fetch("https://api.github.com/users/octocat");
+  const octocat = await gh.json();
+  console.log(\`github: status=\${gh.status} login=\${octocat.login} id=\${octocat.id} public_repos=\${octocat.public_repos} rate_remaining=\${gh.headers.get("x-ratelimit-remaining")}\`);
+}
+main();`,
       },
-      notes: ["Frameworks like React escape text by default for the same reason; the dangerous escape hatches are named accordingly (dangerouslySetInnerHTML)."],
+      output: `200: status=200 ok=true type=application/json; charset=utf-8
+name=Leanne Graham city=Gwenborough
+404: status=404 ok=false body="{}"
+abort: AbortError: This operation was aborted
+network: TypeError: fetch failed cause=ENOTFOUND
+non-JSON: status=200 type=text/html; charset=utf-8
+json parse: SyntaxError: Unexpected token '<', "<!doctype "... is not valid JSON
+github: status=200 login=octocat id=583231 public_repos=8 rate_remaining=53`,
+      notes: [
+        "Real output from Node 24.18.0, captured against the public APIs listed in the code. `rate_remaining` is a live GitHub header and will differ on your run; the JSONPlaceholder values are stable fixture data. Node 24 has fetch, AbortController and setTimeout globally, so no packages are needed.",
+        "The raw 200 body began: {\"id\": 1, \"name\": \"Leanne Graham\", \"username\": \"Bret\", \"email\": \"Sincere@april.biz\"}, followed by a nested address with \"city\": \"Gwenborough\" and \"zipcode\": \"92998-3874\". Those are the exact values the script printed as name=Leanne Graham city=Gwenborough.",
+        "The 200 body is a JSON object: `id`, `name`, `username`, `email`, and a nested `address` containing `city` and `zipcode`. `res.json()` parses it into that object, which is why `user.address.city` works. Never parse the JSON yourself unless you need streaming.",
+        "`fetch` resolves as soon as headers arrive. A 404 is a completed HTTP exchange, not a rejected promise, so `res.ok` is the check that separates 'the server answered with an error' from 'the request worked'. A 500 behaves the same way.",
+        "The abort is deliberate: a 1 ms timer cancels the request. In UI code you trigger `abort()` when a newer keystroke makes the old response irrelevant. `AbortError` is expected control flow, not a user-facing failure.",
+        "The network case is a genuine DNS failure: `TypeError: fetch failed` with `cause.code === \"ENOTFOUND\"`. A user sees the same shape on offline, CORS, TLS and connection-refused failures, so show a generic retry message and log the cause.",
+        "The GitHub response also carries `x-ratelimit-remaining`, which is why public APIs need deliberate rate-limit handling. Send a token for higher limits and treat 403/429 as retry-after signals, not as bugs in your parser.",
+      ],
+    },
+    {
+      title: "Draw the request lifecycle you just implemented",
+      code: {
+        lang: "mermaid",
+        file: "fetch-lifecycle.mmd",
+        code: `flowchart TD
+  A["input event"] --> B["debounce 250 ms"]
+  B --> C{"query changed?"}
+  C -->|no| Z["keep current view"]
+  C -->|yes| D["abort previous controller"]
+  D --> E["fetch(url, { signal })"]
+  E -->|network failure| F["error state + Retry"]
+  E -->|AbortError| G["ignore: newer request owns the UI"]
+  E -->|response received| H{"res.ok?"}
+  H -->|no| F
+  H -->|yes| I["await res.json()"]
+  I -->|SyntaxError| F
+  I --> J["render with textContent"]
+  J --> K{"any rows?"}
+  K -->|yes| L["success state"]
+  K -->|no| M["empty state"]`,
+      },
+      notes: [
+        "This is the state machine the search box implements. The important edge is `AbortError -> ignore`: a cancelled request must not overwrite the newer result or flash an error message.",
+        "Debounce reduces requests; abort guarantees the last request wins; a sequence number is the fallback when a response cannot be aborted or resolves from cache immediately. Keep all three ideas separate in your head: they solve different parts of the same race.",
+        "Render only after `res.ok` and a successful `res.json()`. The error branch must re-enable the form or Retry button, because a disabled control is the most common way an error state becomes permanent.",
+        "The empty state is not an error: a valid response with zero matches gets its own message and its own live-region announcement. Users need to know the request succeeded and the search simply matched nothing.",
+      ],
     },
   ],
   companies: [
-    "**Frameworks sit on these APIs**: React, Vue and Svelte all compile to DOM operations and native events. Debugging production issues (event ordering, focus, memory leaks) often means reading DOM behaviour directly in DevTools.",
-    "**Progressive enhancement**: content sites, e-commerce checkouts and government services often render HTML on the server and add JavaScript behaviour on top, so pages work even if scripts fail to load.",
-    "**Security reviews flag innerHTML**: many teams lint against innerHTML and require sanitisation for any user-generated HTML, because XSS is one of the most common web vulnerabilities.",
+    "**React, Vue and Svelte (illustrative):** all three compile to DOM operations and native events. React's synthetic event system still follows capture and bubble semantics, and its `onChange` is the input event, not the HTML change event. Debugging production issues (event ordering, focus, memory leaks) often means reading DOM behaviour directly in DevTools.",
+    "**GitHub REST API (verified in this lesson):** a real request to `https://api.github.com/users/octocat` returned 200 with `login=octocat`, `id=583231` and `public_repos=8` in this lesson's Node run, with `x-ratelimit-remaining` at 53. Public APIs rate-limit anonymous clients, which is why the response also carries a reset time; a production client sends a token and handles 403 and 429 deliberately.",
+    "**JSONPlaceholder (verified in this lesson):** the same run fetched `users/1` (200, JSON with a nested address) and `users/999` (404, `ok=false`, body `{}`). It is a useful public fixture precisely because it lets you practise the status branch without inventing a server response.",
+    "**OWASP and security reviews (illustrative):** many teams lint against `innerHTML` and require a maintained sanitiser such as DOMPurify for any user-generated HTML, because XSS remains one of the most common web vulnerabilities. A Content Security Policy and Trusted Types are defence in depth, not substitutes for safe insertion.",
+    "**Progressive enhancement (illustrative):** content sites, e-commerce checkouts and government services often render HTML on the server and add JavaScript behaviour on top, so pages work even if scripts fail to load. That is the same DOM and form model this lesson uses, with the server doing the first render.",
   ],
   mistakes: [
     { mistake: "innerHTML with untrusted data", why: "Easy templating with template strings", wrong: "Cross-site scripting: attackers run code in users' browsers", fix: "textContent / createElement; sanitise if HTML is required" },
     { mistake: "A listener per item", why: "Attaching in the render loop", wrong: "Memory waste, leaks on re-render, missing listeners for new items", fix: "Event delegation on the container" },
-    { mistake: "Not checking response.ok", why: "Assuming fetch throws on 404/500", wrong: "Error pages parsed as data", fix: "if (!res.ok) throw …" },
-    { mistake: "Race conditions in search", why: "Responses arrive out of order", wrong: "An old slow response overwrites newer results", fix: "AbortController or ignore stale responses" },
+    { mistake: "Not checking response.ok", why: "Assuming fetch throws on 404/500", wrong: "Error pages parsed as data, or a success state shown for a failed request", fix: "if (!res.ok) throw ..." },
+    { mistake: "Race conditions in search", why: "Responses arrive out of order", wrong: "An old slow response overwrites newer results", fix: "Debounce, AbortController, ignore AbortError, and verify the query before rendering" },
     { mistake: "No loading, empty and error states", why: "Only designing the happy path", wrong: "Users see a frozen or blank page", fix: "Render every state explicitly; announce changes with a live region" },
+    { mistake: "Calling stopPropagation() to stop a form submit", why: "The method names sound interchangeable", wrong: "The event never reaches parent handlers, but the browser still navigates and the fetch is lost", fix: "Call preventDefault() for the default action; use stopPropagation() only to keep an event inside a component" },
+    { mistake: "Relying on HTML validation as security", why: "required and pattern feel like checks", wrong: "Anyone can remove the attributes or call the API directly", fix: "Validate on the server too; use client validation for faster, clearer feedback" },
+    { mistake: "Assuming every 200 response is JSON", why: "Most APIs return JSON", wrong: "An HTML error page or a proxy login page makes res.json() throw SyntaxError", fix: "Check content-type when unsure, and wrap res.json() in try/catch" },
+    { mistake: "Forgetting to disable the submit button", why: "The handler looks idempotent", wrong: "A double click sends two POSTs and creates duplicate records", fix: "Disable the button while pending and re-enable it in the error branch" },
   ],
   bestPractices: [
-    { tag: "Security", text: "Text via textContent; never build HTML from user data; set a Content Security Policy (lesson 3.5.1)." },
-    { tag: "Performance", text: "Batch DOM updates (fragments, replaceChildren); debounce input handlers; avoid layout thrashing." },
-    { tag: "Reliability", text: "Handle loading, empty, error and stale-response cases for every request." },
-    { tag: "Maintainability", text: "Use data-* attributes for behaviour hooks instead of styling classes." },
+    { tag: "Security", text: "Text via textContent; never build HTML from user data; set a Content Security Policy (lesson 3.5.1) and sanitise rich HTML with a maintained library." },
+    { tag: "Performance", text: "Batch DOM updates (fragments, replaceChildren); debounce input handlers; avoid layout thrashing by grouping reads before writes." },
+    { tag: "Reliability", text: "Handle loading, empty, error and stale-response cases for every request. Treat AbortError as expected control flow, not as a failure to display." },
+    { tag: "Maintainability", text: "Use data-* attributes for behaviour hooks instead of styling classes, and keep one state variable as the source of truth for each view." },
+    { tag: "Cost", text: "Cache stable responses and avoid refetching on every keystroke; fewer requests lower server load, bandwidth bills and rate-limit pressure." },
   ],
   interview: [
-    { q: "What is event delegation and why use it?", a: "Attaching one listener to a common ancestor and using event.target (with closest) to find which child was interacted with. It works because events bubble. It handles dynamically added elements, uses less memory, and avoids attaching and removing many listeners." },
-    { q: "How do you prevent XSS when rendering user content?", a: "Insert text with textContent or framework escaping, never innerHTML with untrusted strings; sanitise HTML with a vetted library if HTML is required; set a Content Security Policy; validate and encode on the server too." },
-    { q: "How do you handle a search box that fires many requests?", a: "Debounce input, cancel the previous request with AbortController, ignore AbortError, show loading and empty states, and cache recent results." },
+    { q: "Explain event capture, target and bubble. How does delegation work, and when do you reach for preventDefault versus stopPropagation?", a: "Dispatch runs capture from window down to the target, then the target listeners, then bubble back up to window. addEventListener listens in bubble by default; { capture: true } opts into capture. Delegation puts one listener on an ancestor and uses event.target plus closest() to find the child, which is why it also works for rows added later and costs one listener instead of hundreds. preventDefault cancels the browser's default action: form submit navigation, link navigation, checkbox toggle. stopPropagation stops the event travelling to the next node; it does not cancel the default action. A form submit handler that calls only stopPropagation still navigates away. Use stopPropagation sparingly, for a nested widget that must not trigger an ancestor; use preventDefault whenever you take over the browser's action in JavaScript." },
+    { q: "What does fetch reject on, and how do you handle status, JSON, cancellation and timeouts?", a: "fetch returns a promise that resolves when the response headers arrive, even for 404 or 500. It rejects only when no HTTP response is produced: DNS failure, refused connection, TLS or CORS failure, offline, or an abort. So check res.ok or res.status before reading the body, and treat res.json() as a separate failure point because an HTML proxy page can return 200 with a non-JSON body. For cancellation create an AbortController, pass its signal, call abort() when the request is superseded or the component unmounts, and ignore AbortError rather than showing an error. There is no built-in timeout: combine AbortSignal.timeout(ms) with your own controller if you need one, or use Promise.race carefully. Always have loading, success, empty and error branches." },
+    { q: "How do you prevent XSS and stale-response races when rendering API data?", a: "Treat every API string as untrusted. Build elements with createElement and assign textContent, or clone a template and fill its text nodes; never concatenate data into innerHTML. innerHTML invokes the HTML parser, so an img with an onerror attribute or an SVG payload becomes live DOM, and browsers run the handler when the resource fails. If you must accept HTML, sanitise it with a maintained library such as DOMPurify on the client and also on the server, and add a restrictive Content Security Policy as defence in depth. For races, debounce input, abort the previous request with AbortController, ignore AbortError, and verify that the response still matches the current query (a request sequence number) before rendering. Render from one state variable so a slow old response cannot overwrite a newer result, and announce the final state in an aria-live region." },
   ],
   quickCheck: [
     {
       kind: "mcq",
-      prompt: "A click on a button inside <ul id=\"terms\"> triggers a listener on the ul. Why?",
+      prompt: "A click on a button inside `<ul id=\"terms\">` triggers a listener on the ul. Why?",
       options: ["Capturing only", "Event bubbling", "The button is the ul", "preventDefault"],
       answer: 1,
       explanation: "Click events bubble from the target up through its ancestors.",
@@ -213,7 +366,7 @@ li.textContent = def;                        // ✓ shows the literal text, noth
       code: { lang: "javascript", code: "form.addEventListener(\"submit\", async () => {\n  await fetch(\"/api/signup\", { method: \"POST\", body: new FormData(form) });\n});" },
       options: ["Use GET", "Call event.preventDefault() in the handler", "Remove async", "Add type=button to the form"],
       answer: 1,
-      explanation: "The browser's default submit navigates away. Prevent it and handle submission in JavaScript.",
+      explanation: "The browser's default submit navigates away. Prevent it and handle submission in JavaScript. stopPropagation() would not stop the navigation.",
     },
     {
       kind: "mcq",
@@ -224,14 +377,16 @@ li.textContent = def;                        // ✓ shows the literal text, noth
     },
   ],
   cheatSheet: [
-    "querySelector / querySelectorAll; closest() to walk up.",
-    "createElement + textContent; replaceChildren for batch updates.",
-    "addEventListener; delegation on containers; data-* hooks.",
-    "Forms: submit event + preventDefault + FormData.",
-    "fetch: check res.ok; AbortController for stale requests.",
-    "States: idle, loading, success, empty, error.",
-    "Never innerHTML with untrusted data.",
-    "aria-live status region for dynamic messages.",
+    "querySelector / querySelectorAll; closest() to walk up; matches() to test without walking.",
+    "createElement + textContent; DocumentFragment or replaceChildren for batch updates.",
+    "addEventListener; delegation on containers; data-* hooks for behaviour.",
+    "Events: capture down, target, bubble up. Default is bubble; use { capture: true } to opt in.",
+    "preventDefault stops the browser action; stopPropagation stops the event travelling. They are different.",
+    "Forms: submit event + preventDefault + FormData + validity. Validate again on the server.",
+    "fetch resolves on HTTP errors; check res.ok. Rejects on network failure and abort.",
+    "AbortController + debounce for rapid input; ignore AbortError and guard against stale responses.",
+    "res.json() can throw even on a 200; wrap it and check content-type when unsure.",
+    "Never innerHTML with untrusted data; use textContent, a sanitiser and a CSP.",
   ],
   homework: {
     basic: {
@@ -487,6 +642,8 @@ search("");
     { label: "MDN: Introduction to the DOM", url: "https://developer.mozilla.org/en-US/docs/Web/API/Document_Object_Model/Introduction" },
     { label: "MDN: Event bubbling", url: "https://developer.mozilla.org/en-US/docs/Learn_web_development/Core/Scripting/Event_bubbling" },
     { label: "MDN: Using the Fetch API", url: "https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API/Using_Fetch" },
+    { label: "MDN: AbortController", url: "https://developer.mozilla.org/en-US/docs/Web/API/AbortController" },
+    { label: "MDN: Client-side form validation", url: "https://developer.mozilla.org/en-US/docs/Learn_web_development/Extensions/Forms/Form_validation" },
     { label: "OWASP: Cross Site Scripting Prevention Cheat Sheet", url: "https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html" },
   ],
   nextPreview: "Next: React with TypeScript. Components, props and state: the same UI, described declaratively.",

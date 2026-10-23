@@ -86,6 +86,20 @@ export const phases: Phase[] = [
           { id: "1.4.2", title: "Errors, traits and cargo", objectives: ["Result and ?", "Traits and generics"] },
         ],
       },
+      {
+        id: "1.5",
+        title: "Software testing",
+        lessons: [
+          { id: "1.5.1", title: "How to test software: the pyramid, doubles and testable design", objectives: ["Choose unit, integration or end-to-end", "Write testable code and useful test doubles"] },
+        ],
+      },
+      {
+        id: "1.6",
+        title: "Debugging and profiling",
+        lessons: [
+          { id: "1.6.1", title: "Debugging and profiling: find the real bottleneck", objectives: ["Debug methodically instead of guessing", "Profile CPU and memory with flame graphs"] },
+        ],
+      },
     ],
   },
   {
@@ -94,6 +108,7 @@ export const phases: Phase[] = [
     tagline: "Pattern recognition, not memorisation. Runs alongside every phase",
     icon: "🧮",
     weeks: 12,
+    parallel: true,
     areas: ["dsa"],
     modules: [
       {
@@ -181,6 +196,13 @@ export const phases: Phase[] = [
           { id: "4.4.2", title: "Idempotency, rate limiting, queues and caching", objectives: ["Safe retries", "Background jobs"] },
         ],
       },
+      {
+        id: "4.5",
+        title: "Secure by design",
+        lessons: [
+          { id: "4.5.1", title: "The OWASP Top 10, with hands-on exploits and fixes", objectives: ["Spot and fix injection and broken access control", "Hash secrets and defend against SSRF"] },
+        ],
+      },
     ],
   },
   {
@@ -243,6 +265,13 @@ export const phases: Phase[] = [
           { id: "6.4.4", title: "Design Mint.com: a personal finance app", objectives: ["Scheduled ingestion pipelines", "Categorise and aggregate safely"] },
           { id: "6.4.5", title: "Design a social graph and a search query cache", objectives: ["Graph search across shards", "LRU cache in front of search"] },
           { id: "6.4.6", title: "Design sales rank by category", objectives: ["Batch aggregation with MapReduce", "Serve precomputed rankings"] },
+        ],
+      },
+      {
+        id: "6.5",
+        title: "Technical communication",
+        lessons: [
+          { id: "6.5.1", title: "Writing design docs, RFCs and ADRs", objectives: ["Write a design doc a senior engineer can review", "Record decisions as ADRs"] },
         ],
       },
     ],

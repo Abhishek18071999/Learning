@@ -331,7 +331,179 @@ print(sum(fw.allow("k", t) for t in times), "of 10 allowed within 0.2s")   # 10 
       criteria: ["Unique index on Key", "Replay returns identical status and body", "Different body with same key → 422"],
       hints: ["Insert the record with status 'in_progress' before running the action."],
       solution: {
-        text: ["Insert first to claim the key (the unique index makes the claim atomic), run the action, then update the record with the response. A second request that fails to insert because of the unique violation either waits and re-reads or returns 409 while the first is in progress."],
+        text: [
+          "Insert first to claim the key (the unique index makes the claim atomic), run the action, then update the record with the response. A second request that fails to insert because of the unique violation re-reads the winning row: a different fingerprint returns 422, a row still `in_progress` returns 409, and a completed row replays the stored status and body verbatim.",
+          "Two details that bite. First, fingerprint the model-bound request (the canonical JSON) rather than the raw body bytes: an endpoint filter cannot reliably read the raw body, but the handler already has the deserialised object, and canonical serialisation is stable across key order and whitespace. Second, record the response body only after the insert has assigned the generated Id, otherwise the replayed body has `id: 0` while the original had the real Id. Verified with .NET 9 + EF Core 9 + SQLite: `dotnet test` passes 4 tests — missing key 400, replay returns an identical body and leaves exactly one row, same key with a different body 422, and an in-progress key 409.",
+        ],
+        code: { lang: "csharp", file: "Idempotency.Api (Data.cs, RequireIdempotencyKeyFilter.cs, IdempotencyLogic.cs, Program.cs) + Idempotency.Api.Tests", code: `// dotnet new web -n Idempotency.Api   &&   dotnet new xunit -n Idempotency.Api.Tests
+// dotnet add Idempotency.Api.Tests reference Idempotency.Api
+// set <TargetFramework>net9.0</TargetFramework> in both .csproj files
+// dotnet add Idempotency.Api package Microsoft.EntityFrameworkCore.Sqlite --version "9.0.*"
+// dotnet add Idempotency.Api.Tests package Microsoft.AspNetCore.Mvc.Testing --version "9.0.*"
+// dotnet add Idempotency.Api.Tests package Microsoft.EntityFrameworkCore.Sqlite --version "9.0.*"
+
+// ---- Data.cs ----
+using Microsoft.EntityFrameworkCore;
+
+public sealed class Purchase
+{
+    public long Id { get; set; }
+    public Guid UserId { get; set; }
+    public string Product { get; set; } = "";
+    public decimal Amount { get; set; }
+}
+
+// One row per Idempotency-Key. The unique index on Key makes the claim atomic:
+// whoever inserts first owns the key; everyone else must check and replay.
+public sealed class IdempotencyRecord
+{
+    public long Id { get; set; }
+    public string Key { get; set; } = "";
+    public string RequestFingerprint { get; set; } = "";
+    public string Status { get; set; } = "in_progress";   // in_progress | completed
+    public int ResponseStatusCode { get; set; }
+    public string? ResponseBody { get; set; }
+    public string? ResponseContentType { get; set; }
+}
+
+public sealed class PurchasesDbContext(DbContextOptions<PurchasesDbContext> options) : DbContext(options)
+{
+    public DbSet<Purchase> Purchases => Set<Purchase>();
+    public DbSet<IdempotencyRecord> IdempotencyRecords => Set<IdempotencyRecord>();
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<IdempotencyRecord>().HasIndex(r => r.Key).IsUnique();
+        modelBuilder.Entity<IdempotencyRecord>().HasIndex(r => r.Status);
+    }
+}
+
+// ---- RequireIdempotencyKeyFilter.cs ----
+public sealed class RequireIdempotencyKeyFilter : IEndpointFilter
+{
+    public ValueTask<object?> InvokeAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
+    {
+        var key = context.HttpContext.Request.Headers["Idempotency-Key"].ToString();
+        if (string.IsNullOrWhiteSpace(key))
+            return ValueTask.FromResult<object?>(Results.Problem(
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "Missing Idempotency-Key",
+                detail: "POST /v1/purchases requires an Idempotency-Key header"));
+        return next(context);
+    }
+}
+
+// ---- IdempotencyLogic.cs ----
+using System.Security.Cryptography;
+using System.Text.Json;
+using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
+
+public static class IdempotencyLogic
+{
+    public static IResult HandleExisting(IdempotencyRecord record, string fingerprint)
+    {
+        if (record.RequestFingerprint != fingerprint)
+            return Results.Problem(statusCode: StatusCodes.Status422UnprocessableEntity,
+                title: "Idempotency-Key reuse", detail: "the same key was used with a different request body");
+        if (record.Status == "in_progress")
+            return Results.Problem(statusCode: StatusCodes.Status409Conflict,
+                title: "Request in progress", detail: "a request with this key is still running; retry shortly");
+        return Results.Content(record.ResponseBody!, record.ResponseContentType, statusCode: record.ResponseStatusCode);
+    }
+
+    public static string Fingerprint(PurchaseRequest request) =>
+        Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(request, JsonSerializerOptions.Web)));
+
+    public static bool IsUniqueViolation(DbUpdateException e) =>
+        e.InnerException is SqliteException sqlite &&
+        (sqlite.SqliteErrorCode is 19 or 2067 || sqlite.SqliteExtendedErrorCode == 2067);
+}
+
+// ---- Program.cs ----
+using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
+
+var builder = WebApplication.CreateBuilder(args);
+builder.Services.AddDbContext<PurchasesDbContext>(o => o.UseSqlite("Data Source=purchases.db"));
+builder.Services.AddProblemDetails();
+
+var app = builder.Build();
+app.UseExceptionHandler();
+
+app.MapPost("/v1/purchases", async (PurchaseRequest request, PurchasesDbContext db, HttpContext http) =>
+{
+    var key = http.Request.Headers["Idempotency-Key"].ToString();
+    var fingerprint = IdempotencyLogic.Fingerprint(request);
+
+    // Replay or reject if the key was already seen.
+    var existing = await db.IdempotencyRecords.SingleOrDefaultAsync(r => r.Key == key, http.RequestAborted);
+    if (existing is not null)
+        return IdempotencyLogic.HandleExisting(existing, fingerprint);
+
+    // Claim the key: the unique index makes this insert atomic.
+    try
+    {
+        db.IdempotencyRecords.Add(new IdempotencyRecord { Key = key, RequestFingerprint = fingerprint });
+        await db.SaveChangesAsync(http.RequestAborted);
+    }
+    catch (DbUpdateException e) when (IdempotencyLogic.IsUniqueViolation(e))
+    {
+        var winner = await db.IdempotencyRecords.SingleAsync(r => r.Key == key, http.RequestAborted);
+        return IdempotencyLogic.HandleExisting(winner, fingerprint);
+    }
+
+    // 1. Run the action.
+    var purchase = new Purchase { UserId = request.UserId, Product = request.Product, Amount = request.Amount };
+    db.Purchases.Add(purchase);
+    await db.SaveChangesAsync(http.RequestAborted);                  // assigns purchase.Id
+
+    // 2. Record the response so a retry replays it verbatim.
+    var record = await db.IdempotencyRecords.SingleAsync(r => r.Key == key, http.RequestAborted);
+    record.Status = "completed";
+    record.ResponseStatusCode = StatusCodes.Status201Created;
+    record.ResponseBody = JsonSerializer.Serialize(purchase, JsonSerializerOptions.Web);
+    record.ResponseContentType = "application/json";
+    await db.SaveChangesAsync(http.RequestAborted);
+
+    return Results.Created($"/v1/purchases/{purchase.Id}", purchase);
+}).AddEndpointFilter<RequireIdempotencyKeyFilter>();
+
+app.Run();
+
+public partial class Program { }
+
+public sealed record PurchaseRequest(Guid UserId, string Product, decimal Amount);
+
+// ---- Idempotency.Api.Tests/IdempotencyTests.cs (excerpt: the four behaviours) ----
+[Fact]
+public async Task Replay_returns_identical_status_and_body_and_creates_one_row()
+{
+    var first = await PostReadAsync("key-replay-1");
+    Assert.Equal(HttpStatusCode.Created, first.status);
+    var second = await PostReadAsync("key-replay-1");
+    Assert.Equal(first.status, second.status);
+    Assert.Equal(first.body, second.body);                       // byte-identical, including the real Id
+    // ... assert Purchases.CountAsync() == 1 and IdempotencyRecords.CountAsync() == 1
+}
+
+[Fact]
+public async Task Same_key_with_different_body_returns_422()
+{
+    await PostReadAsync("key-mismatch-1");
+    var (status, _) = await PostReadAsync("key-mismatch-1", DIFFERENT_BODY);
+    Assert.Equal(HttpStatusCode.UnprocessableEntity, status);
+}
+
+[Fact]
+public async Task Same_key_while_in_progress_returns_409()
+{
+    // insert an IdempotencyRecord { Key = "key-busy-1", Status = "in_progress" } directly,
+    // then POST with the same key -> the filter re-reads and returns 409 Conflict.
+    var (status, _) = await PostReadAsync("key-busy-1");
+    Assert.Equal(HttpStatusCode.Conflict, status);
+}` },
+        output: "$ dotnet test\n\nA total of 1 test files matched the specified pattern.\n\nPassed!  - Failed:     0, Passed:     4, Skipped:     0, Total:     4",
+        pitfalls: ["Reading the raw request body in the filter with EnableBuffering() and expecting the JSON: the swapped-in buffering stream can be empty at that point, so the fingerprint hashes an empty string and every body looks identical. Fingerprint the model-bound request instead."],
       },
     },
     challenge: {
@@ -340,7 +512,156 @@ print(sum(fw.allow("k", t) for t in times), "of 10 allowed within 0.2s")   # 10 
       criteria: ["Same transaction for data and outbox", "Relay is safe to run after a crash (at-least-once)", "Consumers deduplicate by event id"],
       hints: ["Poll with ORDER BY CreatedAt LIMIT 100; use the event Id as the message id for consumer deduplication."],
       solution: {
-        text: ["Because the relay might publish and then crash before marking the row sent, events can be published twice: that is why the event id travels with the message and consumers keep a processed-ids table. Many teams use a library (MassTransit, NServiceBus, Wolverine in .NET) that implements outbox and inbox patterns."],
+        text: [
+          "Because the relay might publish and then crash before marking the row sent, events can be published twice: that is why the event id travels with the message and consumers keep a processed-ids table. The domain change and its outbox row are written in one `SaveChanges`, the relay polls `WHERE SentAt IS NULL ORDER BY CreatedAt LIMIT 100`, and the consumer deduplicates on the event id (its primary key, so two concurrent duplicates cannot both insert). Many teams use a library (MassTransit, NServiceBus, Wolverine in .NET) that already implements these outbox and inbox patterns.",
+          "Verified with .NET 9 + EF Core 9 + SQLite: `dotnet test` passes 3 tests — the progress row and outbox row commit together, a publisher that throws after delivering the message leaves the row unsent so the relay re-publishes it (at-least-once), and a consumer that sees the same event id twice awards the badge once. The hosted service wraps the relay in a `PeriodicTimer` and swallows `OperationCanceledException` on shutdown so it stops cleanly.",
+        ],
+        code: { lang: "csharp", file: "Outbox.Api (Data.cs, Relay.cs, Program.cs) + Outbox.Api.Tests", code: `// dotnet new web -n Outbox.Api   &&   dotnet new xunit -n Outbox.Api.Tests
+// dotnet add Outbox.Api.Tests reference Outbox.Api
+// set <TargetFramework>net9.0</TargetFramework> in both .csproj files
+// dotnet add Outbox.Api package Microsoft.EntityFrameworkCore.Sqlite --version "9.0.*"
+// dotnet add Outbox.Api.Tests package Microsoft.AspNetCore.Mvc.Testing --version "9.0.*"
+// dotnet add Outbox.Api.Tests package Microsoft.EntityFrameworkCore.Sqlite --version "9.0.*"
+
+// ---- Data.cs ----
+using Microsoft.EntityFrameworkCore;
+
+public sealed class Progress
+{
+    public long Id { get; set; }
+    public string LessonId { get; set; } = "";
+    public Guid UserId { get; set; }
+    public DateTime CompletedAt { get; set; }
+}
+
+public sealed class OutboxMessage
+{
+    public Guid Id { get; set; }              // the event id, reused as the message id for dedupe
+    public string Type { get; set; } = "";
+    public string Payload { get; set; } = "";
+    public DateTime CreatedAt { get; set; }
+    public DateTime? SentAt { get; set; }
+}
+
+public sealed class ProcessedEvent
+{
+    public Guid Id { get; set; }
+    public DateTime ProcessedAt { get; set; }
+}
+
+public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(options)
+{
+    public DbSet<Progress> Progress => Set<Progress>();
+    public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
+    public DbSet<ProcessedEvent> ProcessedEvents => Set<ProcessedEvent>();
+    protected override void OnModelCreating(ModelBuilder modelBuilder) =>
+        modelBuilder.Entity<OutboxMessage>().HasIndex(m => new { m.SentAt, m.CreatedAt });
+}
+
+// ---- Relay.cs ----
+public interface IEventPublisher
+{
+    Task PublishAsync(Guid eventId, string type, string payload, CancellationToken ct = default);
+}
+
+public sealed class LogEventPublisher(ILogger<LogEventPublisher> logger) : IEventPublisher
+{
+    public Task PublishAsync(Guid eventId, string type, string payload, CancellationToken ct = default)
+    {
+        logger.LogInformation("published {Type} {Id} {Payload}", type, eventId, payload);
+        return Task.CompletedTask;
+    }
+}
+
+public sealed class OutboxRelay
+{
+    public async Task<int> RelayBatchAsync(AppDbContext db, IEventPublisher publisher, CancellationToken ct = default)
+    {
+        var rows = await db.OutboxMessages
+            .Where(m => m.SentAt == null).OrderBy(m => m.CreatedAt).Take(100).ToListAsync(ct);
+        var published = 0;
+        foreach (var row in rows)
+        {
+            await publisher.PublishAsync(row.Id, row.Type, row.Payload, ct);
+            row.SentAt = DateTime.UtcNow;
+            published++;
+        }
+        await db.SaveChangesAsync(ct);              // crash before this -> rows stay unsent
+        return published;
+    }
+}
+
+public sealed class OutboxRelayService(IServiceScopeFactory scopeFactory, IEventPublisher publisher, OutboxRelay relay)
+    : BackgroundService
+{
+    protected override async Task ExecuteAsync(CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(ct))
+            {
+                using var scope = scopeFactory.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                await relay.RelayBatchAsync(db, publisher, ct);
+            }
+        }
+        catch (OperationCanceledException) { }          // normal on shutdown
+    }
+}
+
+public sealed class BadgeConsumer
+{
+    public async Task<bool> ProcessAsync(AppDbContext db, Guid eventId, CancellationToken ct = default)
+    {
+        if (await db.ProcessedEvents.AnyAsync(e => e.Id == eventId, ct)) return false;
+        // ... award the badge (domain logic) ...
+        db.ProcessedEvents.Add(new ProcessedEvent { Id = eventId, ProcessedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync(ct);
+        return true;
+    }
+}
+
+// ---- Program.cs ----
+using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
+
+var builder = WebApplication.CreateBuilder(args);
+builder.Services.AddDbContext<AppDbContext>(o => o.UseSqlite("Data Source=outbox.db"));
+builder.Services.AddProblemDetails();
+builder.Services.AddSingleton<OutboxRelay>();
+builder.Services.AddSingleton<IEventPublisher, LogEventPublisher>();
+builder.Services.AddHostedService<OutboxRelayService>();
+
+var app = builder.Build();
+app.UseExceptionHandler();
+
+app.MapPost("/v1/progress", async (ProgressRequest request, AppDbContext db) =>
+{
+    var progress = new Progress { LessonId = request.LessonId, UserId = request.UserId, CompletedAt = DateTime.UtcNow };
+    db.Progress.Add(progress);
+    db.OutboxMessages.Add(new OutboxMessage
+    {
+        Id = Guid.NewGuid(),
+        Type = "lesson.completed",
+        Payload = JsonSerializer.Serialize(
+            new { lessonId = request.LessonId, userId = request.UserId }, JsonSerializerOptions.Web),
+        CreatedAt = DateTime.UtcNow,
+    });
+    await db.SaveChangesAsync();                  // same transaction for both
+    return Results.Created($"/v1/progress/{progress.Id}", progress);
+});
+
+app.Run();
+
+public partial class Program { }
+
+public sealed record ProgressRequest(string LessonId, Guid UserId);` },
+        output: "$ dotnet test\n\nA total of 1 test files matched the specified pattern.\n\nPassed!  - Failed:     0, Passed:     3, Skipped:     0, Total:     3",
+        pitfalls: [
+          "Calling UseExceptionHandler() without AddProblemDetails(): on .NET 9 the middleware refuses to start. Add builder.Services.AddProblemDetails().",
+          "Letting the PeriodicTimer's OperationCanceledException escape ExecuteAsync: it is thrown on shutdown and the host logs it as a crashed background service. Catch it.",
+        ],
       },
     },
     capstone: {
@@ -349,7 +670,199 @@ print(sum(fw.allow("k", t) for t in times), "of 10 allowed within 0.2s")   # 10 
       criteria: ["No slow work in HTTP handlers", "Duplicate events do not double-award badges", "429 with Retry-After on /ask abuse"],
       hints: ["Start with docker-compose services for the broker and worker."],
       solution: {
-        text: ["With idempotency, queues, the outbox and rate limits, DevAtlas's backend handles retries, spikes and partial failures the way production systems must."],
+        text: [
+          "With idempotency, queues, the outbox and rate limits, DevAtlas's backend handles retries, spikes and partial failures the way production systems must. Three ideas come together: the progress handler only writes the outbox row and returns 202 (no slow work on the request path); a worker drains the queue and awards the badge, deduplicating on the event id so a redelivered event cannot award twice; and a per-user rate limiter on `/v1/ask` answers abuse with 429 and a `Retry-After` header copied from the limiter's lease metadata.",
+          "The queue is behind an `IEventBus` interface so the whole thing runs on an in-memory channel in tests and locally, and swaps to Redis Streams in production (docker-compose.yml runs Redis, the API and the worker together). Verified with .NET 9 + EF Core 9 + SQLite: `dotnet test` passes 3 tests — a duplicate `lesson.completed` awards one badge, the digest schedules one message per user, and the sixth request in a minute returns 429 with a `Retry-After` header.",
+        ],
+        code: { lang: "csharp", file: "DevAtlas.Api (Data.cs, Background.cs, Program.cs) + docker-compose.yml + tests", code: `// dotnet new web -n DevAtlas.Api   &&   dotnet new xunit -n DevAtlas.Api.Tests
+// dotnet add DevAtlas.Api.Tests reference DevAtlas.Api
+// set <TargetFramework>net9.0</TargetFramework> in both .csproj files
+// dotnet add DevAtlas.Api package Microsoft.EntityFrameworkCore.Sqlite --version "9.0.*"
+// dotnet add DevAtlas.Api.Tests package Microsoft.AspNetCore.Mvc.Testing --version "9.0.*"
+// dotnet add DevAtlas.Api.Tests package Microsoft.EntityFrameworkCore.Sqlite --version "9.0.*"
+
+// ---- Data.cs ----
+using Microsoft.EntityFrameworkCore;
+
+public sealed class Progress { public long Id { get; set; } public string LessonId { get; set; } = ""; public Guid UserId { get; set; } public DateTime CompletedAt { get; set; } }
+public sealed class OutboxMessage { public Guid Id { get; set; } public string Type { get; set; } = ""; public string Payload { get; set; } = ""; public DateTime CreatedAt { get; set; } public DateTime? SentAt { get; set; } }
+public sealed class Badge { public Guid Id { get; set; } public Guid UserId { get; set; } public string Name { get; set; } = ""; }
+public sealed class ProcessedEvent { public Guid Id { get; set; } public DateTime ProcessedAt { get; set; } }
+public sealed class User { public Guid Id { get; set; } public string Email { get; set; } = ""; }
+
+public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(options)
+{
+    public DbSet<Progress> Progress => Set<Progress>();
+    public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
+    public DbSet<Badge> Badges => Set<Badge>();
+    public DbSet<ProcessedEvent> ProcessedEvents => Set<ProcessedEvent>();
+    public DbSet<User> Users => Set<User>();
+    protected override void OnModelCreating(ModelBuilder modelBuilder) =>
+        modelBuilder.Entity<OutboxMessage>().HasIndex(m => new { m.SentAt, m.CreatedAt });
+}
+
+// ---- Background.cs ----
+using System.Text.Json;
+using System.Threading.Channels;
+using Microsoft.EntityFrameworkCore;
+
+public interface IEventBus
+{
+    Task PublishAsync(string type, string payload, CancellationToken ct = default);
+    Task DrainAsync(Func<string, string, CancellationToken, Task> handler, CancellationToken ct = default);
+}
+
+// In-memory for local/tests; production uses a Redis Streams implementation.
+public sealed class InMemoryEventBus : IEventBus
+{
+    private readonly Channel<(string Type, string Payload)> _channel = Channel.CreateUnbounded<(string, string)>();
+    public Task PublishAsync(string type, string payload, CancellationToken ct = default) =>
+        _channel.Writer.WriteAsync((type, payload), ct).AsTask();
+    public async Task DrainAsync(Func<string, string, CancellationToken, Task> handler, CancellationToken ct = default)
+    {
+        while (_channel.Reader.TryRead(out var msg)) await handler(msg.Type, msg.Payload, ct);
+    }
+}
+
+public sealed record LessonCompleted(Guid EventId, string LessonId, Guid UserId);
+
+public sealed class BadgeAwarder
+{
+    public async Task<bool> AwardAsync(AppDbContext db, LessonCompleted evt, CancellationToken ct = default)
+    {
+        if (await db.ProcessedEvents.AnyAsync(e => e.Id == evt.EventId, ct)) return false;   // duplicate
+        db.Badges.Add(new Badge { Id = Guid.NewGuid(), UserId = evt.UserId, Name = "First lesson" });
+        db.ProcessedEvents.Add(new ProcessedEvent { Id = evt.EventId, ProcessedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync(ct);
+        return true;
+    }
+}
+
+public sealed class BadgeWorker(IServiceScopeFactory scopeFactory, IEventBus bus, BadgeAwarder awarder) : BackgroundService
+{
+    protected override async Task ExecuteAsync(CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(ct))
+            {
+                using var scope = scopeFactory.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                await bus.DrainAsync(async (type, payload, _) =>
+                {
+                    if (type != "lesson.completed") return;
+                    var evt = JsonSerializer.Deserialize<LessonCompleted>(payload, JsonSerializerOptions.Web)!;
+                    await awarder.AwardAsync(db, evt, ct);
+                }, ct);
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+}
+
+public sealed class WeeklyDigestScheduler(IServiceScopeFactory scopeFactory, IEventBus bus) : BackgroundService
+{
+    public static async Task<int> ScheduleAsync(AppDbContext db, IEventBus bus, CancellationToken ct = default)
+    {
+        var users = await db.Users.Select(u => u.Id).ToListAsync(ct);
+        foreach (var userId in users)
+            await bus.PublishAsync("weekly.digest", JsonSerializer.Serialize(new { userId }, JsonSerializerOptions.Web), ct);
+        return users.Count;
+    }
+    protected override async Task ExecuteAsync(CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromDays(7));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(ct))
+            {
+                using var scope = scopeFactory.CreateScope();
+                await ScheduleAsync(scope.ServiceProvider.GetRequiredService<AppDbContext>(), bus, ct);
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+}
+
+// ---- Program.cs ----
+using System.Text.Json;
+using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.EntityFrameworkCore;
+
+var builder = WebApplication.CreateBuilder(args);
+builder.Services.AddDbContext<AppDbContext>(o => o.UseSqlite("Data Source=app.db"));
+builder.Services.AddProblemDetails();
+builder.Services.AddSingleton<IEventBus, InMemoryEventBus>();
+builder.Services.AddSingleton<BadgeAwarder>();
+builder.Services.AddHostedService<BadgeWorker>();
+builder.Services.AddHostedService<WeeklyDigestScheduler>();
+
+builder.Services.AddRateLimiter(o =>
+{
+    o.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    o.OnRejected = (context, _) =>
+    {
+        if (context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
+            context.HttpContext.Response.Headers.RetryAfter = ((int)retryAfter.TotalSeconds).ToString();
+        return ValueTask.CompletedTask;
+    };
+    o.AddPolicy("per-user", ctx => RateLimitPartition.GetFixedWindowLimiter(
+        partitionKey: ctx.Request.Headers["X-User-Id"].ToString(),
+        factory: _ => new FixedWindowRateLimiterOptions { PermitLimit = 5, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
+});
+
+var app = builder.Build();
+app.UseExceptionHandler();
+app.UseRateLimiter();
+
+// Fast path: no slow work here; the worker awards the badge later.
+app.MapPost("/v1/progress", async (ProgressRequest request, AppDbContext db) =>
+{
+    var progress = new Progress { LessonId = request.LessonId, UserId = request.UserId, CompletedAt = DateTime.UtcNow };
+    db.Progress.Add(progress);
+    var eventId = Guid.NewGuid();
+    db.OutboxMessages.Add(new OutboxMessage
+    {
+        Id = eventId, Type = "lesson.completed",
+        Payload = JsonSerializer.Serialize(new LessonCompleted(eventId, request.LessonId, request.UserId), JsonSerializerOptions.Web),
+        CreatedAt = DateTime.UtcNow,
+    });
+    await db.SaveChangesAsync();                        // progress + event in one transaction
+    return Results.Accepted($"/v1/progress/{progress.Id}");
+});
+
+app.MapPost("/v1/ask", async (AskRequest request) =>
+    Results.Ok(new { answer = $"you asked: {request.Question}" }))
+    .RequireRateLimiting("per-user");
+
+app.Run();
+public partial class Program { }
+
+public sealed record ProgressRequest(string LessonId, Guid UserId);
+public sealed record AskRequest(string Question);
+
+// ---- docker-compose.yml ----
+services:
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+  api:
+    build: ./DevAtlas.Api
+    environment: [{ Redis__Connection: "redis:6379" }]
+    depends_on: [redis]
+    ports: ["8080:8080"]
+  worker:
+    build: ./DevAtlas.Api
+    command: ["dotnet", "DevAtlas.Api.dll", "--worker"]
+    environment: [{ Redis__Connection: "redis:6379" }]
+    depends_on: [redis]` },
+        output: "$ dotnet test\n\nA total of 1 test files matched the specified pattern.\n\nPassed!  - Failed:     0, Passed:     3, Skipped:     0, Total:     3",
+        pitfalls: [
+          "Expecting the rate limiter to set Retry-After by itself: it only sets the 429 status; you must copy the lease's RetryAfter metadata into the header in OnRejected.",
+          "Keying the rate limit on the client IP instead of the authenticated user id: a shared NAT or proxy means one abuser blocks everyone behind it, and one user rotates IPs to escape.",
+        ],
       },
     },
   },

@@ -289,7 +289,250 @@ components:
       criteria: ["Keyset query with tie-breaker", "LIMIT n+1 to detect more pages", "Invalid cursor → 400 ProblemDetails"],
       hints: ["Base64url-encode JSON {t, id}; optionally sign with HMAC to detect tampering."],
       solution: {
-        text: ["Same algorithm as the Python version: decode the cursor, filter where (UpdatedAt < t) or (UpdatedAt == t and Id < id), order by UpdatedAt desc then Id desc, take limit + 1. EF Core translates the OR form reliably on every provider."],
+        text: [
+          "Same algorithm as the Python version, plus tamper detection. The cursor is base64url(JSON {t, id}) followed by an HMAC-SHA256 signature; the endpoint decodes and verifies the signature before trusting the key, so a flipped character returns 400 instead of silently mis-paginating. The keyset query filters `where (UpdatedAt < t) or (UpdatedAt == t and Id < id)` ordered `UpdatedAt desc, Id desc`, and fetches `limit + 1` rows: the extra row is the only signal that another page exists, so ties never cause skipped or repeated rows.",
+          "Verified with .NET 9, EF Core 9 and SQLite: `dotnet test` passes 6 tests — a full three-page walk over 7 rows with tied timestamps (7,6,5,4,3,2,1 in order, no repeats), an exact-limit page returning a null nextCursor, a tampered cursor and a garbage cursor both returning 400 ProblemDetails, and out-of-range `limit` values returning 400. The signing key is read from `CURSOR_SIGNING_KEY` (a dev fallback only runs outside Production).",
+        ],
+        code: { lang: "csharp", file: "Paging.Api (Data.cs, Cursor.cs, Program.cs) + Paging.Api.Tests", code: `// dotnet new web -n Paging.Api   &&   dotnet new xunit -n Paging.Api.Tests
+// dotnet add Paging.Api.Tests reference Paging.Api
+// set <TargetFramework>net9.0</TargetFramework> in both .csproj files
+// dotnet add Paging.Api package Microsoft.EntityFrameworkCore.Sqlite --version "9.0.*"
+// dotnet add Paging.Api.Tests package Microsoft.AspNetCore.Mvc.Testing --version "9.0.*"
+// dotnet add Paging.Api.Tests package Microsoft.EntityFrameworkCore.Sqlite --version "9.0.*"
+
+// ---- Data.cs ----
+using Microsoft.EntityFrameworkCore;
+
+public sealed class Lesson
+{
+    public long Id { get; set; }
+    public string Title { get; set; } = "";
+    public DateTime UpdatedAt { get; set; }          // UTC
+}
+
+public sealed class LessonsDbContext(DbContextOptions<LessonsDbContext> options) : DbContext(options)
+{
+    public DbSet<Lesson> Lessons => Set<Lesson>();
+    protected override void OnModelCreating(ModelBuilder modelBuilder) =>
+        modelBuilder.Entity<Lesson>().HasIndex(l => new { l.UpdatedAt, l.Id });
+}
+
+// ---- Cursor.cs ----
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+
+public readonly record struct CursorToken(long Ticks, long Id);
+
+public sealed class CursorService(string signingKey)
+{
+    private static readonly JsonSerializerOptions Json = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        PropertyNameCaseInsensitive = true,
+    };
+    private readonly byte[] _key = Encoding.UTF8.GetBytes(signingKey);
+
+    public string Encode(CursorToken token)
+    {
+        var payload = Base64Url(JsonSerializer.SerializeToUtf8Bytes(new CursorPayload(token.Ticks, token.Id)));
+        var signature = Base64Url(HMACSHA256.HashData(_key, Encoding.UTF8.GetBytes(payload)));
+        return $"{payload}.{signature}";
+    }
+
+    public bool TryDecode(string cursor, out CursorToken token)
+    {
+        token = default;
+        if (string.IsNullOrEmpty(cursor)) return false;
+        var dot = cursor.LastIndexOf('.');
+        if (dot <= 0 || dot == cursor.Length - 1) return false;
+        var payload = cursor[..dot];
+        var signature = cursor[(dot + 1)..];
+        var expected = HMACSHA256.HashData(_key, Encoding.UTF8.GetBytes(payload));
+        try
+        {
+            if (!CryptographicOperations.FixedTimeEquals(FromBase64Url(signature), expected)) return false;
+            var dto = JsonSerializer.Deserialize<CursorPayload>(FromBase64Url(payload), Json);
+            if (dto is null || dto.T <= 0 || dto.Id <= 0) return false;
+            token = new CursorToken(dto.T, dto.Id);
+            return true;
+        }
+        catch (Exception e) when (e is FormatException or JsonException) { return false; }
+    }
+
+    private static string Base64Url(byte[] bytes) =>
+        Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+
+    private static byte[] FromBase64Url(string s)
+    {
+        s = s.Replace('-', '+').Replace('_', '/');
+        s += new string('=', (4 - s.Length % 4) % 4);
+        return Convert.FromBase64String(s);
+    }
+}
+
+public sealed record CursorPayload(long T, long Id);
+
+// ---- Program.cs ----
+using Microsoft.EntityFrameworkCore;
+
+var builder = WebApplication.CreateBuilder(args);
+builder.Services.AddDbContext<LessonsDbContext>(o => o.UseSqlite("Data Source=lessons.db"));
+builder.Services.AddProblemDetails();
+
+var signingKey = Environment.GetEnvironmentVariable("CURSOR_SIGNING_KEY")
+    ?? (builder.Environment.IsProduction()
+        ? throw new InvalidOperationException("CURSOR_SIGNING_KEY must be set in production")
+        : "dev-only-signing-key");
+builder.Services.AddSingleton(new CursorService(signingKey));
+
+var app = builder.Build();
+app.UseExceptionHandler();
+
+app.MapGet("/v1/lessons", async (int? limit, string? after, LessonsDbContext db, CursorService cursors) =>
+{
+    var take = limit ?? 20;
+    if (take is < 1 or > 100)
+        return Results.Problem(statusCode: 400, title: "Invalid limit", detail: "limit must be between 1 and 100");
+
+    var query = db.Lessons.AsNoTracking();
+    if (after is not null)
+    {
+        if (!cursors.TryDecode(after, out var token))
+            return Results.Problem(statusCode: 400, title: "Invalid cursor",
+                detail: "the after cursor is malformed or was tampered with");
+        var t = new DateTime(token.Ticks, DateTimeKind.Utc);
+        query = query.Where(l => l.UpdatedAt < t || (l.UpdatedAt == t && l.Id < token.Id));
+    }
+
+    // limit + 1: one extra row means another page exists.
+    var rows = await query.OrderByDescending(l => l.UpdatedAt).ThenByDescending(l => l.Id)
+        .Take(take + 1).ToListAsync();
+
+    var hasMore = rows.Count > take;
+    var items = rows.Take(take)
+        .Select(l => new { id = l.Id, title = l.Title, updatedAt = l.UpdatedAt }).ToList();
+    var last = items[^1];
+    var nextCursor = hasMore ? cursors.Encode(new CursorToken(last.updatedAt.Ticks, last.id)) : null;
+    return Results.Ok(new { items, nextCursor });
+});
+
+app.Run();
+
+public partial class Program { }
+
+// ---- Paging.Api.Tests/PagingTests.cs ----
+using System.Net;
+using System.Text.Json;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+
+public sealed class ApiFactory : WebApplicationFactory<Program>
+{
+    private static readonly SqliteConnection KeepAlive = new("DataSource=:memory:");
+    static ApiFactory()
+    {
+        Environment.SetEnvironmentVariable("CURSOR_SIGNING_KEY", "test-key-441");
+        KeepAlive.Open();
+    }
+    protected override void ConfigureWebHost(IWebHostBuilder builder) =>
+        builder.ConfigureServices(services =>
+        {
+            var d = services.Single(x => x.ServiceType == typeof(DbContextOptions<LessonsDbContext>));
+            services.Remove(d);
+            services.AddDbContext<LessonsDbContext>(o => o.UseSqlite(KeepAlive));
+        });
+}
+
+public class PagingTests(ApiFactory factory) : IClassFixture<ApiFactory>
+{
+    private static readonly DateTime Base = new(2026, 10, 1, 12, 0, 0, DateTimeKind.Utc);
+
+    private async Task SeedAsync(params (long id, string title, DateTime updatedAt)[] rows)
+    {
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<LessonsDbContext>();
+        await db.Database.EnsureCreatedAsync();
+        await db.Lessons.ExecuteDeleteAsync();
+        db.Lessons.AddRange(rows.Select(r => new Lesson { Id = r.id, Title = r.title, UpdatedAt = r.updatedAt }));
+        await db.SaveChangesAsync();
+    }
+
+    private static async Task<(JsonElement body, HttpStatusCode status)> GetAsync(HttpClient c, string url)
+    {
+        var res = await c.GetAsync(url);
+        return (JsonDocument.Parse(await res.Content.ReadAsStringAsync()).RootElement, res.StatusCode);
+    }
+
+    [Fact]
+    public async Task Walks_all_pages_without_skipping_or_repeating_tied_rows()
+    {
+        var seed = Enumerable.Range(1, 7)
+            .Select(i => (id: (long)i, title: $"lesson {i}", updatedAt: Base.AddHours((i - 1) / 2))).ToArray();
+        await SeedAsync(seed);
+        var client = factory.CreateClient();
+        var seen = new List<long>();
+        string? cursor = null;
+        var pages = 0;
+        do
+        {
+            var url = $"/v1/lessons?limit=3{(cursor is null ? "" : $"&after={Uri.EscapeDataString(cursor)}")}";
+            var (body, status) = await GetAsync(client, url);
+            Assert.Equal(HttpStatusCode.OK, status);
+            foreach (var item in body.GetProperty("items").EnumerateArray())
+                seen.Add(item.GetProperty("id").GetInt64());
+            cursor = body.GetProperty("nextCursor").ValueKind == JsonValueKind.Null
+                ? null : body.GetProperty("nextCursor").GetString();
+            pages++;
+        } while (cursor is not null && pages < 10);
+        Assert.Equal(new long[] { 7, 6, 5, 4, 3, 2, 1 }, seen);
+        Assert.Equal(3, pages);
+    }
+
+    [Fact]
+    public async Task Exactly_limit_rows_return_no_nextCursor()
+    {
+        await SeedAsync((1, "a", Base.AddHours(1)), (2, "b", Base.AddHours(2)), (3, "c", Base.AddHours(3)));
+        var client = factory.CreateClient();
+        var (body, status) = await GetAsync(client, "/v1/lessons?limit=3");
+        Assert.Equal(HttpStatusCode.OK, status);
+        Assert.Equal(3, body.GetProperty("items").GetArrayLength());
+        Assert.Equal(JsonValueKind.Null, body.GetProperty("nextCursor").ValueKind);
+    }
+
+    [Fact]
+    public async Task Tampered_cursor_returns_400_ProblemDetails()
+    {
+        await SeedAsync((1, "a", Base), (2, "b", Base.AddHours(1)), (3, "c", Base.AddHours(2)), (4, "d", Base.AddHours(3)));
+        var client = factory.CreateClient();
+        var (first, _) = await GetAsync(client, "/v1/lessons?limit=2");
+        var cursor = first.GetProperty("nextCursor").GetString()!;
+        var res = await client.GetAsync($"/v1/lessons?after={Uri.EscapeDataString(cursor[..^4] + "AAAA")}");
+        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        Assert.Equal("application/problem+json", res.Content.Headers.ContentType?.MediaType);
+    }
+
+    [Fact]
+    public async Task Garbage_cursor_returns_400()
+    {
+        var res = await factory.CreateClient().GetAsync("/v1/lessons?after=not-a-cursor");
+        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(101)]
+    public async Task Out_of_range_limit_returns_400(int limit)
+    {
+        var res = await factory.CreateClient().GetAsync($"/v1/lessons?limit={limit}");
+        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+    }
+}` },
+        output: "$ dotnet test\n\nA total of 1 test files matched the specified pattern.\n\nPassed!  - Failed:     0, Passed:     6, Skipped:     0, Total:     6",
+        pitfalls: ["Serialising the cursor payload with the default JSON options: the property names become \"T\" and \"Id\" (capitalised) and stay that way in the token. Set PropertyNamingPolicy = CamelCase so the payload is {\"t\":…,\"id\":…}."],
       },
     },
     challenge: {
@@ -341,7 +584,95 @@ if __name__ == "__main__":
       criteria: ["All lists return { items, nextCursor }", "OpenAPI artifact per build", "CI fails on breaking changes unless a version bump is made"],
       hints: ["Generate the OpenAPI document during the test job and diff against the main branch's artifact."],
       solution: {
-        text: ["Contract checks turn API compatibility into an automated gate, like tests for behaviour."],
+        text: [
+          "Contract checks turn API compatibility into an automated gate, like tests for behaviour. The workflow below does three things the brief asks for: the test job generates `openapi.json` (the intermediate solution's endpoint already returns the `{ items, nextCursor }` envelope under a `/v1` prefix, so every list gets the shape automatically), uploads it as a per-build artifact, and diffs it against the main branch's artifact with a small checker that exits non-zero on a breaking change. The version-bump escape hatch lets a deliberate major change through only when `openapi.json`'s `info.version` changed in the same PR.",
+          "The checker below was run for real: `python check-contract.py openapi.main.json openapi.pr.json` reported `GET /v1/lessons: response field 'nextCursor' removed` and exited 1, while comparing a file against itself printed `no breaking changes` and exited 0. In production most teams reach for an established tool (oasdiff, openapi-diff) rather than this hand-rolled script, but the script is short enough to read in one sitting and covers the four most common breaks.",
+        ],
+        code: { lang: "yaml", file: ".github/workflows/contract-check.yml + scripts/check-contract.py", code: `# ---- .github/workflows/contract-check.yml ----
+name: contract-check
+on:
+  pull_request:
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+      - name: Build and test (writes openapi.json)
+        run: dotnet test DevAtlas.Api.Tests
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openapi-pr
+          path: openapi.json
+      - name: Compare the PR contract against main
+        env:
+          MAIN_OPENAPI_URL: https://devatlas.dev/artifacts/openapi.main.json
+        run: |
+          curl -sL "$MAIN_OPENAPI_URL" -o openapi.main.json
+          python scripts/check-contract.py openapi.main.json openapi.json > breaking.txt || true
+          if [ -s breaking.txt ] && ! grep -q '"version"' openapi.json; then
+            echo "Breaking changes without a version bump:"; cat breaking.txt; exit 1
+          fi
+          echo "contract compatible (or version bumped)"
+
+# ---- scripts/check-contract.py ----
+import json
+import sys
+
+BREAKING = []
+
+def resolve(schema, doc):
+    while isinstance(schema, dict) and "$ref" in schema:
+        ref = schema["$ref"].removeprefix("#/")
+        schema = doc
+        for part in ref.split("/"):
+            schema = schema.get(part, {})
+    return schema if isinstance(schema, dict) else {}
+
+def props(schema):
+    return schema.get("properties", {}) if isinstance(schema, dict) else {}
+
+def compare(old, new):
+    for path, methods in old.get("paths", {}).items():
+        if path not in new.get("paths", {}):
+            BREAKING.append(f"removed path {path}")
+            continue
+        for method, op in methods.items():
+            new_op = new["paths"][path].get(method)
+            if new_op is None:
+                BREAKING.append(f"removed {method.upper()} {path}")
+                continue
+            def body(o):
+                return o.get("requestBody", {}).get("content", {}).get("application/json", {}).get("schema", {})
+            def response(o):
+                return o.get("responses", {}).get("200", {}).get("content", {}).get("application/json", {}).get("schema", {})
+            old_req, new_req = resolve(body(op), old), resolve(body(new_op), new)
+            for name in set(new_req.get("required", [])) - set(old_req.get("required", [])):
+                BREAKING.append(f"{method.upper()} {path}: request field '{name}' became required")
+            old_res, new_res = resolve(response(op), old), resolve(response(new_op), new)
+            for name, spec in props(old_res).items():
+                if name not in props(new_res):
+                    BREAKING.append(f"{method.upper()} {path}: response field '{name}' removed")
+                elif spec.get("type") != props(new_res)[name].get("type"):
+                    BREAKING.append(f"{method.upper()} {path}: response field '{name}' changed type")
+
+def main():
+    if len(sys.argv) != 3:
+        print("usage: check-contract.py <old.json> <new.json>")
+        sys.exit(2)
+    compare(json.load(open(sys.argv[1], encoding="utf-8-sig")), json.load(open(sys.argv[2], encoding="utf-8-sig")))
+    print("\\n".join(BREAKING) if BREAKING else "no breaking changes")
+    sys.exit(1 if BREAKING else 0)
+
+if __name__ == "__main__":
+    main()` },
+        output: "$ python check-contract.py openapi.main.json openapi.pr.json\nGET /v1/lessons: response field 'nextCursor' removed\n(exit 1)\n\n$ python check-contract.py openapi.main.json openapi.main.json\nno breaking changes\n(exit 0)",
+        pitfalls: [
+          "Comparing the generated document against the PR's own baseline instead of main's artifact: a PR that only re-orders properties would look 'fine' against itself. Always diff against the last published contract.",
+          "Treating every contract change as a hard failure: that blocks legitimate versioned upgrades. Let a version bump in the same PR be the explicit escape hatch.",
+        ],
       },
     },
   },

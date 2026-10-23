@@ -59,6 +59,10 @@ describe("lesson content follows the Mentor format", () => {
         for (const d of l.deeper) expect(d.url).toMatch(/^https:\/\//);
       });
 
+      it("capstone title follows the milestone naming convention", () => {
+        expect(l.homework.capstone.title).toMatch(/^DevAtlas( step \d+)?:/i);
+      });
+
       it("has no hardcoded secrets in code samples", () => {
         const code = l.handsOn.map((s) => s.code?.code ?? "").join("\n");
         expect(code).not.toMatch(/sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}/);

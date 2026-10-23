@@ -6,51 +6,67 @@ export const lesson: Lesson = {
   minutes: 70,
   level: "Beginner",
   prerequisites: ["3.1.1 Semantic HTML and accessibility"],
-  summary: "Understand how CSS sizes and places boxes, use flexbox for one-dimensional layouts and grid for two-dimensional ones, and build responsive pages with modern CSS (custom properties, clamp, container queries).",
+  summary: "Understand how CSS sizes and places boxes, use normal flow, flexbox and grid for the layout each is good at, and build responsive pages with media queries, container queries and a handful of habits that prevent overflow.",
   terms: [
-    { term: "Box model", def: "Every element is a box: content, padding, border, margin. `box-sizing: border-box` makes width include padding and border." },
-    { term: "Cascade and specificity", def: "Rules for which CSS declaration wins: importance, origin, specificity (id > class > element), then source order." },
-    { term: "Flexbox", def: "Layout along one axis (a row or a column): distributing space, aligning items, wrapping." },
-    { term: "Grid", def: "Layout in rows and columns at the same time, with explicit tracks and areas." },
-    { term: "Responsive design", def: "Layouts that adapt to screen size and user settings, typically mobile-first with media or container queries." },
-    { term: "Custom property", def: "A CSS variable like `--accent: #6553f5`, read with `var(--accent)`. Great for themes." },
-    { term: "rem / em", def: "Units relative to the root font size (rem) or the element's font size (em). They respect user font settings." },
+    { term: "Box model", def: "Every element is a box with four layers: content, padding, border and margin. Width and height normally size the content only; `box-sizing: border-box` makes them include padding and border." },
+    { term: "Cascade and specificity", def: "Rules for which declaration wins: importance and origin first, then specificity (inline > id > class > element), then source order. `@layer` adds explicit ordering between groups." },
+    { term: "Normal flow", def: "The default layout: block boxes stack vertically, inline boxes run along a line and wrap at spaces, and margins can collapse between blocks. Every other layout starts from this." },
+    { term: "Block and inline", def: "Block boxes take the full available width and start a new line (`div`, `p`, `section`). Inline boxes sit in a line and only take the width of their content (`span`, `a`, `strong`)." },
+    { term: "Flexbox", def: "Layout along one axis, a row or a column. The container distributes free space and aligns items; the layout is driven by the content and the space available." },
+    { term: "Main axis and cross axis", def: "The main axis is the direction items flow (`flex-direction`); the cross axis is perpendicular. `justify-content` works on the main axis, `align-items` on the cross axis." },
+    { term: "flex: grow shrink basis", def: "The shorthand that sets how an item grows into free space, shrinks when space is short, and what size it starts from, e.g. `flex: 1 1 200px`." },
+    { term: "Grid", def: "Layout in rows and columns at the same time. You define tracks and optionally named areas, then place items into cells; the layout is driven by the grid you declare." },
+    { term: "fr and minmax()", def: "`fr` is a share of the free space in a grid container. `minmax(16rem, 1fr)` makes a track at least 16rem and then lets it take its share." },
+    { term: "Responsive design", def: "Layouts that adapt to viewport size, container size and user settings, typically mobile-first with media queries, container queries and fluid units." },
+    { term: "Stacking context", def: "A local layering scope. `z-index` only competes among siblings inside the same stacking context; `position` plus `z-index`, `transform`, `opacity` or `filter` can create one." },
+    { term: "Container query", def: "`@container` styles a component based on the size of its nearest container (`container-type: inline-size`), not the whole viewport." },
   ],
   problem: [
-    "The DevAtlas dashboard looks fine on the designer's 27-inch monitor. On a phone the cards overflow horizontally, the sidebar covers the content, and a long lesson title pushes a button off-screen. Someone 'fixes' it with negative margins and `position: absolute`, which breaks it on tablets.",
-    "Modern CSS (flexbox, grid, clamp, container queries) makes robust layouts short and predictable. Learning how boxes are sized and which tool fits which layout ends the cycle of hacks.",
+    "The DevAtlas dashboard looks fine on the designer's 27-inch monitor. On a phone the cards overflow horizontally, the sidebar covers the content, and a long lesson title pushes a button off-screen. Someone 'fixes' it with negative margins and `position: absolute`, which breaks it on tablets. The code is not obviously wrong: a card is 300px wide, the padding is 20px, the border is 4px, and everyone assumes it occupies 300px. Its used outer width is 348px, because the default `content-box` adds padding and border on top of the width. One card is already wider than a 320px phone, and three of them plus gaps overflow any narrow layout, so the page scrolls sideways.",
+    "The rest of the bug is the same story at a different level: a flex child refuses to shrink below the longest word it contains, an implicit grid column grows to the widest item, and a `z-index` that looked fine on one page loses to a transformed ancestor on another. Modern CSS (normal flow, flexbox, grid, `clamp`, container queries) makes robust layouts short and predictable, but only if you know which box is sizing which. This lesson builds that model from the box outward, and replaces the hack cycle with a small set of decisions you can defend.",
   ],
   concept: {
     analogy: [
       "**Flexbox** is arranging books on **one shelf**: you decide spacing and alignment along the shelf, and whether they wrap to the next shelf. **Grid** is a **spreadsheet or a city map**: you define rows and columns first, then place items into cells or named areas.",
+      "**Normal flow** is a stack of papers on a desk: each block is placed under the previous one in the order it appears, and inline text flows along a line until it runs out of room. Flexbox and grid do not replace that desk; they put a framework on top of it for one shelf or for the whole grid of pigeonholes. `position: absolute` takes a paper out of the stack and pins it to a coordinate system you chose, which is powerful and exactly why it is a poor default.",
     ],
     precise: [
-      "**Box sizing**: with the default `content-box`, `width: 300px` plus 20px padding and 2px border renders 344px wide. With `border-box` it renders 300px. Most projects set `*, *::before, *::after { box-sizing: border-box; }`.",
-      "**Flexbox**: the container sets `display: flex`, direction, `gap`, `justify-content` (main axis) and `align-items` (cross axis). Children grow/shrink with `flex: 1 1 200px` (grow, shrink, basis). `min-width: 0` on a flex child lets long content shrink instead of overflowing.",
-      "**Grid**: `grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr))` makes a responsive card grid with no media queries. `grid-template-areas` names regions for page layouts.",
-      "**Responsive**: design mobile-first, add `@media (min-width: …)` for larger screens, use relative units, `clamp(min, preferred, max)` for fluid type and spacing, and `@container` queries when a component should adapt to its container rather than the whole viewport.",
+      "**Box model**: an element's rendered box is content, padding, border and margin. With the default `content-box`, `width: 300px; padding: 20px; border: 4px` occupies 300 + 2×20 + 2×4 = 348px, and margin sits outside that. With `box-sizing: border-box`, the same declarations occupy 300px: the content box shrinks to 300 − 40 − 8 = 252px. A global reset (`*, *::before, *::after { box-sizing: border-box; }`) makes every `width` a promise about the outer box. In normal flow, block-level boxes take the available inline size and stack; inline boxes stay on the line and wrap at spaces; vertical margins between adjacent blocks may collapse to the larger one.",
+      "**Flexbox**: `display: flex` lays children out along the main axis set by `flex-direction`. `justify-content` distributes space on the main axis (`flex-start`, `center`, `space-between`, `space-around`, `space-evenly`), `align-items` aligns on the cross axis (`stretch` by default), and `gap` spaces items without margin hacks. `flex: 1 1 200px` means grow 1, shrink 1, basis 200px. Grow distributes positive free space by grow factor; shrink removes a deficit weighted by `shrink × basis`, so wide items give up more. Items default to `min-width: auto` and will not shrink below their min-content width; `min-width: 0` (and `overflow-wrap: anywhere` on long text) lets them.",
+      "**Grid**: `display: grid` defines rows and columns together. Tracks can be fixed (`200px`), fractional (`1fr`, a share of the space left after minimums and gaps), or flexible (`minmax(16rem, 1fr)`). `repeat(auto-fit, minmax(min(16rem, 100%), 1fr))` creates as many columns as fit; `auto-fill` keeps empty tracks, `auto-fit` collapses them so the remaining items stretch. `grid-template-areas` names regions (`\"sidebar header\" \"sidebar main\"`) that items claim with `grid-area`, which makes a page shell readable and reorderable. `grid-auto-rows` and implicit tracks handle items you did not place.",
+      "**Responsive**: start with the narrow layout, then add `@media (min-width: …)` as space appears; use `rem` for type, `clamp(min, preferred, max)` for fluid type and spacing, `dvh` for mobile viewport height, and `aspect-ratio` to reserve media space. When a component must adapt to the slot it is dropped into rather than the viewport, declare `container-type: inline-size` on its wrapper and use `@container (min-width: …)`. Use media queries for the page shell, container queries for reusable components. Position (`relative`, `absolute`, `fixed`, `sticky`) is for overlays and pinned UI, not for the main layout.",
     ],
   },
   underTheHood: {
     text: [
-      "Rendering pipeline: parse HTML → DOM; parse CSS → CSSOM; combine into a render tree; **layout** computes each box's size and position; **paint** draws pixels; **composite** layers onto the screen. Changing width or font size triggers layout again (expensive); changing `transform` or `opacity` can often skip layout and paint, which is why smooth animations use them.",
-      "**Specificity** examples: `#nav a` (1 id, 1 element) beats `.nav .link` (2 classes) beats `a` (1 element). Equal specificity → later rule wins. Keep specificity low (single classes) so styles are easy to override; avoid `!important` except for utilities.",
-      "Flex items have `min-width: auto` by default, so they refuse to shrink below their content's minimum size; this is the classic cause of overflowing flex layouts with long words or code blocks.",
+      "1. **Rendering pipeline.** The browser parses HTML into a DOM and CSS into a CSSOM, combines them into a render tree, then runs **layout** (also called reflow) to compute each box's size and position, **paint** to fill pixels, and **composite** to put layers on screen. A change to width, padding, border, flex-basis or font size invalidates layout; a change to `transform` or `opacity` can often be handled during composite, which is why smooth animation avoids layout properties. `contain: layout` or `content-visibility` lets the browser skip work for off-screen or self-contained subtrees. Layout instability is also what Core Web Vitals measures as CLS: if an image or ad has no reserved space, the browser lays out the page twice and content jumps.",
+      "2. **Normal flow is the baseline.** Block-level boxes (a `div`, `p`, `section`, `li`) take the available inline size and stack vertically. Inline boxes (`span`, `a`, `strong`) sit on a line, take their content width, and wrap at spaces; `inline-block` sits on a line but accepts width and height. Adjacent vertical margins between blocks collapse to the larger margin, which surprises people who expect 20px + 20px = 40px. Floats and absolutely positioned boxes take themselves out of this flow. A new **block formatting context** (created by `display: flow-root`, `overflow: auto`, or a flex/grid container) contains its children and stops margins escaping. Logical properties (`margin-inline`, `padding-block`) follow writing direction, so Arabic or vertical Japanese layouts do not need a second stylesheet.",
+      "3. **The cascade decides which declaration wins.** Origin and importance first, then specificity (inline style > id > class/attribute/pseudo-class > element), then source order. `#nav a` (1 id, 1 element) beats `.nav .link` (2 classes) beats `a` (1 element). `@layer base, components, utilities;` groups rules so a later layer wins regardless of specificity inside earlier layers, which is how modern resets and utility frameworks coexist. Inheritance matters for text properties (`color`, `font`, `line-height`) but not for box dimensions. Keep specificity flat (single classes) and reserve `!important` for genuinely exceptional utilities.",
+      "4. **How flexbox resolves a row.** Each item starts from its flex base size: `flex-basis` if set, otherwise its main size, otherwise its content size. The container sums bases plus gaps and compares with its content box to get free space. Positive free space is distributed by `flex-grow`; negative space is removed in proportion to `flex-shrink × base size`. Each result is clamped by `min-width`/`max-width` (or the block-axis equivalents), which can create a new round of redistribution. Items then align on the cross axis (`align-items`, `align-self`), and `align-content` distributes wrapped lines. `flex-wrap: wrap` turns one line into many; without it, the row shrinks or overflows. The default `min-width: auto` resolves to min-content, which is why long unbroken text and `<pre>` blocks are the usual overflow culprits.",
+      "5. **How grid sizes tracks.** Explicit tracks come from `grid-template-rows/columns`; items outside them create implicit tracks sized by `grid-auto-rows/columns`. `1fr` is not \"one equal column\": after fixed tracks, minimums and gaps are subtracted, the remaining space is shared by the fr values, and a track never shrinks below its automatic minimum unless you write `minmax(0, 1fr)`. `minmax(16rem, 1fr)` therefore means \"at least 16rem, then share\" and is the basis of the responsive card grid. `auto-fill` creates as many tracks as fit and leaves empty ones; `auto-fit` collapses empty tracks, so fewer items become wider. `grid-auto-flow: dense` backfills holes at the cost of visual order, and `grid-template-areas` is the most readable way to describe a page shell.",
+      "6. **Positioning and stacking.** `position: static` is normal flow. `relative` offsets the box visually but leaves its original space; `absolute` removes it from flow and positions it against the nearest positioned ancestor (or the initial containing block); `fixed` positions against the viewport unless a transformed ancestor becomes its containing block; `sticky` behaves like relative until a scroll threshold, then sticks within its scroll container. `z-index` applies only to positioned or flex/grid items, and only compares siblings inside the same **stacking context**. A `transform`, `opacity` below 1, `filter`, `will-change` or `isolation: isolate` creates a new context, so a child with `z-index: 9999` cannot escape an ancestor that sits below another context. Paint order is roughly backgrounds, negative z-index children, block boxes, floats, inline content, positive z-index children.",
+      "7. **Responsive is a strategy, not a breakpoint list.** Mobile-first means the base CSS is the narrow layout and `min-width` media queries add complexity only when there is room. Choose breakpoints where the content breaks, not where a popular device sits; a 900px breakpoint is a guess until you test 320, 375, 768, 1024, 1280 and 1600. `clamp(1rem, 0.6rem + 1.5vw, 2rem)` grows spacing with the viewport but stops at both ends. A container query is the component-level equivalent: `container-type: inline-size` makes the wrapper a query container, then `@container (min-width: 32rem)` changes the card's internal grid based on the slot it received. Container queries require size containment, so the container's size must not depend on its contents in the queried axis.",
+      "8. **Debug layout with measurements, not guesses.** DevTools' Layout panel overlays margins, borders, padding and content; the Computed panel shows the used width after the cascade; `outline: 1px solid red` on a suspect element is less destructive than adding borders that change layout. For horizontal overflow, compare `document.documentElement.scrollWidth` with `clientWidth`, then walk down to the widest element. Test 320px width, 200% zoom, a long unbroken URL, a long German compound noun, and a `<pre>` with a 120-character line. If a flex or grid child contains scrollable content, give it `min-width: 0` and put `overflow-x: auto` on the scroller, not on the page. These checks are what the `check.mjs` script in the intermediate homework automates; its output in this lesson is real, while any screenshot you take is your own evidence.",
     ],
     diagram: {
       title: "Box model (border-box)",
       nodes: [
         { label: "margin", sub: "outside, transparent" },
-        { label: "border", sub: "" },
-        { label: "padding", sub: "inside border" },
-        { label: "content", sub: "width includes padding + border" },
+        { label: "border", sub: "inside the width" },
+        { label: "padding", sub: "inside the border" },
+        { label: "content", sub: "what is left of width" },
       ],
       edges: ["", "", ""],
+      caption: "With `border-box`, width and height include padding and border; margin is always outside. The arithmetic in this lesson is CSS, not a rendered screenshot.",
     },
   },
   handsOn: [
     {
-      title: "A modern CSS base",
+      title: "Start from a base that makes boxes predictable",
+      text: [
+        "The reset below is the one the rest of this lesson assumes: `border-box` on every element and pseudo-element, a fluid `--space` token, a dark-mode branch, and `img { max-width: 100% }`. With `border-box`, a card declared `width: 300px` with `padding: 20px` and `border: 4px` occupies 300px. With the default `content-box` the same declarations occupy 300 + 2×20 + 2×4 = 348px, and the content area is only 300px wide. The card does not know it is overflowing; only the parent does.",
+        "Everything in this step is a claim about CSS arithmetic and cascade order. No browser was rendered for it, so treat any description of how it looks as illustrative. The measurable claim is the arithmetic: 348px versus 300px, and the fact that margin is outside both.",
+      ],
       code: {
         lang: "css",
         file: "base.css",
@@ -75,159 +91,246 @@ body { margin: 0; background: var(--bg); color: var(--text); }
 img { max-width: 100%; height: auto; display: block; }
 h1 { font-size: clamp(1.8rem, 1.2rem + 2.5vw, 3rem); line-height: 1.1; }`,
       },
+      notes: [
+        "`box-sizing` is inherited, so setting it on `*` covers elements you add later; pseudo-elements need the separate `*::before, *::after` selectors.",
+        "Margin never counts toward the width, even with `border-box`. If a 300px box also has `margin: 20px`, it reserves 340px in its parent's line.",
+        "`--space` uses `clamp(min, preferred, max)`: it grows with the viewport but never below 1rem or above 2rem. Resize the text size in the browser settings to see why `rem` matters; that is an illustrative check, not output we captured here.",
+      ],
     },
     {
-      title: "Page layout with grid areas (mobile-first)",
+      title: "Lint a broken stylesheet, then the fixed one",
+      text: [
+        "Save the three files below in one folder and run stylelint 17.16.0 from that folder. `bad.css` repeats `width` and `padding`, mixes a longhand with a later shorthand, writes `0px`, uses a redundant four-value radius, misspells `box-sizing`, reaches for `!important`, contains an invalid hex colour, orders selectors from higher to lower specificity, and leaves an empty block. Each one is a real layout or cascade bug waiting to happen, and none needs a browser to detect.",
+        "This is **real output**, captured on Windows with Node 24.18.0. The runner prints an absolute path; the directory prefix is trimmed below so the filename and line numbers stay readable. `fixed.css` produced no output and exited 0. Linting proves the declarations are well formed; it does not prove the layout is correct, because it cannot know your container width.",
+      ],
       code: {
         lang: "css",
-        file: "layout.css",
-        code: `.app {
-  display: grid;
-  min-height: 100vh;
-  grid-template-areas:
-    "header"
-    "main"
-    "footer";
-  grid-template-rows: auto 1fr auto;
+        file: "bad.css + fixed.css + .stylelintrc.json",
+        code: `/* file: bad.css: layout smells a linter can catch without a browser */
+.card {
+  width: 320px;
+  padding: 20px;
+  width: 280px;
+  margin: 0px;
+  border-radius: 8px 8px 8px 8px;
+  padding-left: 8px;
+  padding: 1rem;
+  box-sizingg: border-box;
+  z-index: 10 !important;
+  color: #ff00zz;
 }
 
-@media (min-width: 900px) {
-  .app {
-    grid-template-columns: 260px 1fr;
-    grid-template-areas:
-      "sidebar header"
-      "sidebar main"
-      "sidebar footer";
-  }
+#app .card a {
+  color: rebeccapurple;
 }
 
-.app > header  { grid-area: header; }
-.app > nav     { grid-area: sidebar; display: none; }
-.app > main    { grid-area: main; padding: var(--space); min-width: 0; }
-.app > footer  { grid-area: footer; }
-
-@media (min-width: 900px) { .app > nav { display: block; } }`,
-      },
-      notes: ["`min-width: 0` on main lets wide content (code blocks, tables) scroll inside instead of stretching the whole page."],
-    },
-    {
-      title: "Responsive cards without media queries",
-      code: {
-        lang: "css",
-        code: `.cards {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(16rem, 100%), 1fr));
-  gap: 1rem;
+.card a {
+  color: purple;
 }
+
+.empty {
+}
+
+/* file: fixed.css: same intent, predictable boxes, no lint errors */
+*, *::before, *::after { box-sizing: border-box; }
 
 .card {
-  background: var(--surface);
-  border-radius: var(--radius);
-  padding: 1.25rem;
-  display: flex;               /* flex inside grid: stack content, push button down */
-  flex-direction: column;
-  gap: 0.5rem;
+  width: min(100%, 17.5rem); margin: 0; padding: 1rem;
+  border-radius: 0.5rem; overflow-wrap: anywhere;
 }
-.card .actions { margin-top: auto; }`,
+
+.card a { color: purple; }
+#app .card a { color: rebeccapurple; }
+
+/* file: .stylelintrc.json */
+{ "rules": {
+  "block-no-empty": true, "color-no-invalid-hex": true, "declaration-block-no-duplicate-properties": true,
+  "declaration-block-no-shorthand-property-overrides": true, "declaration-no-important": true,
+  "length-zero-no-unit": true, "no-descending-specificity": true, "property-no-unknown": true,
+  "shorthand-property-no-redundant-values": true
+} }`,
       },
-      notes: ["`min(16rem, 100%)` prevents overflow on screens narrower than 16rem. `margin-top: auto` in a flex column pushes the actions to the bottom so buttons line up across cards."],
+      output: `$ npx stylelint bad.css --config .stylelintrc.json --formatter compact
+bad.css: line 3, col 3, error - Duplicate property "width" (declaration-block-no-duplicate-properties)
+bad.css: line 4, col 3, error - Duplicate property "padding" (declaration-block-no-duplicate-properties)
+bad.css: line 6, col 12, error - Disallowed unit (length-zero-no-unit)
+bad.css: line 7, col 18, error - Expected "8px 8px 8px 8px" to be "8px" (shorthand-property-no-redundant-values)
+bad.css: line 9, col 3, error - Overridden property "padding-left" by shorthand "padding" (declaration-block-no-shorthand-property-overrides)
+bad.css: line 10, col 3, error - Unknown property "box-sizingg" (property-no-unknown)
+bad.css: line 11, col 15, error - Disallowed !important (declaration-no-important)
+bad.css: line 12, col 10, error - Invalid hex color "#ff00zz" (color-no-invalid-hex)
+bad.css: line 19, col 1, error - Expected selector ".card a" to come before selector "#app .card a", at line 15 (no-descending-specificity)
+bad.css: line 23, col 8, error - Empty block (block-no-empty)
+$ npx stylelint fixed.css --config .stylelintrc.json --formatter compact
+EXIT=0`,
+      notes: [
+        "The duplicate `padding` is reported at line 4 because line 9 declares `padding` again; stylelint points at the earlier declaration. The fix is one declaration, not a clever override.",
+        "`fixed.css` removes every smell: the universal `border-box` reset, one `width: min(100%, 17.5rem)`, `margin: 0`, one padding, a single radius, `overflow-wrap: anywhere`, lower specificity first, and no empty rule. It still cannot promise the card fits your 900px sidebar; only a layout check can.",
+        "What lint cannot see: a flex child with `min-width: auto`, an implicit grid column, a `z-index` trapped in a stacking context, or a `100vw` that includes the scrollbar. Those need the arithmetic and measurement habits in the next steps.",
+      ],
     },
     {
-      title: "Flexbox toolbar that never overflows",
+      title: "Resolve flex grow and shrink with real numbers",
+      text: [
+        "The script below applies the flexbox base-size and free-space rules to two concrete rows: three items in a 900px container with a 16px gap, first with positive free space and then with a deficit. Run it with `node resolve.mjs`. This is spec arithmetic, not a rendered layout: it prints the widths CSS should produce, and it is how you can predict a row when you cannot open a browser.",
+        "Grow distributes positive free space by each item's grow factor. Shrink is weighted by `shrink × basis`, so a wide item gives up more than a narrow one at the same shrink factor. The line `bases 600px` excludes the gaps; free space is 900 − 600 − 2×16 = 268px.",
+      ],
       code: {
-        lang: "html",
-        code: `<header class="toolbar">
-  <a class="brand" href="/">DevAtlas</a>
-  <input class="search" type="search" placeholder="Search lessons" aria-label="Search lessons">
-  <button class="streak" type="button">🔥 12 days</button>
-</header>
+        lang: "javascript",
+        file: "resolve.mjs",
+        code: `// resolve.mjs: flexbox and grid arithmetic from the spec, not a browser render
+const report = (label, items, container, gap) => {
+  const bases = items.reduce((s, i) => s + i.basis, 0);
+  const free = container - bases - gap * (items.length - 1);
+  const weight = items.reduce((s, i) => s + (free >= 0 ? i.grow : i.shrink * i.basis), 0);
+  console.log(label + ": container " + container + "px, gap " + gap + "px, bases " + bases + "px, free " + free + "px");
+  items.forEach((i, n) => {
+    const share = free >= 0 ? (free * i.grow) / weight : (free * i.shrink * i.basis) / weight;
+    const sign = share < 0 ? "-" : "+";
+    console.log("  item " + (n + 1) + " (" + (free >= 0 ? "grow " + i.grow : "shrink " + i.shrink) + "): " +
+      i.basis + " " + sign + Math.abs(share).toFixed(1) + " = " + (i.basis + share).toFixed(1) + "px");
+  });
+};
 
-<style>
-.toolbar {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 0.75rem 1rem;
-}
-.search {
-  flex: 1 1 auto;   /* take the remaining space */
-  min-width: 0;     /* allow shrinking below its content size on small screens */
-}
-.brand, .streak { flex: none; white-space: nowrap; }
-</style>`,
-      },
-    },
-    {
-      title: "Container queries: a component that adapts to its slot",
-      code: {
-        lang: "css",
-        code: `.lesson-card-wrapper { container-type: inline-size; }
+report("flex grow", [{ basis: 200, grow: 1 }, { basis: 200, grow: 1 }, { basis: 200, grow: 2 }], 900, 16);
+report("flex shrink", [{ basis: 400, shrink: 1 }, { basis: 400, shrink: 2 }, { basis: 400, shrink: 1 }], 900, 16);
 
-.lesson-card { display: grid; gap: 0.75rem; }
-
-@container (min-width: 32rem) {
-  .lesson-card { grid-template-columns: 8rem 1fr; }   /* image beside text when there is room */
+for (const mode of ["auto-fill", "auto-fit"]) {
+  const possible = Math.floor((1000 + 16) / (240 + 16));
+  const filled = mode === "auto-fit" ? Math.min(possible, 2) : possible;
+  const track = (1000 - 16 * (filled - 1)) / filled;
+  console.log("grid " + mode + " at 1000px, 2 items, min 240px: " + possible + " possible columns, " +
+    filled + " filled, track " + track.toFixed(1) + "px");
 }`,
       },
-      notes: ["Container queries are supported in all current major browsers; check caniuse.com if you must support old browsers."],
+      output: `$ node resolve.mjs
+flex grow: container 900px, gap 16px, bases 600px, free 268px
+  item 1 (grow 1): 200 +67.0 = 267.0px
+  item 2 (grow 1): 200 +67.0 = 267.0px
+  item 3 (grow 2): 200 +134.0 = 334.0px
+flex shrink: container 900px, gap 16px, bases 1200px, free -332px
+  item 1 (shrink 1): 400 -83.0 = 317.0px
+  item 2 (shrink 2): 400 -166.0 = 234.0px
+  item 3 (shrink 1): 400 -83.0 = 317.0px
+grid auto-fill at 1000px, 2 items, min 240px: 3 possible columns, 3 filled, track 322.7px
+grid auto-fit at 1000px, 2 items, min 240px: 3 possible columns, 2 filled, track 492.0px`,
+      notes: [
+        "This is **real output** from the script as shown, not a browser measurement. It assumes every item can shrink to the computed share. Real flex items default to `min-width: auto`, so an item whose min-content width is larger than its share stops shrinking and the row overflows; that is the bug in the quick check.",
+        "The grid lines show why `auto-fit` and `auto-fill` differ only when there are fewer items than tracks. With three or more items at this width they produce the same three tracks; with two, `auto-fill` keeps the empty 322.7px track and `auto-fit` collapses it into two 492px tracks.",
+        "`gap` is not free space: it is subtracted before grow and shrink run. That is why adding `gap: 24px` changes the arithmetic even when no item's basis changed.",
+      ],
+    },
+    {
+      title: "Compare the layout tools",
+      text: [
+        "Keep this table beside the decision. It is a text summary, not output from a browser; the widths are the arithmetic from the previous step. The point is to make the default choice obvious before you write any CSS.",
+      ],
+      code: {
+        lang: "text",
+        file: "layout-tools.txt",
+        code: `BOX SIZING
+content-box   width applies to the content only    300px + 2*20 padding + 2*4 border = 348px
+border-box    width includes padding and border    300px total; content becomes 252px
+
+NORMAL FLOW
+block         full inline size, stacks, starts a new line
+inline        content width, stays on the line, wraps at spaces
+margin        vertical margins between blocks can collapse to the larger one
+
+FLEXBOX vs GRID
+flex          one axis, content-driven, items share free space
+grid          rows + columns, layout-driven, tracks and named areas
+combine       grid for the page, flex inside each component
+
+GRID REPEAT
+auto-fill     3 columns at 1000px, 2 items: keeps the empty track, 322.7px each
+auto-fit      3 columns at 1000px, 2 items: collapses it, 492px each
+
+RESPONSIVE
+media query   the viewport or a device feature changes the layout
+container     the component's own inline size changes its layout`,
+      },
+      notes: [
+        "`justify-content` acts on the main axis and `align-items` on the cross axis. When `flex-direction: column`, the labels swap roles, which is why memorising \"justify is horizontal\" fails on a vertical stack.",
+        "The flex-versus-grid line is a rule of thumb, not a law: a one-row list is often clearer as a single-column grid, and a two-column form can be easier in grid even though it is short. Pick the tool that names the structure you mean.",
+        "`auto-fit` and `auto-fill` are identical once the item count reaches the track count; the difference appears with fewer items, where `auto-fit` lets the remaining items stretch and `auto-fill` leaves holes.",
+      ],
+    },
+    {
+      title: "Choose a layout tool with a decision graph",
+      text: [
+        "This is an **illustrative** Mermaid diagram, not rendered output: follow it from the top and stop at the first branch that matches. It encodes the heuristics in this lesson. The last branch is the important one for reusable components: if the card should change when it sits in a narrow sidebar but not when the page is narrow, the question is about its slot, so the answer is `container-type: inline-size` plus `@container`, not another media query.",
+      ],
+      code: {
+        lang: "mermaid",
+        file: "layout-decision.mmd",
+        code: `flowchart TD
+  A["One axis or two?"] -->|"one row or one column"| B["Flexbox"]
+  A -->|"rows and columns together"| C["Grid"]
+  B --> D{"Content must shrink?"}
+  D -->|"yes"| E["min-width: 0 and overflow-wrap"]
+  D -->|"no"| F["justify-content, align-items, gap"]
+  C --> G{"Page regions?"}
+  G -->|"yes"| H["grid-template-areas"]
+  G -->|"no"| I["repeat auto-fit, minmax"]
+  H --> J{"Adapt to its slot?"}
+  I --> J
+  J -->|"yes"| K["container-type: inline-size, @container"]
+  J -->|"no"| L["Media query for the page"]`,
+      },
+      notes: [
+        "The graph is deliberately short. If two branches both seem true, prefer the one that describes the structure you want to read in the CSS six months from now.",
+        "Mermaid labels are quoted so `:`, `@` and commas cannot be mistaken for syntax. GitHub renders fenced `mermaid` blocks; the lesson page may render it differently, and that rendering is illustrative.",
+        "The whole container-query pattern is `container-type: inline-size` on the wrapper plus `@container (min-width: 32rem) { .lesson-card { grid-template-columns: 8rem 1fr; } }`; the wrapper, not the card, is the query container. Container queries are supported in current major browsers; check caniuse.com if you must support older ones. The fallback is the mobile-first layout plus a media query, which is a fine design rather than a failure.",
+      ],
     },
   ],
   companies: [
-    "**Design tokens**: companies define colours, spacing, radii and typography as tokens (often CSS custom properties) shared across web, iOS and Android, so a brand change is a token change, not a rewrite.",
-    "**Utility-first and component CSS**: some teams use utility frameworks like Tailwind CSS; others use CSS Modules or CSS-in-JS. All of them compile down to the same box model, flexbox and grid, so the fundamentals transfer.",
-    "**Performance budgets**: layout shifts (CLS) and slow rendering hurt Core Web Vitals; teams reserve space for images (width/height or aspect-ratio) and avoid layout-triggering animations.",
+    "**Design tokens (illustrative):** product teams define colours, spacing, radii and typography as tokens, usually CSS custom properties, shared across web, iOS and Android. A brand change becomes a token change, and components never hardcode a hex value. The capstone in this lesson applies the same idea at a smaller scale.",
+    "**Utility-first and component CSS (illustrative):** some teams use utility frameworks such as Tailwind CSS; others use CSS Modules or CSS-in-JS. All of them compile down to the same box model, flexbox and grid, so the fundamentals transfer even when the class names look nothing alike. What differs is the review surface, not the layout engine.",
+    "**Core Web Vitals teams (illustrative):** layout shift (CLS) and slow rendering hurt the metrics product teams are measured on. The common fixes are layout habits from this lesson: reserve media space with `aspect-ratio` or `width`/`height` attributes, avoid animating layout properties, and keep fonts from swapping in a way that reflows the page.",
+    "**Container-query design systems (illustrative):** a component shipped to many slots cannot assume the viewport tells it how much room it has. Teams wrap such components in `container-type: inline-size` and let the component's internal grid change at its own thresholds, so the same card works in a wide main column and a narrow sidebar.",
+    "**DevAtlas dashboard shell (verified in this lesson):** the intermediate homework's `check.mjs` loads the dashboard in Chromium 141 at six widths and measures it. Its first run found horizontal scroll at 320px and 375px because the mobile grid column was implicit and grew to the topbar's min-content width; `grid-template-columns: minmax(0, 1fr)` fixed it. The output shown in that tier is real, and it is the same class of bug as the flex `min-width: auto` case in the quick check.",
   ],
   mistakes: [
-    { mistake: "Fixed pixel widths everywhere", why: "Matching a design mock exactly", wrong: "Overflow on small screens and ignored user font settings", fix: "Fluid units, max-width, minmax(), clamp(), rem for type" },
-    { mistake: "Missing min-width: 0 on flex/grid children", why: "Default min-width: auto", wrong: "Long words or code blocks push layouts off-screen", fix: "Set min-width: 0 (or overflow handling) on the shrinking child" },
-    { mistake: "Using flexbox for 2D page grids", why: "Flexbox is familiar", wrong: "Fragile wrappers and uneven columns", fix: "Grid for rows+columns; flex for one-dimensional groups" },
-    { mistake: "Escalating specificity and !important", why: "Overriding something quickly", wrong: "Specificity wars; styles impossible to change later", fix: "Flat, single-class selectors; cascade layers (@layer) for ordering" },
-    { mistake: "Animating width/top/left", why: "Simple to write", wrong: "Janky animations due to layout every frame", fix: "Animate transform and opacity" },
+    { mistake: "Fixed pixel widths everywhere", why: "Matching a design mock exactly", wrong: "Overflow on small screens and ignored user font settings; a 320px card plus padding no longer fits a 320px phone", fix: "Fluid units, max-width, minmax(), clamp(), rem for type, and min(100%, …) for components" },
+    { mistake: "Missing min-width: 0 on flex/grid children", why: "Default min-width: auto resolves to min-content", wrong: "Long words, URLs or code blocks push layouts off-screen while the container insists it has room", fix: "Set min-width: 0 on the shrinking child and overflow-wrap: anywhere on the long text; put overflow-x: auto on the scroller" },
+    { mistake: "Using flexbox for 2D page grids", why: "Flexbox is familiar and works for the first row", wrong: "Fragile wrappers, uneven columns and percentage-width hacks that break when content changes", fix: "Grid for rows+columns; flex for one-dimensional groups inside the cells" },
+    { mistake: "Escalating specificity and !important", why: "Overriding something quickly", wrong: "Specificity wars; styles impossible to change later, and inline overrides that beat every layer", fix: "Flat, single-class selectors; cascade layers (@layer) for ordering; utilities only where they belong" },
+    { mistake: "Animating width, top or left", why: "Simple to write", wrong: "Janky animations because every frame invalidates layout, and on a busy page the main thread cannot keep up", fix: "Animate transform and opacity; reserve layout properties for state changes that must reflow" },
+    { mistake: "Adding z-index without a stacking context", why: "It looks like the obvious lever", wrong: "A child with z-index: 9999 still sits below another element because an ancestor with transform or opacity created a context that is lower", fix: "Find the nearest stacking context, keep z-index values small and local, and use isolation: isolate to make a context deliberately" },
+    { mistake: "Using position: absolute for the whole page layout", why: "It reproduces the mock exactly at one size", wrong: "The page has no intrinsic height, content overlaps at other widths, and screen readers see a visual order that does not match the DOM", fix: "Normal flow plus grid for the shell; absolute only for overlays, badges and decoration anchored to a positioned parent" },
+    { mistake: "Using 100vw for full-width elements", why: "It sounds like the viewport", wrong: "On desktop 100vw includes the scrollbar, so the element is a few pixels too wide and creates horizontal scroll", fix: "Use width: 100% inside a block container, or 100dvw only when you have checked the scrollbar; prefer max-width plus margin-inline: auto" },
+    { mistake: "Testing one width with short placeholder text", why: "It looks fine on the developer's monitor", wrong: "The bug appears at 320px, at 200% zoom, with a long German noun or a real 120-character URL", fix: "Test 320, 375, 768, 1024, 1280 and 1600; test 200% zoom; test long content and a <pre>; compare scrollWidth with clientWidth" },
   ],
   bestPractices: [
-    { tag: "Maintainability", text: "Tokens as custom properties; single-class selectors; components own their styles." },
-    { tag: "Performance", text: "Reserve space for media (aspect-ratio, width/height attributes) to avoid layout shift." },
-    { tag: "Reliability", text: "Test at 320px width, at 200% zoom and with long real content (names, translations)." },
-    { tag: "Performance", text: "Prefer CSS for layout and simple interactions over JavaScript." },
+    { tag: "Maintainability", text: "Start every project with `*, *::before, *::after { box-sizing: border-box; }`, tokens as custom properties, and single-class selectors; components own their styles." },
+    { tag: "Performance", text: "Reserve space for media with `aspect-ratio` or `width`/`height` attributes, and animate `transform`/`opacity` rather than layout properties, to keep layout work and CLS down." },
+    { tag: "Reliability", text: "Test at 320px width, at 200% zoom, and with long real content (names, translations, URLs, `<pre>` lines); compare `scrollWidth` with `clientWidth` instead of trusting a screenshot." },
+    { tag: "Performance", text: "Prefer CSS for layout and simple interactions over JavaScript; a grid template costs one style recalculation, while a resize listener costs a callback on every frame." },
+    { tag: "Maintainability", text: "Use `minmax(0, 1fr)` for content columns, `min-width: 0` on flex children that must shrink, and `grid-template-areas` for page shells so the layout reads as a diagram in the source." },
   ],
   interview: [
-    { q: "Flexbox vs grid?", a: "Flexbox lays out items along one axis and is content-driven: toolbars, button groups, centring. Grid controls rows and columns together and is layout-driven: page structures, card galleries, forms. They combine well: grid for the page, flex inside components." },
-    { q: "Explain the box model and box-sizing.", a: "An element's box has content, padding, border and margin. With content-box, width applies to content only, so padding and border add to the rendered size. With border-box, width includes padding and border, which makes sizing predictable." },
-    { q: "How does CSS decide which rule applies?", a: "The cascade: origin and !important, then specificity (inline > id > class/attribute/pseudo-class > element), then source order. Cascade layers add explicit ordering between groups of rules." },
+    { q: "Flexbox vs grid: how do you choose?", a: "Start with the shape of the structure, not with familiarity. Flexbox is one-dimensional: `flex-direction` defines a main axis, `justify-content` distributes space on it, `align-items` aligns on the cross axis, and `flex: grow shrink basis` lets items share whatever space is left. It is content-driven, so it is right for toolbars, button groups, rows of meta information and centring a single child. Grid is two-dimensional: you declare rows and columns, and items are placed into tracks or named areas. It is layout-driven, so it is right for page shells, card galleries, forms and any structure where you want the columns to line up across independent children. In real pages they combine: grid for the shell, flex inside the cells. A useful test is whether the layout should still make sense when one item is removed; if the remaining items should reflow along one axis, flex is natural, and if the grid should stay put, grid is natural. Also mention the cost of the wrong tool: flex used for 2D produces wrapper divs and percentage hacks; grid used for a simple toolbar is harmless but noisier." },
+    { q: "Explain the box model and box-sizing, including what normal flow does.", a: "An element's box has content, padding, border and margin. With `content-box`, `width` sizes the content, so `width: 300px; padding: 20px; border: 4px` occupies 348px and the content is 300px. With `border-box`, `width` is the outer content-plus-padding-plus-border size: 300px total and 252px of content. Margin is always outside. That is why almost every codebase starts with `*, *::before, *::after { box-sizing: border-box; }`: it makes a width a promise about the space the box reserves. Normal flow is the default placement: block boxes take the available inline size and stack vertically, inline boxes sit on a line and wrap at spaces, and adjacent vertical margins can collapse. Flex and grid replace flow inside their container, but the container itself still participates in normal flow. `position: absolute` takes a box out of flow and positions it against its containing block, which is useful for overlays and dangerous as a page-layout strategy because the page loses its intrinsic height." },
+    { q: "A page scrolls horizontally on a phone. How do you find and fix it?", a: "Measure first: compare `document.documentElement.scrollWidth` with `clientWidth`, then walk the DOM for elements whose `getBoundingClientRect().right` exceeds the viewport, or use DevTools to inspect the widest box. The usual suspects are: a flex or grid child with the default `min-width: auto` that refuses to shrink below a long word or a `<pre>` line; an implicit grid column that grew to its content; a fixed pixel width plus padding under `content-box`; `100vw` including the scrollbar; an absolutely positioned decoration; and negative margins. Fix the cause rather than adding `overflow-x: hidden` to the body, which hides the symptom and often breaks `position: sticky`. Typical fixes: `min-width: 0` on the shrinking child, `minmax(0, 1fr)` for content columns, `min(100%, 30rem)` for widths, `overflow-wrap: anywhere` for long tokens, `overflow-x: auto` on the code block, and `width: 100%` instead of `100vw`. Then re-test at 320px, 375px, 200% zoom and with real long content. If you want this automated, the `check.mjs` pattern in this lesson's homework prints the boolean for each width." },
   ],
   quickCheck: [
-    {
-      kind: "output",
-      prompt: "With default box-sizing (content-box), how wide is this box on screen?",
-      code: { lang: "css", code: ".box { width: 200px; padding: 10px; border: 5px solid; margin: 20px; }" },
-      options: ["200px", "230px", "270px", "220px"],
-      answer: 1,
-      explanation: "200 + 2×10 padding + 2×5 border = 230px (margin is outside the box). With border-box it would be 200px.",
-    },
-    {
-      kind: "mcq",
-      prompt: "Which creates a responsive card grid without media queries?",
-      options: ["display: flex; flex-wrap: nowrap", "grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr))", "float: left on each card", "position: absolute"],
-      answer: 1,
-      explanation: "auto-fit with minmax creates as many columns as fit, each at least 16rem.",
-    },
-    {
-      kind: "bug",
-      prompt: "A long URL in a flex item pushes the page wider than the phone screen. Most likely fix?",
-      options: ["Add z-index", "Set min-width: 0 on the flex item (and overflow-wrap: anywhere on the text)", "Use float", "Add !important to width"],
-      answer: 1,
-      explanation: "Flex items default to min-width: auto; allow them to shrink and let long words wrap.",
-    },
+    { kind: "output", prompt: "With default box-sizing (content-box), how wide is this box on screen?", code: { lang: "css", code: ".box { width: 200px; padding: 10px; border: 5px solid; margin: 20px; }" }, options: ["200px", "230px", "270px", "220px"], answer: 1, explanation: "200 + 2×10 padding + 2×5 border = 230px (margin is outside the box). With border-box it would be 200px." },
+    { kind: "mcq", prompt: "Which creates a responsive card grid without media queries?", options: ["display: flex; flex-wrap: nowrap", "grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr))", "float: left on each card", "position: absolute"], answer: 1, explanation: "auto-fit with minmax creates as many columns as fit, each at least 16rem; auto-fill would create the same tracks but keep empty ones." },
+    { kind: "bug", prompt: "A long URL in a flex item pushes the page wider than the phone screen. Most likely fix?", options: ["Add z-index", "Set min-width: 0 on the flex item (and overflow-wrap: anywhere on the text)", "Use float", "Add !important to width"], answer: 1, explanation: "Flex items default to min-width: auto; allow them to shrink and let long words wrap." },
   ],
   cheatSheet: [
-    "*, *::before, *::after { box-sizing: border-box }",
-    "Flex: one axis; justify-content (main), align-items (cross), gap, flex: 1 1 auto.",
-    "Grid: rows + columns; repeat(auto-fit, minmax(…, 1fr)); grid-template-areas.",
-    "min-width: 0 on shrinking flex/grid children.",
-    "Mobile-first: base styles, then @media (min-width).",
-    "clamp(min, fluid, max) for type and spacing.",
-    "@container for component-level responsiveness.",
-    "Animate transform/opacity, not layout properties.",
+    "`*, *::before, *::after { box-sizing: border-box; }` — width includes padding and border, margin never does.",
+    "Default content-box: 300px width + 20px padding + 4px border = 348px. Border-box: 300px total, 252px content.",
+    "Normal flow: blocks stack and take the inline size; inlines sit on a line and wrap; vertical block margins can collapse.",
+    "Flex: one axis. `justify-content` = main, `align-items` = cross, `gap` = spacing, `flex: 1 1 200px` = grow/shrink/basis.",
+    "Flex algorithm: subtract bases and gaps, then grow by factor or shrink by `shrink × basis`; clamp with min/max.",
+    "Grid: rows + columns. `repeat(auto-fit, minmax(min(16rem, 100%), 1fr))`, `grid-template-areas`, `minmax(0, 1fr)`.",
+    "`auto-fill` keeps empty tracks; `auto-fit` collapses them, so fewer items stretch. Same result when tracks are full.",
+    "`min-width: 0` on a shrinking flex child; `overflow-wrap: anywhere` on long tokens; `overflow-x: auto` on the scroller.",
+    "Mobile-first: base layout, then `@media (min-width: …)`; `clamp()` for fluid type/space; `@container` when the component should react to its slot.",
+    "`z-index` competes only within a stacking context (`position`, `transform`, `opacity`, `filter`, `isolation`); animate `transform`/`opacity`, not width/top/left.",
   ],
   homework: {
     basic: {
@@ -249,7 +352,7 @@ h1 { font-size: clamp(1.8rem, 1.2rem + 2.5vw, 3rem); line-height: 1.1; }`,
       title: "Build the DevAtlas dashboard layout",
       brief: ["Recreate the dashboard: header, collapsible sidebar on mobile, stat cards in a responsive grid, two panels side by side on desktop and stacked on mobile. No CSS framework."],
       criteria: ["Works from 320px to 1600px without horizontal scroll", "Grid for the page, flex inside components", "Custom properties for colours and spacing"],
-      hints: ["Use the layout.css and cards patterns from the hands-on."],
+      hints: ["Use `grid-template-areas` for the shell, `repeat(auto-fit, minmax(min(14rem, 100%), 1fr))` for the stat cards, and flex with `min-width: 0` inside the topbar and panels."],
       solution: {
         text: [
           "The page is a grid with named areas: one column on mobile (topbar, then a sidebar that is hidden until the Menu button opens it, then main) and, from 900px, a 240px sidebar beside the topbar and main. Inside each component it is flexbox: the topbar's search takes the remaining space with flex: 1 1 auto and min-width: 0, and the panel's Resume button is pushed to the bottom with margin-top: auto. Colours, radius and spacing are custom properties, with fluid spacing from clamp().",
@@ -671,6 +774,8 @@ dark  focus ring on first Tab stop: solid 3px rgb(179, 171, 255)`,
   deeper: [
     { label: "MDN: CSS layout", url: "https://developer.mozilla.org/en-US/docs/Learn_web_development/Core/CSS_layout" },
     { label: "MDN: CSS grid layout", url: "https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_grid_layout" },
+    { label: "MDN: The box model", url: "https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_box_model" },
+    { label: "MDN: Stacking context", url: "https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_positioned_layout/Stacking_context" },
     { label: "web.dev: Learn CSS", url: "https://web.dev/learn/css" },
     { label: "MDN: Container queries", url: "https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_containment/Container_queries" },
   ],

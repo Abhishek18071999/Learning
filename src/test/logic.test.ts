@@ -57,6 +57,11 @@ describe("roadmap", () => {
     const plan = buildRoadmap({ ...profile, levels: { ai: "advanced" } });
     expect(plan.find((p) => p.phase.id === 7)?.emphasis).toBe("verify");
   });
+  it("gives more time when the diagnostic contradicts an advanced rating", () => {
+    const base = totalWeeks(buildRoadmap({ ...profile, levels: { ai: "advanced" } }));
+    const poor = totalWeeks(buildRoadmap({ ...profile, levels: { ai: "advanced" }, diagnosticScore: 0.2 }));
+    expect(poor).toBeGreaterThan(base);
+  });
   it("next lesson skips completed ones", () => {
     const state = { ...initialState, lessons: { [lessons[0].id]: { status: "completed" as const, updatedAt: "" } } };
     expect(nextLessonId(state)).toBe(lessons[1].id);

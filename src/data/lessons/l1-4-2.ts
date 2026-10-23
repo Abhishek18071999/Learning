@@ -8,48 +8,79 @@ export const lesson: Lesson = {
   prerequisites: ["1.4.1 Ownership, borrowing and lifetimes"],
   summary: "Handle errors the Rust way with Option, Result and the ? operator, define shared behaviour with traits and generics, and use cargo, crates and tests like a professional.",
   terms: [
-    { term: "Option<T>", def: "Either Some(value) or None. Rust's replacement for null: you must handle the None case." },
-    { term: "Result<T, E>", def: "Either Ok(value) or Err(error). Used for operations that can fail." },
-    { term: "? operator", def: "Inside a function returning Result (or Option), `expr?` returns the error early or unwraps the success value." },
+    { term: "Option<T>", def: "Either Some(value) or None. Rust's replacement for null: absence is a normal outcome, and you must handle the None case." },
+    { term: "Result<T, E>", def: "Either Ok(value) or Err(error). Used when an operation can fail and the caller may need to know why." },
+    { term: "? operator", def: "Inside a function returning Result (or Option), `expr?` returns the error early or unwraps the success value. It converts the error with From." },
     { term: "panic", def: "An unrecoverable error that stops the thread (e.g. unwrap on None). For bugs, not expected failures." },
     { term: "Trait", def: "A set of methods a type can implement; Rust's version of an interface. Example: Display, Iterator, or your own Summarize." },
+    { term: "Default method", def: "A trait method with a body. Implementors get it for free and may override it. Example: `fn summary(&self) { ... }`." },
+    { term: "Trait object (dyn Trait)", def: "A value whose concrete type is erased behind a vtable, e.g. `Box<dyn Summarize>`. Enables mixed types in one collection with dynamic dispatch." },
+    { term: "Monomorphisation", def: "The compiler generating a specialised copy of a generic function for each concrete type. This is static dispatch: direct, inlinable calls." },
     { term: "Crate", def: "A Rust package/library. Published crates live on crates.io and are added with cargo add." },
-    { term: "derive", def: "`#[derive(Debug, Clone, PartialEq)]` asks the compiler to generate common trait implementations." },
+    { term: "thiserror", def: "A crate whose derive macro generates Display, Error and From for your error enum, so `?` and logging work without boilerplate." },
+    { term: "anyhow", def: "A crate providing one type-erased error with context chaining. Convenient in applications where callers do not match on error kinds." },
+    { term: "Workspace", def: "One Cargo.toml grouping several crates that share a lockfile, a target directory and dependency versions." },
   ],
   problem: [
     "The ingester downloads a feed, parses XML, extracts dates and stores items. Any step can fail: network down, invalid XML, a date in the wrong format. In many languages failures are exceptions that can be forgotten; a missing try/catch crashes the whole batch at 3 a.m.",
-    "In Rust, a function that can fail says so in its type (`Result`), and the compiler makes the caller deal with it. Combined with traits for shared behaviour, this is how Rust services stay reliable as they grow.",
+    "In Rust, a function that can fail says so in its type (`Result`), and the compiler makes the caller deal with it. Option marks absence, Result marks failure with a reason, and `?` keeps the happy path readable. Combined with traits for shared behaviour and cargo for dependencies, tests and lints, this is how Rust services stay reliable as they grow.",
   ],
   concept: {
     analogy: [
       "A `Result` is a **parcel with a label**: either 'contents inside' (Ok) or 'delivery failed, here is why' (Err). You cannot use the contents without reading the label first. The `?` operator is a **conveyor belt**: if the label says failed, the parcel goes straight back to the sender; otherwise it is unwrapped and work continues.",
-      "A trait is a **job certification**: any type certified as `Summarize` can be asked to summarize itself, whether it is an Article, a Video or a Podcast.",
+      "A trait is a **job certification**: any type certified as `Summarize` can be asked to summarize itself, whether it is an Article, a Video or a Podcast. A generic function is a form that accepts anyone with the certificate; a trait object is a queue where all the certificate holders stand together, and each is asked at the counter.",
     ],
     precise: [
-      "Rust has no exceptions and no null. Absence is `Option<T>`; failure is `Result<T, E>`. You handle them with `match`, combinators (`map`, `and_then`, `unwrap_or`, `ok_or`) or `?`. `unwrap()`/`expect()` panic on failure and belong in tests, prototypes, or truly impossible cases.",
-      "For applications, a common pattern is a crate like `anyhow` for convenient error propagation with context; for libraries, define a specific error enum (often with `thiserror`) so callers can match on error kinds.",
-      "Traits define behaviour; generics with trait bounds (`fn print_all<T: Summarize>(items: &[T])`) are compiled to specialised code (zero-cost). Trait objects (`&dyn Summarize`, `Box<dyn Summarize>`) allow mixing different types in one collection with dynamic dispatch.",
-      "Cargo builds, tests, documents and manages dependencies: `cargo new`, `cargo add`, `cargo build --release`, `cargo test`, `cargo clippy`, `cargo fmt`. `Cargo.lock` pins exact versions for binaries.",
+      "`Option<T>` models absence: a lookup that may find nothing, a field that may be missing. `Result<T, E>` models failure: an operation that may not complete, where `E` says what went wrong. Using `Option` for a fallible operation throws away the reason; using `Result` for a harmless lookup forces callers to invent an error type. Handle both with `match`, combinators (`map`, `and_then`, `unwrap_or`, `ok_or`) or `?`. `unwrap()`/`expect()` panic and belong in tests, prototypes or truly impossible cases.",
+      "`?` propagates an error and converts it with `From::from`, so a function returning `Result<T, AppError>` can use `?` on an `io::Error`, a parse error or a crate error, provided the conversions exist. Libraries should expose a typed error enum (usually with `thiserror`) so callers can match on variants; applications often prefer `anyhow` plus `.context(...)` because they log rather than match. Add context at boundaries, and keep the source chain.",
+      "A trait defines behaviour: required methods, default methods, associated types. Generics with bounds (`fn print_all<T: Summarize>(items: &[T])`) are monomorphised into specialised code: static dispatch, zero-cost, but one copy per type. Trait objects (`&dyn Summarize`, `Box<dyn Summarize>`) use a vtable: dynamic dispatch, a small runtime cost, but one collection can hold Article and Video together. Prefer generics until you need heterogeneity or smaller binaries.",
+      "Cargo is the build tool and package manager. Dependencies carry semver requirements (`serde = \"1\"`), resolved in `Cargo.lock`; features are additive compile-time switches; workspaces share a lockfile, target directory and dependency versions; profiles choose optimisation. The daily loop is `cargo add`, `cargo test`, `cargo clippy -- -D warnings`, `cargo fmt`, `cargo doc` and `cargo build --release`.",
     ],
   },
   underTheHood: {
     text: [
-      "`?` desugars roughly to: match the Result; on Ok(v) produce v; on Err(e) return Err(From::from(e)). The From conversion is why `?` can turn a std::io::Error into your own error type if you implement From.",
-      "Option<&T> and Option<Box<T>> use the null pointer as the None representation, so Option costs nothing extra for references (a niche optimisation).",
-      "Generic functions are monomorphised: the compiler generates a version per concrete type, so calls are direct and inlinable. `dyn Trait` uses a vtable pointer, a small runtime cost in exchange for flexibility.",
+      "`?` is not magic: inside a function returning `Result<T, E>`, `expr?` is roughly `match expr { Ok(v) => v, Err(e) => return Err(From::from(e)) }`. Inside a function returning `Option<T>`, it does the same with `Some`/`None`. The `From::from(e)` is the important half: `?` does not just return the error, it converts it into the function's error type when a `From` impl exists. That is how `std::io::Error` and `rss::Error` become your `IngestError` with no manual match.",
+      "On the error type, `Display` is the human message, `std::error::Error::source` points at the underlying cause, and `From` is the bridge `?` uses. Written by hand that is three impls per variant; `thiserror` turns them into attributes (`#[error(\"...\")]`, `#[from]`, `#[source]`). `anyhow::Error` is a type-erased error with a chain of context, convenient in `main` or a request handler; libraries avoid it because callers cannot exhaustively match a boxed dynamic error.",
+      "`Option<T>` exploits niches: for `Option<&T>` and `Option<Box<T>>` the null pointer is `None`, so the enum is the same size as the pointer and costs nothing. `Option<u32>` has no spare bit pattern, so it grows a tag. `Result` is a normal enum with a discriminant. None of this changes semantics: the type tells the caller which case must be handled.",
+      "A trait is a set of method signatures a type opts into: `trait Summarize { fn title(&self) -> String; fn summary(&self) -> String { ... } }`. Required methods have no body; default methods do. A bound such as `T: Summarize` is a compile-time promise: inside the function you may call only what the trait (and other bounds) guarantees. The orphan rule stops you implementing a foreign trait for a foreign type, which keeps impls coherent.",
+      "Generic functions are monomorphised: the compiler stamps out a copy for each concrete `T`, so calls are direct and inlinable. The price is code size and compile time. `dyn Trait` erases the concrete type behind a fat pointer (data pointer plus vtable pointer); calls go through the vtable at runtime. On a 64-bit target `&Article` is 8 bytes and `&dyn Summarize` is 16, as the hands-on output shows. Use generics by default, trait objects when one collection must hold different types.",
+      "Cargo resolves versions from semver requirements: `serde = \"1\"` means `>=1.0.0, <2.0.0`. `Cargo.lock` records the exact resolved graph; commit it for binaries, and let `cargo update` move within the requirements deliberately. Features are additive compile-time switches (`serde` with `derive`); enabling one anywhere in the graph enables it for everyone (feature unification), so a feature should add capability, never change behaviour incompatibly.",
+      "A workspace is one Cargo.toml with `[workspace] members = [...]`: members share one lockfile and one `target/` directory, and `[workspace.dependencies]` centralises versions. Build profiles decide the trade-off: `dev` is fast to compile with debug assertions, `release` optimises; `lto` and `codegen-units = 1` can shrink and speed a binary at the cost of build time. `cargo test`, `clippy`, `fmt` and `doc` work per crate or across the workspace.",
+      "Design errors at the boundary: parse and validate at the edge, convert into your typed error there, and attach context once (`anyhow::Context`, or a `thiserror` variant with a field). Do not stringify an error early, because the caller and the logs both lose the source chain. Log the chain at the top, return the typed error below.",
     ],
     diagram: {
       title: "Error flow with ?",
       nodes: [
         { label: "fetch()?", sub: "Err → return early" },
         { label: "parse()?", sub: "Err → return early" },
+        { label: "validate()?", sub: "Err → return early" },
         { label: "store()?", sub: "Err → return early" },
         { label: "Ok(count)", sub: "all steps succeeded" },
       ],
-      edges: ["Ok", "Ok", "Ok"],
+      edges: ["Ok", "Ok", "Ok", "Ok"],
+      caption: "Each `?` is a checkpoint: the first Err leaves the function, converted into its error type; only the all-Ok path reaches the final value.",
     },
   },
   handsOn: [
+    {
+      title: "Choose the right shape: Option, Result, generics, trait objects",
+      text: [
+        "The type is the design decision. Read this table before reaching for `unwrap`, `String` errors or `Box<dyn Trait>`; each row is a situation you will meet in the ingester.",
+      ],
+      code: {
+        lang: "text",
+        file: "choose.txt",
+        code: `Situation                           Choose                      Avoid                    Because
+absence is normal (lookup miss)     Option<T>                   Result<T, E>             None means "nothing", not "failed"
+caller must know why it failed      Result<T, E>                Option<T>                Err carries the cause
+one concrete type at the call site  fn f<T: Trait>(x: &T)       fn f(x: &dyn Trait)      static dispatch: inlined, no vtable
+mixed types in one Vec              Vec<Box<dyn Trait>>         Vec<T>                   different sizes need indirection
+library callers match on kinds      a thiserror enum            anyhow::Error            variants stay inspectable
+application top-level logging       anyhow + context            a giant local enum       one type, full source chain
+optional field in JSON              Option<T> + serde default   sentinel values          missing and null stay explicit`,
+      },
+      notes: ["The first two rows are the Option/Result boundary. The middle two are the static/dynamic dispatch boundary. The last two are the library/application error boundary."],
+    },
     {
       title: "Option and Result basics",
       code: {
@@ -84,32 +115,48 @@ fn main() {
 }`,
       },
       output: "Errors and traits\nunknown\nok 70\nerror: 'abc' is not a number: invalid digit found in string\nerror: minutes must be > 0",
+      notes: ["`find_lesson` returns `Option` because a miss is ordinary. `parse_minutes` returns `Result` because the caller needs the reason. The `?` after `parse()` propagates the parse error instead of panicking."],
     },
     {
-      title: "A custom error enum and the ? operator",
+      title: "Propagate with ? and let thiserror write Display",
+      text: [
+        "The first enum is the hand-written version: `Display` supplies the human message, `std::error::Error` makes it a real error, and `From<ParseIntError>` is what `?` calls. The second enum gets all three from `thiserror`: `#[error(\"...\")]` generates `Display`, `#[from]` generates the `From` impl, and `#[derive(Error)]` wires up `std::error::Error`. `parse_item` uses the generated version; the output is identical, because the derive writes the same code you would have written.",
+      ],
       code: {
         lang: "rust",
+        file: "src/main.rs",
         code: `use std::fmt;
 use std::num::ParseIntError;
+use thiserror::Error;
 
+// 1. Hand-written: the three impls a custom error normally needs.
+#[allow(dead_code)]                              // kept only to compare with the derive
 #[derive(Debug)]
-enum FeedError {
+enum ManualError {
     MissingField(&'static str),
     BadNumber(ParseIntError),
 }
 
-impl fmt::Display for FeedError {
+impl fmt::Display for ManualError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            FeedError::MissingField(name) => write!(f, "missing field '{name}'"),
-            FeedError::BadNumber(e) => write!(f, "bad number: {e}"),
+            ManualError::MissingField(name) => write!(f, "missing field '{name}'"),
+            ManualError::BadNumber(e) => write!(f, "bad number: {e}"),
         }
     }
 }
-impl std::error::Error for FeedError {}
+impl std::error::Error for ManualError {}
+impl From<ParseIntError> for ManualError {
+    fn from(e: ParseIntError) -> Self { ManualError::BadNumber(e) }
+}
 
-impl From<ParseIntError> for FeedError {          // lets ? convert automatically
-    fn from(e: ParseIntError) -> Self { FeedError::BadNumber(e) }
+// 2. thiserror: the same Display, Error and From impls, generated.
+#[derive(Debug, Error)]
+enum FeedError {
+    #[error("missing field '{0}'")]
+    MissingField(&'static str),
+    #[error("bad number: {0}")]
+    BadNumber(#[from] ParseIntError),
 }
 
 #[derive(Debug, PartialEq)]
@@ -117,7 +164,7 @@ struct Item { title: String, points: u32 }
 
 fn parse_item(line: &str) -> Result<Item, FeedError> {
     let (title, points) = line.split_once(';').ok_or(FeedError::MissingField("points"))?;
-    let points: u32 = points.trim().parse()?;     // ParseIntError -> FeedError via From
+    let points: u32 = points.trim().parse()?;     // ParseIntError -> FeedError via #[from]
     Ok(Item { title: title.trim().to_string(), points })
 }
 
@@ -131,15 +178,22 @@ fn main() {
 }`,
       },
       output: "Item { title: \"Rust tips\", points: 120 }\nerror: missing field 'points'\nerror: bad number: invalid digit found in string",
-      notes: ["The `thiserror` crate generates the Display and From boilerplate with attributes; `anyhow` is popular for application-level code. Writing it by hand once shows what they do."],
+      notes: [
+        "`ok_or(...)?` turns the `Option` from `split_once` into a `Result` and propagates it. `parse()?` propagates `ParseIntError`, converted by the generated `From` impl. No `unwrap`, no panic on bad input.",
+        "A library would keep this typed enum so callers can `match FeedError::MissingField { .. }`. An application whose `main` only logs might instead use `anyhow::Result` and `.context(\"line: {line}\")`; the context becomes part of the printed chain.",
+      ],
     },
     {
-      title: "Traits and generics",
+      title: "Dispatch: generics vs trait objects, then cargo test and clippy",
+      text: [
+        "`render_generic` is monomorphised per type: the compiler emits a direct call. `render_dynamic` takes `&dyn Summarize`: a fat pointer to the value plus a vtable, resolved at runtime. Both produce the same text; the difference is in code size, inlining and what can share one collection.",
+      ],
       code: {
         lang: "rust",
+        file: "src/main.rs",
         code: `trait Summarize {
     fn title(&self) -> String;
-    fn summary(&self) -> String {                       // default method
+    fn summary(&self) -> String {
         format!("{} (read more...)", self.title())
     }
 }
@@ -149,92 +203,123 @@ struct Video { name: String, minutes: u32 }
 
 impl Summarize for Article {
     fn title(&self) -> String { self.headline.clone() }
+    fn summary(&self) -> String { format!("{} ({} words)", self.headline, self.words) }
 }
 impl Summarize for Video {
     fn title(&self) -> String { self.name.clone() }
     fn summary(&self) -> String { format!("{} [{} min video]", self.name, self.minutes) }
 }
 
-fn print_one<T: Summarize>(item: &T) {                   // static dispatch (generic)
-    println!("{}", item.summary());
-}
-
-fn print_all(items: &[Box<dyn Summarize>]) {           // dynamic dispatch (mixed types)
-    for i in items { println!("- {}", i.summary()); }
-}
+fn render_generic<T: Summarize>(item: &T) -> String { item.summary() }
+fn render_dynamic(item: &dyn Summarize) -> String { item.summary() }
 
 fn main() {
     let a = Article { headline: "Ownership explained".into(), words: 900 };
-    print_one(&a);
+    let v = Video { name: "Borrowing in 5 minutes".into(), minutes: 5 };
+
+    println!("generic: {}", render_generic(&a));
+    println!("dynamic: {}", render_dynamic(&v));
+
     let feed: Vec<Box<dyn Summarize>> = vec![
-        Box::new(a),
+        Box::new(Article { headline: "Ownership explained".into(), words: 900 }),
         Box::new(Video { name: "Borrowing in 5 minutes".into(), minutes: 5 }),
     ];
-    print_all(&feed);
-}`,
-      },
-      output: "Ownership explained (read more...)\n- Ownership explained (read more...)\n- Borrowing in 5 minutes [5 min video]",
-      notes: ["The `words` field is unused here; the compiler will warn about it (dead_code), which is fine for a demo."],
-    },
-    {
-      title: "Cargo: dependencies, tests, quality",
-      code: {
-        lang: "bash",
-        code: `cargo add serde --features derive      # adds to Cargo.toml
-cargo add serde_json
-cargo test                             # unit tests in #[cfg(test)] modules + tests/ folder
-cargo clippy -- -D warnings            # lints; fail on warnings
-cargo fmt                              # format
-cargo build --release                  # optimised binary in target/release/`,
-      },
-    },
-    {
-      title: "Serialise with serde",
-      code: {
-        lang: "rust",
-        code: `use serde::{Deserialize, Serialize};
+    for item in &feed { println!("- {}", item.summary()); }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct NewsItem {
-    title: String,
-    url: String,
-    #[serde(default)]
-    tags: Vec<String>,
+    println!("&Article = {} bytes, &dyn Summarize = {} bytes",
+        std::mem::size_of::<&Article>(), std::mem::size_of::<&dyn Summarize>());
 }
 
-fn main() -> Result<(), serde_json::Error> {      // main can return Result
-    let json = r#"{"title":"Rust 1.0 anniversary","url":"https://example.com"}"#;
-    let item: NewsItem = serde_json::from_str(json)?;
-    println!("{item:?}");
-    println!("{}", serde_json::to_string_pretty(&item)?);
-    Ok(())
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn article() -> Article {
+        Article { headline: "Ownership explained".into(), words: 900 }
+    }
+
+    #[test]
+    fn generic_and_dynamic_agree() {
+        let a = article();
+        assert_eq!(render_generic(&a), render_dynamic(&a));
+        assert_eq!(render_generic(&a), "Ownership explained (900 words)");
+    }
+
+    #[test]
+    fn trait_objects_mix_types() {
+        let feed: Vec<Box<dyn Summarize>> = vec![
+            Box::new(article()),
+            Box::new(Video { name: "Borrowing in 5 minutes".into(), minutes: 5 }),
+        ];
+        let lines: Vec<String> = feed.iter().map(|i| i.summary()).collect();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[1].starts_with("Borrowing in 5 minutes"));
+    }
 }`,
       },
-      output: "NewsItem { title: \"Rust 1.0 anniversary\", url: \"https://example.com\", tags: [] }\n{\n  \"title\": \"Rust 1.0 anniversary\",\n  \"url\": \"https://example.com\",\n  \"tags\": []\n}",
+      output: "cargo run -q\ngeneric: Ownership explained (900 words)\ndynamic: Borrowing in 5 minutes [5 min video]\n- Ownership explained (900 words)\n- Borrowing in 5 minutes [5 min video]\n&Article = 8 bytes, &dyn Summarize = 16 bytes\n\ncargo test -- --nocapture\nrunning 2 tests\ntest tests::generic_and_dynamic_agree ... ok\ntest tests::trait_objects_mix_types ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\ncargo clippy --all-targets -- -D warnings\n    Checking rustlab2 v0.1.0 (/app)\n    Finished \`dev\` profile [unoptimized + debuginfo] target(s) in 2.64s",
+      notes: [
+        "The two pointer sizes are the visible cost of type erasure: `&dyn Summarize` carries data plus vtable, `&Article` carries data only. Static dispatch usually wins for hot paths; dynamic dispatch wins when Article and Video must sit in the same `Vec`.",
+        "`cargo test` compiles the `#[cfg(test)]` module, runs each test and reports a summary. `cargo clippy --all-targets -- -D warnings` lints code, tests and examples, and turns every warning into a build failure, which is what you want in CI. Run `cargo fmt --check` in CI too, so formatting is enforced rather than argued about.",
+      ],
+    },
+    {
+      title: "Map the error path",
+      text: [
+        "Draw the path before writing it. Each `?` is a return point; context is added where the error crosses a boundary (HTTP handler, CLI, job runner). `thiserror` variants belong inside the library; `anyhow` context belongs at the top that logs.",
+      ],
+      code: {
+        lang: "mermaid",
+        file: "error-flow.mmd",
+        code: `flowchart TD
+    A[read feed bytes] --> B{read ok?}
+    B -- no --> E1[IngestError::Io]
+    B -- yes --> C[parse RSS]
+    C --> D{parse ok?}
+    D -- no --> E2[IngestError::Feed]
+    D -- yes --> F[map items]
+    F --> G{item valid?}
+    G -- no --> E3[IngestError::MissingField]
+    G -- yes --> H[write JSON lines]
+    H --> I{write ok?}
+    I -- no --> E4[IngestError::Json]
+    I -- yes --> J[Ok count]
+    E1 --> K[main: log Display + source, exit 1]
+    E2 --> K
+    E3 --> K
+    E4 --> K`,
+      },
+      notes: ["Fail fast for a batch that must be all-or-nothing; collect per-item errors when items are independent. Either way, keep the typed variant and add human context only at the edge where it is logged."],
     },
   ],
   companies: [
-    "**Explicit errors in production services**: Rust codebases typically ban `unwrap()` outside tests with clippy lints, use thiserror for library errors and anyhow (or similar) in binaries, and attach context to errors for logs.",
-    "**serde is the de-facto standard** for JSON, YAML and other formats in Rust; most web frameworks (Axum, Actix) use it for request and response bodies.",
-    "**Traits for testability**: services define traits for repositories and clients, implement them for real infrastructure, and use fake implementations in tests, the same pattern as Python Protocols and C# interfaces.",
+    "**Error policy in production services (illustrative):** Rust codebases typically ban `unwrap()` outside tests with clippy lints, use `thiserror` for library errors and `anyhow` (or similar) in binaries, and attach context to errors for logs.",
+    "**serde is the de-facto standard (real, documented):** serde handles JSON, YAML and other formats in Rust; most web frameworks (Axum, Actix) use it for request and response bodies.",
+    "**Traits for testability (illustrative):** services define traits for repositories and clients, implement them for real infrastructure, and use fake implementations in tests, the same pattern as Python Protocols and C# interfaces.",
+    "**Cargo workspaces at scale (illustrative):** large Rust repositories split into a workspace of small crates (core, api, workers), share one lockfile and target directory, and centralise dependency versions in `[workspace.dependencies]` so upgrades happen once.",
+    "**Clippy and fmt in CI (illustrative):** teams run `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` on every pull request, so style and common bug patterns are enforced by the toolchain rather than review comments.",
   ],
   mistakes: [
     { mistake: "unwrap() in production paths", why: "Quick prototyping habits", wrong: "A malformed input panics and kills the worker", fix: "Propagate with ?, handle with match, or use expect with a message only for true invariants" },
     { mistake: "String as the error type everywhere", why: "Easiest to create", wrong: "Callers cannot match on error kinds; context is lost", fix: "An error enum (thiserror) for libraries; anyhow with context for apps" },
+    { mistake: "Using Option when None hides a failure", why: "Option is simpler to return", wrong: "The caller cannot tell 'not found' from 'the disk failed'", fix: "Return Result with a variant that names the cause; keep Option for genuine absence" },
     { mistake: "Box<dyn Trait> by default", why: "Familiar from OOP languages", wrong: "Unnecessary allocation and dynamic dispatch", fix: "Generics with trait bounds unless you need mixed types in one collection" },
-    { mistake: "Ignoring clippy", why: "Code compiles already", wrong: "Missed bugs and non-idiomatic code", fix: "cargo clippy -- -D warnings in CI" },
-    { mistake: "Not committing Cargo.lock for binaries", why: "Treating it as generated noise", wrong: "Non-reproducible builds", fix: "Commit Cargo.lock for applications" },
+    { mistake: "Dropping the error source and context", why: "Printing the top message feels sufficient", wrong: "Logs say 'bad number' with no line, file or underlying parse message", fix: "Keep #[source]/#[from], add context at the boundary, log the whole chain once" },
+    { mistake: "Ignoring clippy", why: "Code compiles already", wrong: "Missed bugs and non-idiomatic code", fix: "cargo clippy --all-targets -- -D warnings in CI" },
+    { mistake: "Not committing Cargo.lock for binaries", why: "Treating it as generated noise", wrong: "Non-reproducible builds", fix: "Commit Cargo.lock for applications; libraries may leave it out" },
+    { mistake: "Enabling every feature by default", why: "Features look free", wrong: "Feature unification turns them on across the graph, bloating builds and pulling in TLS or async runtimes you did not choose", fix: "Keep default features minimal and opt in deliberately per crate" },
   ],
   bestPractices: [
     { tag: "Reliability", text: "Return Result from anything that can fail; add context to errors at boundaries; no unwrap in production code." },
-    { tag: "Maintainability", text: "Small traits describing capabilities; generics with bounds; derive Debug on public types." },
+    { tag: "Maintainability", text: "Small traits describing capabilities; generics with bounds; derive Debug on public types; document public items with cargo doc." },
     { tag: "Reliability", text: "cargo test, clippy -D warnings and fmt --check in CI." },
-    { tag: "Performance", text: "Build with --release for benchmarks and deployment; debug builds can be many times slower." },
+    { tag: "Performance", text: "Build with --release for benchmarks and deployment; debug builds can be many times slower. Use generics on hot paths." },
+    { tag: "Maintainability", text: "Pin versions in Cargo.lock for binaries, centralise shared dependencies in a workspace, and keep feature flags additive." },
   ],
   interview: [
-    { q: "How does Rust handle errors without exceptions?", a: "Recoverable errors are values: Result<T, E>. Absence is Option<T>. The ? operator propagates errors upward concisely, converting types via From. Unrecoverable bugs use panic. Because errors are in the type signature, callers cannot forget them." },
-    { q: "Generics vs trait objects?", a: "Generics with trait bounds are monomorphised: static dispatch, inlinable, zero runtime overhead, but one copy per type. Trait objects (dyn Trait) use a vtable for dynamic dispatch, allowing heterogeneous collections and smaller binaries at a small runtime cost." },
-    { q: "When is unwrap acceptable?", a: "In tests, examples, and when an invariant guarantees success and failure would be a bug (prefer expect with a message explaining the invariant). Not for input, network or file operations." },
+    { q: "How does Rust handle errors without exceptions, and when do you choose Option, Result, thiserror or anyhow?", a: "Recoverable errors are values: Result<T, E> for failure with a reason, Option<T> for absence. `?` propagates and converts via From, so a function returning Result<T, AppError> stays readable. panic is for bugs, not expected failures. In a library, expose a typed error enum, usually with thiserror, because callers can match variants and you can attach #[source]. In an application, anyhow with .context(...) is often enough because the top level logs rather than branches. Add context at boundaries and never stringify early." },
+    { q: "Generics vs trait objects?", a: "Generics with trait bounds are monomorphised: static dispatch, inlinable, zero runtime overhead, but one copy of the code per concrete type, which can increase binary size and compile time. Trait objects (dyn Trait) use a fat pointer and a vtable: dynamic dispatch, a small runtime cost, but one Vec can hold different types and the code is not duplicated. Prefer generics by default; choose dyn when you need heterogeneous collections, plugin-style extensibility or smaller binaries. Both rely on the same trait definition, including default methods." },
+    { q: "How do you keep a Rust project healthy with cargo?", a: "Use semver requirements and commit Cargo.lock for binaries so builds are reproducible; run cargo update deliberately, not incidentally. Keep features additive and default features small, because feature unification enables a feature across the whole dependency graph. In a workspace, share one lockfile and target directory and centralise versions in [workspace.dependencies]. In CI run cargo test, cargo clippy --all-targets -- -D warnings, cargo fmt --check and cargo doc; build release artifacts with the release profile, using lto and codegen-units when binary size or runtime matters more than build time." },
   ],
   quickCheck: [
     {
@@ -254,21 +339,23 @@ fn main() -> Result<(), serde_json::Error> {      // main can return Result
     },
     {
       kind: "mcq",
-      prompt: "You need a Vec holding both Article and Video values that implement Summarize. What type do you use?",
-      options: ["Vec<Summarize>", "Vec<T: Summarize>", "Vec<Box<dyn Summarize>>", "Vec<impl Summarize>"],
+      prompt: "You are writing a library and callers must match on the kind of failure. What should the public error type be?",
+      options: ["String", "anyhow::Error", "A thiserror enum with one variant per failure kind", "Box<dyn std::error::Error>"],
       answer: 2,
-      explanation: "Different concrete types in one collection need trait objects.",
+      explanation: "A typed enum keeps variants inspectable and still generates Display, Error and From. anyhow and boxed errors erase the type, which is fine for applications but not for callers that match.",
     },
   ],
   cheatSheet: [
-    "Option<T>: Some/None. Result<T, E>: Ok/Err.",
-    "? propagates errors (with From conversion).",
-    "unwrap_or, map, and_then, ok_or for combinators.",
-    "No unwrap in production paths; expect(\"why\") for invariants.",
-    "trait = interface; impl Trait for Type; default methods.",
-    "Generics T: Trait (static) vs dyn Trait (dynamic).",
-    "cargo add · test · clippy · fmt · build --release.",
-    "serde derive for JSON in and out.",
+    "Option<T>: Some/None, for absence. Result<T, E>: Ok/Err, for failure with a reason.",
+    "? propagates errors and converts them via From; it also works on Option in an Option-returning function.",
+    "Combinators: map, and_then, ok_or, unwrap_or. Reserve unwrap for tests and true invariants.",
+    "Libraries: typed thiserror enum. Applications: anyhow with context. Keep #[source] for the chain.",
+    "trait = interface; impl Trait for Type; default methods supply shared behaviour.",
+    "Generics T: Trait = static dispatch (monomorphised). dyn Trait = dynamic dispatch via vtable.",
+    "Use generics by default; Vec<Box<dyn Trait>> when one collection holds different types.",
+    "cargo add · test · clippy --all-targets -- -D warnings · fmt --check · doc · build --release.",
+    "Cargo.lock pins the graph for binaries; features are additive and unify across the graph.",
+    "Workspaces share a lockfile and target dir; profiles trade compile time for runtime performance.",
   ],
   homework: {
     basic: {
@@ -542,7 +629,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"`,
         },
-        output: "$ cargo run -q -- feed.xml\n{\"title\":\"Rust 1.97 released\",\"url\":\"https://blog.rust-lang.org/\",\"published\":\"Thu, 09 Jul 2026 00:00:00 GMT\",\"tags\":[\"rust\"]}\n{\"title\":\"What is new in .NET\",\"url\":\"https://devblogs.microsoft.com/dotnet/\",\"published\":null,\"tags\":[\"dotnet\",\"csharp\"]}\ningested 2 items from feed.xml\n$ cargo run -q -- broken.xml; echo \"exit=$?\"\nerror: malformed feed: reached end of input without finding a complete channel\nexit=1",
+        output: "cargo run -q -- feed.xml\n{\"title\":\"Rust 1.97 released\",\"url\":\"https://blog.rust-lang.org/\",\"published\":\"Thu, 09 Jul 2026 00:00:00 GMT\",\"tags\":[\"rust\"]}\n{\"title\":\"What is new in .NET\",\"url\":\"https://devblogs.microsoft.com/dotnet/\",\"published\":null,\"tags\":[\"dotnet\",\"csharp\"]}\ningested 2 items from feed.xml\ncargo run -q -- broken.xml; echo \"exit=$?\"\nerror: malformed feed: reached end of input without finding a complete channel\nexit=1",
         pitfalls: [
           "Printing progress messages to stdout: anything reading the JSON Lines then sees a line that is not JSON. Use stderr",
           "`item.link().unwrap()`: one feed with a missing link panics the whole ingester. Return MissingField instead",
@@ -555,7 +642,9 @@ thiserror = "2"`,
     { label: "The Rust Book: Error Handling", url: "https://doc.rust-lang.org/book/ch09-00-error-handling.html" },
     { label: "The Rust Book: Traits", url: "https://doc.rust-lang.org/book/ch10-02-traits.html" },
     { label: "The Cargo Book", url: "https://doc.rust-lang.org/cargo/" },
-    { label: "serde.rs", url: "https://serde.rs/" },
+    { label: "Cargo reference: Features", url: "https://doc.rust-lang.org/cargo/reference/features.html" },
+    { label: "thiserror documentation", url: "https://docs.rs/thiserror/latest/thiserror/" },
+    { label: "anyhow documentation", url: "https://docs.rs/anyhow/latest/anyhow/" },
   ],
   nextPreview: "Next phase: data structures and algorithms. Big-O and hash maps: turn an O(n²) solution into O(n) and learn to recognise when a lookup table is the answer.",
 };

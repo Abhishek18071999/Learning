@@ -1,6 +1,7 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { phases } from "../data/curriculum";
 import { lessonById, lessons } from "../data/lessons";
+import { loadModuleOverview, type ModuleOverview } from "../data/moduleOverview";
 import { diagnostic } from "../data/diagnostic";
 import { architectureMermaid, capstoneParts, milestones } from "../data/capstone";
 import type { QuizQuestion } from "../types";
@@ -55,9 +56,9 @@ export function Roadmap() {
                 <div className="modules">
                   {phase.modules.map((m) => (
                     <div key={m.id} className="module">
-                      <div className="module-title">
+                      <a className="module-title" href={`#/module/${m.id}`}>
                         {m.id} {m.title}
-                      </div>
+                      </a>
                       {m.lessons.map((l) => {
                         const st = state.lessons[l.id]?.status;
                         const full = !!lessonById[l.id];
@@ -79,6 +80,118 @@ export function Roadmap() {
           );
         })}
       </div>
+    </div>
+  );
+}
+
+/* ---------------- Module overview ---------------- */
+
+export function ModulePage({ id }: { id: string }) {
+  const [data, setData] = useState<ModuleOverview | null | undefined>(undefined);
+  useEffect(() => {
+    let live = true;
+    setData(undefined);
+    loadModuleOverview(id).then((d) => live && setData(d));
+    return () => {
+      live = false;
+    };
+  }, [id]);
+
+  if (data === undefined) return <div className="page muted">Loading module…</div>;
+  if (data === null)
+    return (
+      <div className="page">
+        <header className="page-head">
+          <p className="eyebrow">/module/{id}</p>
+          <h1>Module not found</h1>
+        </header>
+        <p>
+          <a className="btn btn-ghost" href="#/roadmap">
+            ← Back to the roadmap
+          </a>
+        </p>
+      </div>
+    );
+
+  return (
+    <div className="page">
+      <header className="page-head">
+        <p className="eyebrow">/module/{data.module.id}</p>
+        <h1>{data.module.title}</h1>
+        <p className="lede">
+          Phase {data.phase.id}: {data.phase.title} · {data.lessons.length} lessons · about {data.totalMinutes} minutes ·{" "}
+          <a href="#/roadmap">back to the roadmap</a>
+        </p>
+      </header>
+
+      <section>
+        <h2>Learning objectives</h2>
+        <ul>{data.objectives.map((o) => <li key={o}>{o}</li>)}</ul>
+      </section>
+
+      {data.prerequisites.length > 0 && (
+        <section>
+          <h2>Prerequisites</h2>
+          <ul>{data.prerequisites.map((p) => <li key={p}>{p}</li>)}</ul>
+        </section>
+      )}
+
+      <section>
+        <h2>Lessons, easiest to hardest</h2>
+        <div className="modules">
+          <div className="module">
+            {data.lessons.map((l) => (
+              <a key={l.id} href={`#/lesson/${l.id}`} className={`module-lesson ${l.hasContent ? "" : "stub"}`}>
+                <span className="lesson-link-id">{l.id}</span>
+                <span>{l.title}</span>
+                {l.minutes !== undefined && <span className="muted small">{l.minutes} min · {l.level}</span>}
+                {!l.hasContent && <span className="soon">soon</span>}
+              </a>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {data.takeaways.length > 0 && (
+        <section>
+          <h2>Key takeaways</h2>
+          <ul>{data.takeaways.map((t) => <li key={t}>{rich(t)}</li>)}</ul>
+        </section>
+      )}
+
+      {data.mistakes.length > 0 && (
+        <section>
+          <h2>Common mistakes</h2>
+          <ul>
+            {data.mistakes.map((m) => (
+              <li key={`${m.lessonId}-${m.mistake}`}>
+                <strong>{m.mistake}</strong> — {rich(m.fix)} <span className="muted small">({m.lessonId})</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {data.exercises.length > 0 && (
+        <section>
+          <h2>Practice and projects</h2>
+          <ul>
+            {data.exercises.map((e) => (
+              <li key={e.lessonId}>
+                <a href={`#/lesson/${e.lessonId}`}>{e.lessonId}</a> {e.title} — {e.criteria.join("; ")}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {data.assessment.length > 0 && (
+        <section>
+          <h2>Module assessment</h2>
+          <p className="muted small">Answer these before moving on. Questions are drawn from this module's lessons.</p>
+          <QuizSet questions={data.assessment} />
+        </section>
+      )}
     </div>
   );
 }

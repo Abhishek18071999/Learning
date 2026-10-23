@@ -38,7 +38,11 @@ export function buildRoadmap(profile: Profile): PlannedPhase[] {
   let week = 1;
   return ordered.map((phase) => {
     const isCore = focus.includes(phase.id);
-    const level = levelFor(profile, phase.areas);
+    let level = levelFor(profile, phase.areas);
+    // A poor diagnostic (only taken when the learner claims experience) overrides an
+    // optimistic self-rating: claiming "advanced" while missing most answers means the
+    // phase should be treated as core material, not skimmed.
+    if (level === "advanced" && (profile.diagnosticScore ?? 1) < 0.7) level = "intermediate";
     let factor = AREA_LEVEL_FACTOR[level] * (isCore ? 1 : 0.5);
     let emphasis: PlannedPhase["emphasis"] = isCore ? "core" : "supporting";
     let note: string | undefined;
@@ -46,11 +50,11 @@ export function buildRoadmap(profile: Profile): PlannedPhase[] {
       emphasis = "verify";
       note = "You reported prior experience: take the diagnostic and quizzes to confirm, then skim.";
     }
-    // DSA runs in parallel with everything else, so it does not push the timeline.
-    if (phase.id === 2) factor *= 0.35;
+    // A parallel phase (DSA) runs alongside everything, so it does not push the timeline.
+    if (phase.parallel) factor *= 0.35;
     const weeks = Math.max(1, Math.round(phase.weeks * factor * hoursFactor));
     const planned = { phase, weeks, startWeek: week, emphasis, note };
-    if (phase.id !== 2) week += weeks;
+    if (!phase.parallel) week += weeks;
     return planned;
   });
 }
@@ -66,7 +70,7 @@ function levelFor(profile: Profile, areas: Area[]) {
 }
 
 export function totalWeeks(plan: PlannedPhase[]): number {
-  return plan.filter((p) => p.phase.id !== 2).reduce((n, p) => n + p.weeks, 0);
+  return plan.filter((p) => !p.phase.parallel).reduce((n, p) => n + p.weeks, 0);
 }
 
 /** The next lesson with full content that is not completed, in curriculum order. */
@@ -76,8 +80,10 @@ export function nextLessonId(state: State): string | null {
 }
 
 export function weakAreas(state: State): string[] {
+  // A quick-check is 3 questions: 0/3 and 1/3 are the only clearly-weak signals, and
+  // 2/3 (0.67) is not. Flag below 0.5 so a single miss does not mark a lesson weak.
   return lessons
-    .filter((l) => (state.lessons[l.id]?.quizScore ?? 1) < 0.67)
+    .filter((l) => (state.lessons[l.id]?.quizScore ?? 1) < 0.5)
     .map((l) => l.title);
 }
 

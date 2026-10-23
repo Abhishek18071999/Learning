@@ -5,7 +5,7 @@ export const lessonMeta: LessonMeta[] = [
  {
   "id": "0.1.1",
   "title": "What happens when you type a URL",
-  "minutes": 50,
+  "minutes": 70,
   "level": "Beginner",
   "summary": "Follow one request from your keyboard to a server and back: DNS, TCP, TLS and HTTP, and how to see each step yourself.",
   "terms": [
@@ -40,20 +40,40 @@ export const lessonMeta: LessonMeta[] = [
    {
     "term": "TTL",
     "def": "Time To Live. How long a DNS answer may be cached before it must be looked up again."
+   },
+   {
+    "term": "Round-trip time (RTT)",
+    "def": "The time for a message to reach a host and come back. DNS, TCP and TLS each cost whole RTTs, so distance multiplies every connection setup."
+   },
+   {
+    "term": "Anycast",
+    "def": "Many servers announcing the same IP address; the network routes each user to the nearest one. It is how public DNS resolvers and CDNs answer quickly worldwide."
+   },
+   {
+    "term": "CDN",
+    "def": "Content Delivery Network: a fleet of edge servers that terminate TCP/TLS near the user and cache content, so a request does not have to cross an ocean to reach your origin."
+   },
+   {
+    "term": "Keep-alive",
+    "def": "Reusing one TCP/TLS connection for many HTTP requests instead of paying for a new handshake on every call."
+   },
+   {
+    "term": "HSTS",
+    "def": "HTTP Strict Transport Security: a response header that tells the browser to use HTTPS for this site for a set time, never plain HTTP."
    }
   ],
   "interview": [
    {
     "q": "What happens when you type a URL into the browser and press Enter?",
-    "a": "Walk the layers in order: URL parsing, DNS resolution (browser, OS, resolver, root, TLD, authoritative), TCP handshake to port 443, TLS handshake with certificate validation, HTTP request and response, then rendering and sub-resource fetches. Mention caching at each step and the round-trip cost. Strong answers add CDNs, keep-alive and HTTP/2."
+    "a": "Walk the layers in order and name the cost of each. The browser parses and normalises the URL (scheme, host, path, query; Punycode for international names). DNS resolves the host: browser cache, OS cache, recursive resolver, root, TLD, authoritative server. A record with a TTL comes back. Then TCP's three-way handshake to port 443 (one round trip), then TLS 1.3 (one round trip) carrying SNI (the hostname), ALPN (the protocol list) and a key share, with the server's certificate validated against a trusted root. Only then does HTTP send the request line, headers and body, and the server replies with a status, headers and body. Finally the browser parses HTML into a DOM and CSS into a CSSOM and fetches sub-resources. Close by saying every handshake is a round trip, so on a 200 ms link you can spend 600 to 800 ms before the server runs a line of your code - which is why CDNs, keep-alive, TLS 1.3 and HTTP/2 or 3 exist."
    },
    {
     "q": "Users in one region report slowness but your servers look healthy. How do you investigate?",
-    "a": "Separate network time from server time. Use real user monitoring or curl -w from that region to compare DNS, connect, TLS and TTFB. If handshakes dominate, the fix is a CDN or a regional deployment. If TTFB dominates only for that region, check routing, the load balancer and regional dependencies."
+    "a": "Split network time from server time before changing anything. Reproduce with curl -w or a synthetic check from that region, and read the phases: if DNS, connect and TLS dominate, the fix is distance (a CDN edge or a regional deployment), not code; if time_starttransfer minus time_appconnect is large while the handshakes are small, the server or a dependency is slow. Confirm with real-user monitoring (Navigation Timing / TTFB by region) and check whether the connection is being reused. Then rank fixes by effort: terminate TLS near users and keep warm connections to the origin (CDN), enable HTTP/2 or 3 and TLS 1.3, and only then consider a second region, which brings a data-consistency cost."
    },
    {
-    "q": "Why does DNS TTL matter during a migration?",
-    "a": "Resolvers cache answers for the TTL. If the TTL is a day, some users keep the old IP for a day after the change. Lower it in advance, migrate, verify, then raise it."
+    "q": "Why does DNS TTL matter during a migration, and what else can bite you?",
+    "a": "Resolvers cache an answer for its TTL, so with a one-day TTL some users keep hitting the old IP for a day after you switch. Lower the TTL (for example to 300 s) at least one old-TTL period before the change, migrate, verify, then raise it again. The same thinking applies to certificates (automate renewal and alert on expiry), to the apex-versus-www choice (pick one canonical host and redirect the other), and to IPv6 (publish AAAA records and confirm the CDN or load balancer supports IPv6 end to end)."
    }
   ],
   "quickCheck": [
@@ -97,12 +117,14 @@ export const lessonMeta: LessonMeta[] = [
   "cheatSheet": [
    "Order: URL → DNS → TCP → TLS → HTTP → render.",
    "DNS caches: browser → OS → recursive resolver → root → TLD → authoritative.",
-   "TCP handshake = 1 RTT. TLS 1.3 = 1 RTT. TLS 1.2 = 2 RTT.",
-   "`curl -w` timings are cumulative. Subtract to get each phase.",
-   "TTFB (time to first byte) = network + server processing.",
-   "CDNs cut latency by terminating connections near the user.",
-   "Lower DNS TTL before migrations. Automate certificate renewal.",
-   "Reuse connections: one shared HTTP client, keep-alive, HTTP/2."
+   "TCP handshake = 1 RTT. TLS 1.3 = 1 RTT. TLS 1.2 = 2 RTT. Reused connection = 0.",
+   "`curl -w` timings are cumulative. Subtract consecutive values to get each phase.",
+   "TTFB = handshakes + one round trip + server processing.",
+   "CDNs and anycast cut latency by terminating connections near the user.",
+   "HTTP/2 multiplexes over one TCP connection; HTTP/3 removes TCP head-of-line blocking over QUIC.",
+   "Lower DNS TTL before migrations; automate certificate renewal; enable HSTS.",
+   "Reuse connections: keep-alive, connection pools, HTTP/2. Never one client per request.",
+   "Each layer fails differently: NXDOMAIN (DNS), timeout/refused (TCP), certificate error (TLS), 4xx/5xx (HTTP)."
   ],
   "capstone": {
    "title": "DevAtlas step 1: write the request journey",
@@ -112,7 +134,7 @@ export const lessonMeta: LessonMeta[] = [
     "Each arrow labelled with the protocol used"
    ]
   },
-  "codeSamples": 7,
+  "codeSamples": 8,
   "file": "l0-1-1.ts"
  },
  {
@@ -120,31 +142,31 @@ export const lessonMeta: LessonMeta[] = [
   "title": "HTTP in depth: methods, status codes, headers, caching",
   "minutes": 60,
   "level": "Beginner",
-  "summary": "Speak HTTP fluently: pick the right method and status code, use headers on purpose, and make pages fast with caching instead of bigger servers.",
+  "summary": "Speak HTTP fluently: choose methods that can be retried safely, return status codes machines can branch on, use headers on purpose, and make responses fast with validators and caching instead of bigger servers.",
   "terms": [
    {
     "term": "Method (verb)",
-    "def": "What the client wants to do: GET (read), POST (create/submit), PUT (replace), PATCH (partial update), DELETE (remove)."
+    "def": "What the client wants to do: GET (read), POST (create/submit), PUT (replace), PATCH (partial update), DELETE (remove), HEAD (headers only), OPTIONS (capabilities)."
    },
    {
     "term": "Status code",
-    "def": "A 3-digit result: 2xx success, 3xx redirect, 4xx client mistake, 5xx server failure."
+    "def": "A 3-digit result: 1xx informational, 2xx success, 3xx redirect, 4xx client mistake, 5xx server failure."
    },
    {
     "term": "Header",
-    "def": "A `Name: value` line of metadata on a request or response, e.g. `Content-Type: application/json`."
+    "def": "A `Name: value` line of metadata on a request or response, e.g. `Content-Type: application/json`. Header names are case-insensitive."
    },
    {
     "term": "Safe method",
-    "def": "A method that should not change server state (GET, HEAD, OPTIONS)."
+    "def": "A method that must not change server state: GET, HEAD, OPTIONS and TRACE. Crawlers, prefetchers and caches may call safe methods freely."
    },
    {
     "term": "Idempotent",
-    "def": "Doing it once or ten times leaves the same result: GET, PUT, DELETE are idempotent; POST is not."
+    "def": "Repeating the same request leaves the same server state: GET, HEAD, OPTIONS, PUT and DELETE are idempotent; POST is not; PATCH depends on the patch format."
    },
    {
     "term": "Cache-Control",
-    "def": "The header that tells browsers and CDNs whether and how long they may reuse a response."
+    "def": "The header that tells browsers and CDNs whether and how long they may reuse a response, and whether they must revalidate it."
    },
    {
     "term": "ETag",
@@ -153,20 +175,36 @@ export const lessonMeta: LessonMeta[] = [
    {
     "term": "Cookie",
     "def": "A small value the server asks the browser to store and send back on later requests, typically to keep you logged in."
+   },
+   {
+    "term": "Freshness lifetime",
+    "def": "How long a cached response may be reused without contacting the server: `max-age` applies to every cache, `s-maxage` only to shared caches, and `Expires` is an absolute date."
+   },
+   {
+    "term": "Validator",
+    "def": "A cheap fingerprint of a stored response, either an ETag (strong or weak) or a Last-Modified date, that a conditional request sends back so the server can answer 304 instead of resending the body."
+   },
+   {
+    "term": "Revalidation",
+    "def": "A conditional request made after freshness expires: `If-None-Match` or `If-Modified-Since`. A 304 means reuse the stored body; a 200 means replace it."
+   },
+   {
+    "term": "Vary",
+    "def": "A response header listing request headers that are part of the cache key. `Vary: Accept-Encoding` keeps gzip and identity versions apart; `Vary: *` makes a response effectively uncacheable."
    }
   ],
   "interview": [
    {
-    "q": "What is the difference between PUT and PATCH, and which is idempotent?",
-    "a": "PUT replaces the whole resource with the representation you send; PATCH applies a partial change. PUT is idempotent by definition. PATCH may or may not be, depending on the patch format (e.g. 'set name=X' is, 'increment counter' is not)."
+    "q": "Explain safe vs idempotent. Why does it matter for retries and caching, and where does PATCH fit?",
+    "a": "Safe means no intended state change: GET, HEAD, OPTIONS and TRACE. Idempotent means repeating the request leaves the same server state: GET, HEAD, OPTIONS, PUT and DELETE. Safe implies idempotent, but PUT and DELETE are idempotent without being safe. This matters because browsers prefetch GETs, crawlers follow them, proxies retry dropped connections and mobile clients retry timeouts. A safe GET can be called speculatively; an idempotent PUT or DELETE can be retried after a timeout; a POST cannot, because a retry may create a second order or charge a card twice. That is why payment APIs accept an Idempotency-Key on POST and return the original result for a duplicate key. DELETE is still idempotent even though the second call returns 404: the server state is the same, only the response differs. PATCH is idempotent only if the patch is, so 'set name to Asha' is idempotent while 'increment the counter' is not. PUT also replaces the whole representation, so a concurrent edit can be lost; use If-Match with an ETag to return 412 rather than clobber someone else's change."
    },
    {
-    "q": "How does browser caching work?",
-    "a": "The server sets Cache-Control (max-age, no-cache, no-store, private/public) and validators (ETag, Last-Modified). Within max-age the browser reuses the response without a request. After that, it revalidates with If-None-Match/If-Modified-Since and gets 304 if unchanged. Fingerprinted assets can be cached for a year because a change produces a new URL."
+    "q": "Walk through a conditional GET from the first response to a 304. What exactly is sent, what is saved, and when does it not help?",
+    "a": "The first response is 200 with a body, a validator (ETag and often Last-Modified) and a freshness policy such as max-age=60. The cache stores the body, the validator and the headers. Within max-age it reuses the response with no request at all. After expiry it sends a conditional request: If-None-Match with the stored ETag, and optionally If-Modified-Since; when both are present, If-None-Match wins. The server compares the validator with the current representation. If unchanged it returns 304 with the validators and updated cache headers but no body, and the cache reuses the stored bytes. If changed it returns 200 with a new body and new validators. A 304 saves bandwidth but still costs a round trip, and the server still has to compute the validator, so derive it from a cheap version column or a body hash rather than an expensive query. A weak ETag is compared semantically, which lets gzip and identity representations share one validator. For writes, If-Match is the optimistic-lock counterpart: a stale ETag produces 412. It does not help when the CDN ignores the condition (as Wikimedia's edge did in our test), when the response is personalised and must not be stored, or when the round trip itself is the bottleneck; stale-while-revalidate exists for that last case."
    },
    {
-    "q": "When would you return 409 vs 422?",
-    "a": "422 when the request is understood but invalid by itself (missing name, bad email). 409 when it is valid but conflicts with current state (email already registered, optimistic-lock version mismatch)."
+    "q": "Design the status codes and caching for a users API. Walk through create, read, replace, delete, validation, duplicate, rate limit and an upstream failure.",
+    "a": "POST /users: 201 with Location on success, 400 for malformed JSON, 422 for missing or invalid fields, 409 when the email is already registered, 429 with Retry-After when the client exceeds its budget. GET /users/{id}: 200 with the user, ETag and Cache-Control: private, no-cache (or no-store if it contains sensitive data), 404 when missing, 401 when there is no valid token, 403 when the caller may not read that user. PUT /users/{id}: 200 with the replaced representation or 204 if there is nothing to return, 404 when the id does not exist, 409 for a version conflict and 412 when If-Match fails. DELETE: 204 on success, 404 when already gone (still idempotent). Wrong method: 405 with Allow. Server-side failures: 500 for an unhandled bug with a request id and no stack trace, 502 when an upstream returns a bad response, 503 when a dependency is down or the service is overloaded with Retry-After, 504 when an upstream times out. On caching: hashed assets get public, max-age=31536000, immutable; HTML gets no-cache; /api/me gets private, no-cache plus an ETag; anything personalised must never get public or s-maxage. Add Vary: Accept-Encoding for compressed responses and Vary: Authorization (or a private directive) if a shared cache could otherwise mix users. CORS goes on the response, but it is not authorization: the token check still happens on the server."
    }
   ],
   "quickCheck": [
@@ -187,12 +225,12 @@ export const lessonMeta: LessonMeta[] = [
     "prompt": "Which header lets `app.3f9a1c.js` be reused for a year without any request?",
     "options": [
      "Cache-Control: no-cache",
-     "Cache-Control: max-age=31536000, immutable",
      "ETag: \"3f9a1c\"",
+     "Cache-Control: max-age=31536000, immutable",
      "Expires: 0"
     ],
-    "answer": 1,
-    "explanation": "no-cache forces revalidation every time; max-age with immutable allows reuse without asking."
+    "answer": 2,
+    "explanation": "no-cache forces revalidation every time; ETag alone only makes revalidation cheap; max-age with immutable allows reuse without asking."
    },
    {
     "kind": "bug",
@@ -212,21 +250,24 @@ export const lessonMeta: LessonMeta[] = [
    }
   ],
   "cheatSheet": [
-   "GET safe; PUT/DELETE idempotent; POST neither.",
+   "GET safe; PUT/DELETE idempotent; POST neither; PATCH depends on the patch.",
    "2xx ok · 3xx redirect · 4xx client must change · 5xx server failed.",
-   "201 + Location for create; 204 for delete; 422 validation; 409 conflict; 429 rate limit.",
-   "401 = who are you? 403 = I know you, and no.",
+   "201 + Location for create; 204 for delete; 422 validation; 409 conflict; 429 + Retry-After.",
+   "401 = who are you? 403 = I know you, and no. 404 can hide a 403.",
    "Assets: hashed name + max-age=31536000, immutable. HTML: no-cache.",
-   "ETag + If-None-Match → 304, no body.",
+   "ETag + If-None-Match → 304, no body. If-Match → 412 on a lost race.",
+   "no-cache stores then revalidates; no-store never stores; private = browser only; s-maxage = shared cache only.",
+   "stale-while-revalidate serves stale while refreshing; Vary: Accept-Encoding keys compressed variants.",
    "Cookies: HttpOnly, Secure, SameSite. Private data: no-store.",
-   "CORS is enforced by browsers, not servers."
+   "CORS is enforced by browsers, not servers. Preflight is OPTIONS; credentials forbid `*`."
   ],
   "capstone": {
    "title": "DevAtlas: API conventions document",
    "criteria": [
     "Error format with example",
-    "Table of situation → status code",
-    "Caching rule for static assets, HTML and API"
+    "Table of situation → status code, including 409/412/422/429",
+    "Caching rule for static assets, HTML and API",
+    "Method/idempotency table and cookie flags"
    ]
   },
   "codeSamples": 9,
@@ -235,114 +276,137 @@ export const lessonMeta: LessonMeta[] = [
  {
   "id": "0.2.1",
   "title": "The terminal: files, permissions, processes and pipes",
-  "minutes": 60,
+  "minutes": 90,
   "level": "Beginner",
-  "summary": "Navigate a server, read logs, fix permissions, find the process eating your CPU and chain small commands into powerful ones.",
+  "summary": "Read a server like a map: the filesystem hierarchy, inodes and links, permissions in octal, processes and signals, file descriptors, pipes, `find`/`grep`/`xargs`, `$PATH`, and the five minutes of triage that fix a 3 a.m. incident.",
   "terms": [
    {
     "term": "Shell",
-    "def": "The program that reads your commands and runs them, usually bash or zsh."
+    "def": "The program that reads a command line, expands it and starts the processes it names. `bash`, `zsh` and `sh` are shells; the shell is also a small programming language."
    },
    {
     "term": "Path",
-    "def": "The location of a file. Absolute paths start at / (the root); relative paths start from the current directory."
+    "def": "Where a file lives. Absolute paths start at `/`; relative paths start at the current directory. `.` is here, `..` is the parent. `$PATH` is a different thing: a list of directories searched for commands."
+   },
+   {
+    "term": "inode",
+    "def": "The filesystem's record for one file: mode, owner, group, size, timestamps, link count and pointers to data blocks. It has no name; names live in directories."
+   },
+   {
+    "term": "Hard link",
+    "def": "A second directory entry for the same inode. Both names are equal, and the data disappears only when the link count reaches zero. Same filesystem only, never for directories."
+   },
+   {
+    "term": "Symbolic link",
+    "def": "A small file whose content is a path to another name (shown as `l` in `ls -l`). It can cross filesystems and can dangle when its target is removed."
    },
    {
     "term": "Permission bits",
-    "def": "Read (r=4), write (w=2) and execute (x=1) rights for the owner, the group and everyone else."
+    "def": "Nine bits in three triads: read (4), write (2), execute (1) for the owner, the group and others. On a directory, `x` means you may enter it and `r` means you may list its names."
    },
    {
-    "term": "Process",
-    "def": "A running program with an ID (PID), an owner, memory and open files."
+    "term": "umask",
+    "def": "The mask subtracted from the mode a program asks for: files start at 666 and directories at 777, then `mode & ~umask` is applied. `022` gives 644/755, `077` gives 600/700."
    },
    {
-    "term": "stdin / stdout / stderr",
-    "def": "The three standard streams: input, normal output and error output (file descriptors 0, 1 and 2)."
+    "term": "Special bits",
+    "def": "setuid (4) runs a binary with the file owner's effective uid; setgid (2) runs with the file's group and makes new files in a directory inherit that group; sticky (1) on a directory lets only a file's owner delete it."
+   },
+   {
+    "term": "File descriptor",
+    "def": "A small integer naming an open file inside one process. 0 is stdin, 1 stdout, 2 stderr; redirection means pointing those numbers at something else."
    },
    {
     "term": "Pipe",
-    "def": "The | operator: sends one command's stdout into the next command's stdin."
+    "def": "A kernel buffer with two ends. `a | b` connects a's stdout to b's stdin, so b reads a's output as it is produced, with no temporary file."
+   },
+   {
+    "term": "Process",
+    "def": "A running program: a pid, a parent pid, a user, a current directory, a file-descriptor table, memory and a state. `fork` copies the process; `exec` replaces its program."
    },
    {
     "term": "Signal",
-    "def": "A message to a process, e.g. SIGTERM (please stop) or SIGKILL (stop now, cannot be caught)."
+    "def": "An asynchronous notification to a process: SIGTERM (15) asks it to stop and can be handled, SIGKILL (9) cannot be caught, SIGINT (2) is Ctrl+C, SIGHUP (1) is a hangup."
    }
   ],
   "interview": [
    {
-    "q": "A server is slow. What commands do you run first?",
-    "a": "uptime (load average), top or htop (CPU and memory per process), df -h (disk full?), free -h (memory and swap), then the application's logs with tail or journalctl. I am narrowing down which resource is saturated before guessing."
+    "q": "Walk me from `cat /var/log/app.log` to bytes appearing on your terminal. Where can it fail?",
+    "a": "The shell first parses the line: it is not a builtin, so it searches `$PATH` left to right for `cat`, then forks and execs `/usr/bin/cat`. The kernel resolves `/var/log/app.log` one component at a time through directories, checking `x` on each, then opens the final inode with `O_RDONLY` after the permission check (owner, then group, then other). `cat` gets that file as descriptor 3 (0, 1 and 2 are already stdin, stdout, stderr), reads it in chunks - served from the page cache if it was read recently, otherwise from disk with readahead - and calls `write(1, ...)`. If stdout is a terminal, descriptor 1 points at the pty and the terminal emulator renders the bytes; if it is a pipe, the write blocks when the 64 KiB buffer fills. Failures map cleanly: `command not found` (PATH), `Permission denied` (mode or a missing `x` on a parent directory), `No such file or directory` (a missing name, or a dangling symlink), `Is a directory`, or SIGPIPE/141 if the reader exits early. `cat` is also unnecessary here: `exec 3< file` plus a read, or `less`, avoids loading the whole stream into a terminal that cannot display it."
    },
    {
-    "q": "What is the difference between SIGTERM and SIGKILL?",
-    "a": "SIGTERM asks the process to stop and can be handled, so the app can finish requests and clean up. SIGKILL is handled by the kernel, cannot be caught, and stops the process immediately. Kubernetes and systemd send SIGTERM first and SIGKILL after a grace period."
+    "q": "`df` says the filesystem is 100% full, but `du` adds up to only 12 GB on a 100 GB disk. What are the possible causes, and how do you prove each one?",
+    "a": "Start by separating 'blocks allocated' from 'names that exist', because `df` reads the filesystem counter and `du` walks names. The classic cause is a deleted file still held open: the inode and blocks survive until the last descriptor closes, so `du` cannot see it. Prove it with `lsof +L1` (link count zero) or `lsof | grep deleted`, then truncate the file with `: > /proc/<pid>/fd/<n>` or restart the holder. Second, `du` may be looking at the wrong mount: use `df -h` with no arguments and `du -x` to stay on one filesystem, and remember that a mount can hide data underneath it. Third, the filesystem may reserve blocks for root - ext4 reserves about 5% by default, visible in `tune2fs -l` and adjustable with `tune2fs -m`. Fourth, apparent size and allocated size differ for sparse files and for files with inline/compressed extents: compare `du` with `du --apparent-size`, and `stat` `Size` with `Blocks`. Fifth, snapshots, overlay lower layers, or a filesystem inside a file can consume space that `du` on the visible tree cannot attribute. Finally, check `df -i`: inode exhaustion produces the same 'No space left on device' error while blocks are free. Order the checks by likelihood and cost, and capture `df -h`, `df -i`, `du -xh --max-depth=1` and `lsof +L1` before deleting anything."
    },
    {
-    "q": "Explain chmod 640.",
-    "a": "Owner read and write (6 = 4+2), group read (4), others nothing (0). Typical for config files a service group must read but not change."
+    "q": "Explain SIGTERM versus SIGKILL, and how you would make a service shut down cleanly under Kubernetes or systemd.",
+    "a": "SIGTERM is a catchable request: the process can run a handler that stops accepting new work, drains in-flight requests, flushes buffers, closes database connections and removes its lock or pid file, then exits 0. SIGKILL is enforced by the kernel: no handler runs, no cleanup happens, the process disappears with status 137 (128 + 9), and anything it was writing may be half-written. That is why the escalation order is SIGTERM, wait for the configured grace period, then SIGKILL. In Kubernetes that means a `terminationGracePeriodSeconds` longer than your worst drain, a `preStop` hook if the load balancer needs time to stop routing, and a process that actually receives the signal: if the container command is a shell that spawns the app, the shell is PID 1, may ignore SIGTERM, and the pod is killed hard. Use the exec form, or a tiny init such as `tini`/`dumb-init`, so signals reach your process and zombies are reaped. Make the handler idempotent and bounded: stop the listener, fail readiness, wait for a deadline, then exit. Test it with `docker stop` and check the exit status: 143 is a clean signal death, 137 means you ran out of grace. And never open with `kill -9` on a database or a queue worker; it turns a restart into a recovery."
    }
   ],
   "quickCheck": [
    {
     "kind": "output",
-    "prompt": "What does this print?",
+    "prompt": "What octal mode is this file?",
     "code": {
      "lang": "bash",
-     "code": "printf 'b\\na\\nb\\nb\\n' | uniq -c"
+     "code": "ls -l app.env\n-rw-r----- 1 deploy deploy 412 Oct 22 03:10 app.env"
     },
     "options": [
-     "3 b and 1 a",
-     "1 b, 1 a, 2 b",
-     "1 a and 3 b",
-     "a b"
+     "644",
+     "640",
+     "604",
+     "750"
     ],
     "answer": 1,
-    "explanation": "uniq only collapses adjacent duplicates. That is why you almost always run sort before uniq -c."
+    "explanation": "Owner rw = 6, group r = 4, others none = 0. The leading `-` is the file type, not a permission bit."
    },
    {
     "kind": "mcq",
-    "prompt": "Which permission is right for a file containing database passwords that only the app user should read?",
+    "prompt": "Given an existing `app.log`, you run `ln app.log hard.log` and `ln -s app.log soft.log`, then `rm app.log`. What happens?",
     "options": [
-     "777",
-     "644",
-     "600",
-     "755"
+     "Both links break",
+     "hard.log still has the data; soft.log dangles",
+     "soft.log still has the data; hard.log dangles",
+     "Both links keep working because the inode is still open"
     ],
-    "answer": 2,
-    "explanation": "600 = owner read/write, nobody else. 644 lets every user on the machine read it."
+    "answer": 1,
+    "explanation": "A hard link is another name for the same inode, so the data survives until the link count reaches zero. A symlink stores a path, so it points at a name that no longer exists."
    },
    {
     "kind": "bug",
-    "prompt": "This script deleted far more than intended. Why?",
+    "prompt": "This cron entry works when you run the script by hand but fails every night with `command not found`. Why?",
     "code": {
      "lang": "bash",
-     "code": "#!/bin/bash\nBUILD_DIR=$(get_build_dir)   # returned nothing\nrm -rf $BUILD_DIR/*"
+     "code": "# crontab\n*/5 * * * * backup.sh"
     },
     "options": [
-     "rm needs sudo",
-     "Empty variable made it `rm -rf /*`",
-     "The * is not expanded",
-     "Bash does not support $()"
+     "cron cannot execute shell scripts",
+     "cron's PATH does not include the directory containing backup.sh",
+     "The script needs a `.exe` extension",
+     "cron runs as a user without a home directory"
     ],
     "answer": 1,
-    "explanation": "An empty variable expands to nothing, leaving `/*`. Use set -u and \"${BUILD_DIR:?}\" so the script fails instead."
+    "explanation": "cron starts with a minimal PATH that usually omits `/usr/local/bin`, `~/bin` and your project directory. Use an absolute path or set PATH at the top of the crontab, and quote paths that contain spaces."
    }
   ],
   "cheatSheet": [
-   "Find: `ls -lah`, `find . -name '*.log'`, `grep -rn 'text' .`",
-   "Read: `less`, `tail -n 100`, `tail -f`, `head`",
-   "Count and rank: `sort | uniq -c | sort -rn | head`",
-   "Disk and memory: `df -h`, `du -sh *`, `free -h`",
-   "Processes: `ps aux`, `top`, `kill PID`, `kill -9` only as last resort",
-   "Permissions: r=4 w=2 x=1; owner/group/others; secrets = 600",
-   "Streams: `>` overwrite, `>>` append, `2>&1` merge stderr",
-   "Safe scripts: `set -euo pipefail` and quote every variable"
+   "Hierarchy: `/etc` config, `/var` changing data and logs, `/run` per-boot state, `/tmp` sticky scratch, `/usr` programs, `/proc` and `/sys` kernel views.",
+   "Identity: `ls -li`, `stat file`, `df -i`; an inode number is unique only within one filesystem.",
+   "Links: `ln target name`, `ln -s target name`, `readlink -f name`, `find . -xtype l` for dangling links.",
+   "Modes: r=4 w=2 x=1, owner/group/other; directories need `x` to traverse and `w`+`x` to create or delete entries.",
+   "Change access: `chmod 640 file`, `chmod u+x file`, `chown app:app file`, `umask 027` before creating files.",
+   "Special bits: `4755` setuid, `2775` setgid directory, `1777` sticky shared directory.",
+   "Descriptors: 0 stdin, 1 stdout, 2 stderr; `>` truncate, `>>` append, `2>` errors, `2>&1` merge (stdout first), `<` read, `/dev/null` discard, `exec 3>` open.",
+   "Processes: `ps -eo pid,ppid,stat,cmd --forest`, `jobs -l`, `fg`, `bg`, `kill PID`, `kill -l`; 143 = SIGTERM, 137 = SIGKILL.",
+   "Pipes: `a | b`, `tee file`, `set -o pipefail`; `sort` buffers everything, `grep`/`awk` stream, a closed reader gives SIGPIPE (141).",
+   "3 a.m.: `df -h`, `df -i`, `du -xh --max-depth=1 | sort -h`, `lsof +L1`, `top -b -n1`, `free -h`, `journalctl -u service --since '10 min ago'`."
   ],
   "capstone": {
    "title": "DevAtlas step 2: project scripts",
    "criteria": [
     "Uses `command -v` to detect tools",
-    "Exits non-zero if any tool is missing",
+    "Directories and files are created with explicit restrictive modes",
+    "Exits non-zero if any tool is missing, with install hints on stderr",
     "Documented in the README"
    ]
   },
@@ -352,51 +416,71 @@ export const lessonMeta: LessonMeta[] = [
  {
   "id": "0.2.2",
   "title": "Shell scripting and SSH",
-  "minutes": 60,
+  "minutes": 90,
   "level": "Beginner",
-  "summary": "Turn repeated commands into safe, reusable bash scripts, and connect to remote servers securely with SSH keys and a tidy SSH config.",
+  "summary": "Turn repeated commands into safe, reusable bash scripts, and connect to remote servers securely with SSH keys, aliases, agents and tunnels.",
   "terms": [
    {
     "term": "Shebang",
-    "def": "The first line `#!/usr/bin/env bash` that tells the OS which interpreter runs the script."
+    "def": "The first line `#!/usr/bin/env bash` that tells the kernel which interpreter runs the script. `env` looks up `bash` on `PATH` instead of hard-coding `/bin/bash`."
    },
    {
     "term": "Exit code",
-    "def": "A number a command returns: 0 means success, anything else means failure. Read it with `$?`."
+    "def": "A number from 0 to 255 that a process returns: 0 means success, anything else means failure. Read it with `$?` or test it with `if` and `&&`."
    },
    {
     "term": "Environment variable",
-    "def": "A named value passed to processes, e.g. `PATH` or `DATABASE_URL`. Set with `export NAME=value`."
+    "def": "A named value inherited by child processes, e.g. `PATH` or `DATABASE_URL`. `NAME=value` sets it for one command, `export NAME=value` passes it to every child."
+   },
+   {
+    "term": "Word splitting",
+    "def": "After expansion, bash splits an unquoted value on `IFS` (spaces, tabs, newlines by default). This is why `rm $file` can delete the wrong things and `\"$file\"` is the rule."
+   },
+   {
+    "term": "set -euo pipefail",
+    "def": "Three safety switches: exit on a failed command (`-e`), error on an unset variable (`-u`), and fail a pipeline if any stage fails (`-o pipefail`), not just the last one."
+   },
+   {
+    "term": "trap",
+    "def": "Run a command when the shell receives a signal or exits, e.g. `trap 'rm -rf \"$tmp\"' EXIT`. It is how a script cleans up even when it fails halfway."
+   },
+   {
+    "term": "mktemp",
+    "def": "Create a uniquely named file or directory safely with `O_CREAT|O_EXCL`, so another process cannot guess or pre-create the name. `mktemp -d` makes a private directory."
+   },
+   {
+    "term": "Idempotent",
+    "def": "A script that can run twice and leave the system in the same state. `mkdir -p`, `ln -sfn` and check-before-write are the everyday tools for it."
    },
    {
     "term": "SSH",
-    "def": "Secure Shell: an encrypted protocol to log in to and run commands on remote machines."
+    "def": "Secure Shell: an encrypted protocol for logging in to and running commands on remote machines, and for tunnelling other connections."
    },
    {
     "term": "Key pair",
-    "def": "A private key (keep secret, on your machine) and a public key (safe to share, placed on servers)."
+    "def": "A private key (secret, on your machine, mode 600) and a public key (safe to share, placed in the server's `~/.ssh/authorized_keys`). Ed25519 is the modern default."
+   },
+   {
+    "term": "ssh-agent",
+    "def": "A background process that holds decrypted private keys for your session, so you type the passphrase once. The client asks the agent to sign; the key itself never leaves it."
    },
    {
     "term": "known_hosts",
-    "def": "A file where SSH remembers each server's identity, so it can warn you if a server suddenly changes (possible attack)."
-   },
-   {
-    "term": "cron",
-    "def": "The Unix scheduler that runs commands on a timetable, e.g. every night at 02:00."
+    "def": "A client-side file where SSH remembers each server's host key, so it can shout if a server suddenly presents a different identity (possible interception)."
    }
   ],
   "interview": [
    {
-    "q": "What does set -euo pipefail do?",
-    "a": "-e exits when a command fails, -u errors on unset variables, -o pipefail makes a pipeline fail if any command in it fails (not just the last). Together they turn silent failures into immediate stops."
+    "q": "What exactly does set -euo pipefail do, and where does it still surprise people?",
+    "a": "`-e` (errexit) makes the shell exit when a simple command returns non-zero; `-u` (nounset) makes an unset variable an error; `-o pipefail` makes a pipeline return the rightmost non-zero status instead of the last command's. The surprises are all in the exceptions. `-e` does not trigger when the command's status is being tested: `if grep -q x file`, `while read`, `cmd || fallback`, `cmd && next`, and `! cmd` are allowed to fail. It is also suppressed for the body of a function or subshell whose own status is tested, which is why a `set -e` function can appear to run past a failure. A pipeline only sees `pipefail` at the pipeline level; inside, each stage still has its own status, available in `PIPESTATUS`. `-u` rejects `$UNSET` but accepts `${UNSET:-default}`. And none of them runs your cleanup: that is `trap ... EXIT`, which fires on normal exit, `exit N`, and an erexit abort, but not on SIGKILL. In practice: turn all three on, keep cleanup in a trap, and write explicit `if ! cmd; then ...` around the failures you intend to handle."
    },
    {
-    "q": "How does SSH key authentication work?",
-    "a": "The server holds my public key in authorized_keys. During login it sends a challenge; my client signs it with the private key, and the server verifies the signature with the public key. The private key never leaves my machine, so nothing reusable crosses the network."
+    "q": "Walk me through what happens when you run ssh devatlas-prod, including how the server and you prove who you are.",
+    "a": "The client first resolves `devatlas-prod` through `~/.ssh/config` (HostName, User, Port, IdentityFile; first value wins, command-line options beat the file). It opens TCP to the port, both sides exchange banners and negotiate algorithms, then perform a key exchange such as Curve25519 to derive symmetric keys. The server signs the exchange with its host key; the client compares that key with `known_hosts`. On first contact it stores the key (trust on first use); on a later mismatch it refuses with a loud warning and does not fall back to a password. Once the transport is authenticated, user authentication begins: with publickey, the client offers a key and signs a session-specific challenge. If the agent is loaded, the agent signs without exposing the private key; otherwise the client prompts for the passphrase to decrypt the key locally. The server checks the key in `authorized_keys` and checks permissions. The private key never crosses the network; the server only ever sees a public key and a signature. Only then is a session channel opened - a shell, an `scp`/`rsync` subsystem, or a forwarded TCP channel for `-L`/`-R`/`-D`."
    },
    {
-    "q": "How would you give a contractor temporary server access?",
-    "a": "Their own key or, better, a short-lived certificate or cloud session tool (SSM, Azure Bastion) with an expiry, scoped to the needed hosts, logged, and removed at the end. Never a shared password or key."
+    "q": "How would you give a contractor temporary access, and why are passwords over SSH a bad idea even though the connection is encrypted?",
+    "a": "Start from least privilege and an expiry. Create a personal account, add their own public key, and prefer a short-lived SSH certificate from a CA (or a cloud session tool such as SSM Session Manager or Azure Bastion) scoped to the hosts and commands they need. Add `from=` or `restrict` options in `authorized_keys`, log sessions, and remove the access at the end - a calendar reminder plus a check that `authorized_keys` no longer contains their key. Never a shared account, shared key or shared password: you cannot revoke one person, you cannot attribute actions, and every rotation touches everyone. Passwords are encrypted inside the SSH tunnel, so the risk is not eavesdropping on the wire; it is that passwords are guessable and reusable across services, they can be phished, they have no per-device binding, and a server with password auth enabled exposes an internet-facing guessing surface. Keys (especially hardware-backed or certificate-based) remove those properties, and disabling password and keyboard-interactive auth removes the surface entirely."
    }
   ],
   "quickCheck": [
@@ -414,7 +498,7 @@ export const lessonMeta: LessonMeta[] = [
      "false"
     ],
     "answer": 1,
-    "explanation": "Without pipefail, a pipeline's status is the last command's (true), so set -e does not trigger. With set -o pipefail it would exit."
+    "explanation": "Without pipefail, a pipeline's status is the last command's (true), so set -e does not trigger. With `set -o pipefail` the pipeline returns 1 and the script exits."
    },
    {
     "kind": "bug",
@@ -430,94 +514,112 @@ export const lessonMeta: LessonMeta[] = [
      "rm needs -f"
     ],
     "answer": 1,
-    "explanation": "Word splitting turns it into `rm old report.txt`. Use rm \"$file\"."
+    "explanation": "Unquoted expansion splits on IFS, so the command becomes `rm old report.txt`. Use `rm -- \"$file\"`: the quotes stop splitting and `--` stops a leading dash from becoming an option."
    },
    {
     "kind": "mcq",
-    "prompt": "Which file on the SERVER lists the public keys allowed to log in?",
+    "prompt": "ssh prints `WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!` and refuses to connect. What is the right first step?",
     "options": [
-     "~/.ssh/known_hosts",
-     "~/.ssh/config",
-     "~/.ssh/authorized_keys",
-     "~/.ssh/id_ed25519"
+     "Delete the known_hosts entry and reconnect",
+     "Verify out of band that the server was rebuilt or its host key rotated",
+     "Reconnect with StrictHostKeyChecking=no",
+     "Switch the server to password authentication"
     ],
-    "answer": 2,
-    "explanation": "authorized_keys lists allowed public keys. known_hosts (client side) remembers server identities."
+    "answer": 1,
+    "explanation": "The warning means the server presented a different host key than the one you trusted. Confirm the change through another channel (console, a colleague, a rebuild ticket) before removing the old entry with `ssh-keygen -R host`. Disabling the check removes the protection entirely."
    }
   ],
   "cheatSheet": [
    "Start scripts with `#!/usr/bin/env bash` and `set -euo pipefail`.",
-   "Quote every variable: \"$var\". Run ShellCheck.",
-   "`${VAR:-default}` default; `${VAR:?message}` required.",
-   "`trap 'cleanup' EXIT` for temp files. Errors to stderr: `>&2`.",
-   "`&&` run if success, `||` run if failure. Exit 0 = success.",
-   "`ssh-keygen -t ed25519`; public key → authorized_keys / GitHub.",
-   "`~/.ssh/config` Host aliases; never share private keys.",
-   "cron: absolute paths, log output, minimal environment."
+   "Quote every expansion: `\"$var\"`, `\"$@\"`, `\"${arr[@]}\"`. Unquoted means splitting plus globbing.",
+   "`${VAR:-default}` supplies a default; `${VAR:?message}` fails if unset. Exit 2 for usage, 1 for runtime failure.",
+   "`tmp=$(mktemp -d)` + `trap 'rm -rf \"$tmp\"' EXIT` cleans up on success, failure and signals you trap.",
+   "`if ! cmd; then` for expected failures; `cmd && next` / `cmd || fallback`; check `$?` only right after the command.",
+   "`getopts \":nr:h\" opt` + `case` parses flags; `shift $((OPTIND - 1))` leaves positional arguments.",
+   "Idempotent: `mkdir -p`, `ln -sfn`, write only when content differs, `flock -n` for cron overlap.",
+   "`ssh-keygen -t ed25519`; public key to `~/.ssh/authorized_keys`; private key stays local at mode 600.",
+   "`~/.ssh/config` Host aliases; debug with `ssh -G host`; host-key warning means verify, not delete.",
+   "Forward: `-L` local, `-R` remote, `-D` SOCKS; copy: `scp` one file, `rsync -az --delete` for directories."
   ],
   "capstone": {
    "title": "DevAtlas: Makefile-style task script",
    "criteria": [
     "Usage message for unknown commands",
-    "set -euo pipefail",
-    "Documented in README"
+    "set -euo pipefail and a single `run` helper for dry-run",
+    "Documented in README, with the cron line"
    ]
   },
-  "codeSamples": 10,
+  "codeSamples": 9,
   "file": "l0-2-2.ts"
  },
  {
   "id": "0.3.1",
   "title": "Git: commits, branches, merges and conflicts",
-  "minutes": 60,
+  "minutes": 90,
   "level": "Beginner",
-  "summary": "Understand Git's data model so commands stop being magic: snapshots, branches as pointers, merges, rebases and calm conflict resolution.",
+  "summary": "Understand Git's data model so commands stop being magic: blobs, trees, commits and tags, refs and HEAD, the index, branches as pointers, three-way merges, rebase, reset, revert and the reflog.",
   "terms": [
    {
     "term": "Repository",
-    "def": "A project folder plus its full history, stored in the hidden .git directory."
+    "def": "A project folder plus its full history, stored in the hidden .git directory. The working files are just a checkout of one commit."
+   },
+   {
+    "term": "Blob",
+    "def": "Git's name for one file's contents, stored once and keyed by a hash of that content. A blob has no filename and no permissions; the tree supplies those."
+   },
+   {
+    "term": "Tree",
+    "def": "A directory listing object: one entry per file or subdirectory, each with a mode, an object type, a hash and a name. Trees may point at blobs or at other trees."
    },
    {
     "term": "Commit",
-    "def": "A snapshot of all tracked files, with an author, message and a pointer to its parent commit(s). Identified by a hash."
+    "def": "A snapshot of all tracked files, with an author, message, timestamps and a pointer to its parent commit(s). Identified by a hash of that content."
    },
    {
-    "term": "Staging area (index)",
-    "def": "The list of changes that will go into the next commit. `git add` puts changes there."
+    "term": "Tag",
+    "def": "A named label on an object. A lightweight tag is just a ref; an annotated tag is its own object with a tagger, date and message pointing at a commit."
    },
    {
-    "term": "Branch",
-    "def": "A movable label pointing at one commit. Creating a branch costs a few bytes."
+    "term": "Ref",
+    "def": "A human-readable name for a hash, stored under .git/refs/heads, .git/refs/tags or .git/packed-refs. Branches, tags and remote-tracking branches are all refs."
    },
    {
     "term": "HEAD",
-    "def": "Points to the branch (or commit) you currently have checked out."
+    "def": "A symbolic ref: normally .git/HEAD contains `ref: refs/heads/main`. If it contains a hash instead, you are in detached HEAD."
+   },
+   {
+    "term": "Index (staging area)",
+    "def": "The binary file .git/index listing the mode, blob hash and path that the next commit will contain. `git add` updates it; `git commit` turns it into a tree."
+   },
+   {
+    "term": "Branch",
+    "def": "A movable label pointing at one commit, stored as a single hash. Creating or deleting a branch costs a few bytes, not a copy of the project."
    },
    {
     "term": "Merge",
-    "def": "Combines two lines of history, creating a merge commit with two parents when needed."
+    "def": "Combining two lines of history from their common ancestor. A fast-forward slides the pointer when the target has no new commits; otherwise a three-way merge creates a commit with two parents."
    },
    {
     "term": "Rebase",
-    "def": "Replays your commits on top of another commit, producing new commits with new hashes."
+    "def": "Replaying your commits on top of another commit. Because the parent changes, every replayed commit gets a new hash."
    },
    {
-    "term": "Remote",
-    "def": "Another copy of the repository, usually on GitHub, named origin by default."
+    "term": "Reflog",
+    "def": "An append-only local log of every position HEAD and each branch has pointed at, kept in .git/logs. It is the safety net for resets, rebases and amends."
    }
   ],
   "interview": [
    {
-    "q": "Merge vs rebase: when do you use each?",
-    "a": "Both integrate changes. Merge preserves history exactly and adds a merge commit; it is safe on shared branches. Rebase rewrites your commits onto a new base for a linear history; use it on local or personal branches before opening a PR, never on commits others have pulled."
+    "q": "Explain Git's object model, and why a commit is not a diff.",
+    "a": "Git stores four object types, each named by a hash of its own bytes: blobs hold file contents, trees hold directory entries (mode, type, hash, name), commits hold a tree plus parent pointers plus author/committer/message, and annotated tags label an object with metadata. Because names are content hashes, identical content is stored once and any edit produces a new object, so history is immutable. A commit is a full snapshot via its root tree, not a patch; unchanged files are the same blobs referenced again, which is why snapshots are cheap. Diffs are computed on demand by comparing a tree with its parent's tree, which is what `git log -p` and `git show` do. That model explains branches (one hash), cheap branching, merge commits (two parent lines) and why rebasing produces new hashes: the replayed commit has a different parent, so its bytes and hash differ."
    },
    {
-    "q": "What is a merge conflict and how do you resolve it?",
-    "a": "Git cannot automatically combine changes when both sides edited the same lines. I open the conflicted files, understand both intents, write the correct final code, remove markers, run tests, then git add and commit. If unsure about intent, I ask the other author."
+    "q": "Walk me through a merge conflict: what state is the repository in, and how do you resolve it safely?",
+    "a": "Git found the merge base, compared base-to-ours and base-to-theirs, and could not combine one or more hunks. It stops before committing and writes three versions of each conflicted path into the index at stages 1 (base), 2 (ours) and 3 (theirs); `git status` shows `UU` and `git ls-files -u` shows the entries. The working file contains markers separating your side from theirs, and with `merge.conflictStyle=diff3` also the base, which is usually the fastest way to understand intent. I read both sides and the base, decide the correct behaviour - often a business question, so I ask the author - edit the file to the final content, remove the markers, and verify with tests or a run. Then `git add` collapses the three entries to stage 0 and `git commit` uses the prepared merge message. `git merge --abort` is available at any point before the commit and restores the pre-merge state; `ORIG_HEAD` records it."
    },
    {
-    "q": "How do you undo a commit that is already pushed to main?",
-    "a": "git revert <hash>, which creates a new commit undoing it. It keeps history intact for everyone, unlike reset plus force-push."
+    "q": "A teammate force-pushed a rebased branch that you had already pulled. What happened, and how do you recover without losing either side's work?",
+    "a": "Their commits were replayed onto a new base, so every commit has a new hash. My local branch still points at the old commits, and my new work sits on top of them. Git now sees two histories that contain the same logical changes with different hashes, so a normal pull tries to merge duplicates or reports divergence. First I stop and inspect: `git log --oneline --graph --all` and `git reflog` show both lines and where my work is. To adopt their history I create a safety branch at my current tip (`git branch rescue`), then `git fetch` and `git reset --hard origin/branch`, and finally replay only my own new commits with `git cherry-pick <old-hash>` (or `git rebase --onto`), resolving anything that conflicts. If their force-push was accidental, the remote's reflog is not available to me, but their local reflog or a CI artifact may hold the old tip. The lasting fix is process: use `--force-with-lease`, never rewrite a branch under review, and protect the shared branch."
    }
   ],
   "quickCheck": [
@@ -531,48 +633,52 @@ export const lessonMeta: LessonMeta[] = [
      "A folder inside .git/objects"
     ],
     "answer": 1,
-    "explanation": "A branch is a reference containing one commit hash. That is why creating branches is instant."
+    "explanation": "A branch is a ref containing one commit hash. That is why creating branches is instant and deleting one loses no commits that another ref still reaches."
    },
    {
     "kind": "output",
-    "prompt": "You run `git commit --amend` on a commit with hash a1b2c3. What happens to the hash?",
+    "prompt": "After `git reset --soft HEAD~1`, `git status --short` prints `M  notes.md` (letter, then two spaces). What is true?",
     "options": [
-     "Stays a1b2c3",
-     "A new commit with a new hash replaces it",
-     "Git refuses",
-     "The hash gets a suffix"
+     "The commit and the edit are both gone",
+     "The branch moved back one commit and the change is staged",
+     "The change is unstaged but present",
+     "The file is untracked"
     ],
     "answer": 1,
-    "explanation": "Commits are immutable. Amending creates a new commit with new content, so a new hash. The old one still exists in reflog for a while."
+    "explanation": "`--soft` moves only the branch ref. The index still holds the change, so column one is M and column two is blank."
    },
    {
     "kind": "bug",
-    "prompt": "A developer deleted `.env` and committed. The API key is still exposed. Why?",
+    "prompt": "You rebase your feature branch and push. A teammate who had pulled it now sees duplicated commits and a broken merge. Why?",
     "options": [
-     "GitHub caches files",
-     "The key is still in earlier commits in history",
-     "Deleting files needs git rm --cached",
-     "It is not exposed"
+     "The remote is corrupt",
+     "Rebase created new commits with new hashes, so their old commits and yours are different objects",
+     "Rebase deleted their local branch",
+     "Git needs a full clone after any rebase"
     ],
     "answer": 1,
-    "explanation": "History keeps every snapshot. Rotate the key first (assume it is compromised), then clean history if needed."
+    "explanation": "Rewriting changes the parent, so the hash changes. Anyone holding the old commits now has a divergent history; only rewrite branches nobody else has pulled."
    }
   ],
   "cheatSheet": [
-   "Commit = snapshot + parent pointer. Branch = pointer to a commit. HEAD = where you are.",
-   "Flow: edit → `git add` → `git commit` → `git push`.",
-   "`git switch -c name` creates a branch; `git log --oneline --graph --all` shows the graph.",
-   "Conflict: edit to final content, remove markers, `git add`, `git commit`. Or `git merge --abort`.",
-   "Undo: `restore` (uncommitted), `revert` (pushed), `reflog` (lost work).",
-   "Never rebase or force-push shared branches. Use `--force-with-lease` on your own.",
-   "Secrets in history are leaked secrets: rotate them."
+   "Blob = file content, tree = directory, commit = tree + parent(s), tag = labelled object. All named by a content hash.",
+   "A branch is one hash in `.git/refs/heads`; HEAD is `ref: refs/heads/<branch>`. Creating a branch writes a few bytes.",
+   "`git cat-file -p <hash>` pretty-prints any object; `git ls-tree -r HEAD` walks a snapshot; `git cat-file -t` gives the type.",
+   "Status: `A ` staged, ` M` unstaged, `??` untracked, `UU` conflicted. `git diff` = worktree vs index; `git diff --staged` = index vs HEAD.",
+   "Fast-forward = the target is an ancestor, so the pointer slides. `--no-ff` forces a merge commit; `--ff-only` refuses anything else.",
+   "Three-way merge = base + ours + theirs. The merge commit has two parents; the first is 'ours' for revert and `--first-parent`.",
+   "Conflict: read both sides (use diff3), edit to the final behaviour, remove markers, `git add`, `git commit`. `git merge --abort` bails out.",
+   "Rebase rewrites commits (new hashes) for a linear history. Only on branches nobody else has pulled.",
+   "`reset --soft` moves the pointer, `--mixed` also resets the index, `--hard` also overwrites files. `revert` adds an inverse commit - safe when shared.",
+   "`git reflog` is local and time-limited (90 days by default). It recovers commits, never uncommitted edits."
   ],
   "capstone": {
    "title": "DevAtlas step 3: repository hygiene",
    "criteria": [
     ".gitignore excludes node_modules, bin/obj, __pycache__, .env",
     "main is protected",
-    "One merged PR with a clear title and description"
+    "One merged PR with a clear title and description",
+    "`git check-ignore -v .env` proves the ignore rule matches"
    ]
   },
   "codeSamples": 9,
@@ -581,47 +687,71 @@ export const lessonMeta: LessonMeta[] = [
  {
   "id": "0.3.2",
   "title": "Team workflow: pull requests and code review",
-  "minutes": 50,
+  "minutes": 75,
   "level": "Beginner",
-  "summary": "Work like a professional team: small branches, pull requests that are easy to review, code review that finds real problems, and CI that guards main.",
+  "summary": "Work like a professional team: small branches, PRs a reviewer can actually read, code review that finds real problems, CI and CODEOWNERS as guardrails, and a merge strategy you can revert.",
   "terms": [
    {
     "term": "Pull request (PR)",
-    "def": "A request to merge one branch into another, with a place for discussion, review and automated checks. GitLab calls it a merge request."
+    "def": "A request to merge one branch into another, with a place for discussion, review and automated checks. GitLab calls it a merge request; the Git object it compares is just two commits."
    },
    {
     "term": "Code review",
-    "def": "Another engineer reads your change before it merges, to catch bugs, share knowledge and keep the codebase consistent."
+    "def": "Another engineer reads your change before it merges, to catch bugs, share knowledge and keep the codebase consistent. It is a gate on the main branch, not a rubber stamp."
    },
    {
-    "term": "CI (Continuous Integration)",
-    "def": "Automation that builds and tests every change, e.g. GitHub Actions."
+    "term": "Review latency",
+    "def": "The time from requesting review to the first substantive response. Most of it is queue time, not reading time, which is why small PRs and fast reviewer response matter more than reviewer brilliance."
+   },
+   {
+    "term": "Trunk-based development",
+    "def": "Everyone integrates into one shared branch (trunk/main) at least daily. Branches live hours, not weeks, and incomplete work hides behind feature flags instead of long-lived branches."
+   },
+   {
+    "term": "Feature flag",
+    "def": "A runtime switch that turns code paths on or off without deploying again. It lets unfinished work merge safely, decouples deploy from release, and gives you a rollback lever that is faster than a revert."
+   },
+   {
+    "term": "GitFlow",
+    "def": "A branching model with long-lived develop and main branches plus release/* and hotfix/* branches. Suited to versioned, scheduled releases; costly for a team deploying several times a day."
+   },
+   {
+    "term": "Release branch",
+    "def": "A branch cut for a version that receives only fixes (release/1.4). Common for mobile apps, libraries and regulated software where several versions must be supported at once."
    },
    {
     "term": "Branch protection",
-    "def": "Rules on a branch like main: require a PR, passing checks and approvals before merging."
+    "def": "Rules on main such as 'require a PR, passing checks, an approval and an up-to-date branch'. Enforced by the platform, so a tired human cannot bypass the process."
+   },
+   {
+    "term": "CODEOWNERS",
+    "def": "A file that maps paths to people or teams and auto-requests their review. With code-owner review required, risky paths (auth, migrations, infrastructure) cannot merge without the owner's approval."
+   },
+   {
+    "term": "Merge commit",
+    "def": "A commit with two parents that ties a branch back into main and preserves every original commit and SHA. The history shows exactly when and where work joined."
    },
    {
     "term": "Squash merge",
-    "def": "Combines all commits of a PR into one commit on main."
+    "def": "Combines all commits of a PR into one new commit on main. The PR becomes one revertible unit; the individual commits remain reachable from the PR but not from main's history."
    },
    {
-    "term": "Fork",
-    "def": "Your own copy of someone else's repository, used to contribute to projects you cannot push to."
+    "term": "Stacked PR",
+    "def": "A chain of small PRs where each branch is based on the one below it. Each review sees only its layer; the bottom merges first, then the next is retargeted and rebased."
    }
   ],
   "interview": [
    {
-    "q": "What do you look for when reviewing code?",
-    "a": "Correctness and edge cases first, then whether tests cover the behaviour, security issues (input handling, secrets, authz), design fit and naming, and finally performance where it matters. Style should be handled by tools. I phrase comments as suggestions or questions and mark which ones block."
+    "q": "Why do small PRs win? Be specific about review latency, defect detection and rollback.",
+    "a": "Start with the queue. Review capacity is finite, and a 2,000-line diff does not receive ten times the attention of a 200-line one; it waits longer and gets a shallower read. Small changes fit into the gaps in a reviewer's day and can be finished in one sitting, so the first response is faster and the review is more thorough. Defect detection follows working memory: a reviewer can hold one behaviour, its tests and its edge cases in mind, but not forty files of mixed intent. Google's public guide puts a reasonable change around 100 lines and 1,000 as usually too large (verified in this lesson). Rollback is the third mechanism: a revert or a bisect is proportional to the change, and one logical commit is one unit to undo. Then show judgement: 'small' means one self-contained change including tests, not a game with line counts, and a 400-line module can be more reviewable than 200 lines spread across 40 files. For a genuinely large feature, split by layer or stack the PRs rather than asking for a heroic review."
    },
    {
-    "q": "How do you handle a large feature without a giant PR?",
-    "a": "Break it into vertical or layered steps that each merge safely: schema first, then backend behind a feature flag, then UI. Each PR is reviewable and deployable; the flag keeps unfinished work hidden."
+    "q": "Compare trunk-based development, GitHub flow, GitFlow and release branches. How do you choose, and how does the merge strategy fit?",
+    "a": "Trunk-based means branches live hours, everyone integrates into main several times a day, and unfinished work is hidden behind flags; it needs fast CI and monitoring, and it pays off when deploys are frequent. GitHub flow is the lighter version: one short-lived feature branch and a PR into main, with main as the deployable branch. GitFlow adds long-lived develop and release branches plus hotfixes, which suits scheduled, versioned releases but adds merge ceremony and integration debt for a continuously deployed service. Release branches keep patching supported versions after main moves on, which mobile, libraries and regulated software need, at the cost of landing every fix twice. My default for a web service is trunk or GitHub flow with feature flags; I add release branches only when a support promise exists. The merge strategy should match: a merge commit preserves the branch and the exact commits (useful for larger integration points, but reverting needs `-m 1`); squash gives one clean revertible commit per small PR; rebase gives linear history but rewrites SHAs, so never rebase a shared branch. Pick one per repository and enforce it in the ruleset rather than relying on habit."
    },
    {
-    "q": "Squash vs merge commits?",
-    "a": "Squash gives one clean commit per PR on main, easy to revert and read; you lose intermediate commits. Merge commits keep full history. Many teams squash for small PRs; the important thing is consistency."
+    "q": "Walk me through reviewing a 600-line PR you do not understand. What do you do before approving?",
+    "a": "First, do not approve. Read the description and the linked issue, then ask for the split if the change mixes concerns; a 600-line diff is acceptable only when it is one coherent change. Open the files-changed view and read the tests before the implementation, because they state what the author believes the code does; ask which test would fail if the production change were wrong. Use the three-dot diff so you see the branch's delta against the merge base, and read risky paths first: auth, input validation, migrations, configuration, anything logging user data. Check for secrets, missing authorization, error paths, empty inputs and concurrency. Run the change locally if it is user-facing, or ask for a recording. Label comments: `issue: (blocking)` for correctness or security, `question:` when you need intent, `nitpick: (non-blocking)` for taste, `praise:` when something is genuinely good. If part of the change is outside your expertise, say which parts you reviewed and ask for the right owner. Approve only when you understand the change and the tests, or when your remaining comments are explicitly non-blocking and you trust the author to address them."
    }
   ],
   "quickCheck": [
@@ -635,7 +765,7 @@ export const lessonMeta: LessonMeta[] = [
      "Checking trailing whitespace"
     ],
     "answer": 1,
-    "explanation": "Formatting is automated. Humans add value on correctness, design and security."
+    "explanation": "Formatting belongs to a formatter. Humans add value on correctness, design, security and tests."
    },
    {
     "kind": "mcq",
@@ -647,7 +777,7 @@ export const lessonMeta: LessonMeta[] = [
      "Runs tests"
     ],
     "answer": 1,
-    "explanation": "Combined with branch protection, it can require owner approval for those paths."
+    "explanation": "It routes review requests. Combined with a ruleset that requires code-owner review, it also blocks merging without the owner's approval."
    },
    {
     "kind": "bug",
@@ -659,77 +789,100 @@ export const lessonMeta: LessonMeta[] = [
      "Signed commits"
     ],
     "answer": 1,
-    "explanation": "Approval alone does not ensure tests pass. Require the CI check too."
+    "explanation": "Approval alone does not ensure the tests pass. Require the named CI checks and an up-to-date branch, and dismiss stale approvals when new commits arrive."
    }
   ],
   "cheatSheet": [
-   "Flow: branch → small commits → PR → CI + review → squash merge → delete branch.",
-   "PR description: what, why, how to test, risk.",
-   "`git add -p` = self-review while staging.",
-   "Protect main: PR required, CI required, approvals required.",
-   "Automate style; review correctness, design, security, tests.",
-   "Label comments: blocking / question / nit / praise.",
-   "Under ~400 lines per PR; split big features behind flags."
+   "Flow: branch → small commits (tests included) → draft/ready PR → CI + review → squash or merge → delete branch → deploy.",
+   "PR size: one self-contained change; ~100 lines is comfortable, ~400 is a practical ceiling, 1,000 is a review nobody can do well.",
+   "Description: imperative title, linked issue, why, what changed, how to test, risk/rollback, screenshots for UI.",
+   "Read a PR in this order: description → tests → risky paths → rest of the diff. Ask what would fail if the code broke.",
+   "Comment labels: `issue: (blocking)`, `question:`, `suggestion:`, `nitpick: (non-blocking)`, `praise:`.",
+   "Branching: trunk or GitHub flow for continuous delivery; GitFlow for scheduled/versioned releases; release branches for supported old versions.",
+   "Merge: merge commit preserves SHAs (revert with `-m 1`), squash gives one revertible commit, rebase gives linear history but rewrites SHAs.",
+   "Protect main: PR required, named checks required, branch up to date, stale approvals dismissed, no force pushes; CODEOWNERS for risky paths.",
+   "Stacks: each PR targets the branch below; merge bottom-up, retarget and rebase the rest; keep the stack shallow.",
+   "Review within one business day; fix or explain every comment, resolve threads, and never merge on an approval that predates the last push."
   ],
   "capstone": {
    "title": "DevAtlas: team-ready repository",
    "criteria": [
     "Template and CODEOWNERS committed",
-    "CI runs on PRs",
-    "main requires the CI check"
+    "CI and the size gate run on PRs",
+    "main requires the CI checks and blocks direct pushes"
    ]
   },
-  "codeSamples": 10,
+  "codeSamples": 9,
   "file": "l0-3-2.ts"
  },
  {
   "id": "0.4.1",
   "title": "VS Code, package managers and Docker Desktop",
-  "minutes": 55,
+  "minutes": 80,
   "level": "Beginner",
-  "summary": "Set up a professional, reproducible development environment on Windows, macOS or Linux, and understand version managers, lock files and dev containers.",
+  "summary": "Build a reproducible development environment: pin editors and runtimes, understand package managers and lock files, isolate Python with venvs, and run the whole toolchain in Docker and dev containers.",
   "terms": [
    {
     "term": "Package manager (OS)",
-    "def": "Installs programs on your computer: winget (Windows), Homebrew (macOS), apt (Ubuntu)."
+    "def": "Installs programs on your computer: winget (Windows), Homebrew (macOS), apt (Ubuntu). It manages machine-wide tools, not a project's libraries."
    },
    {
     "term": "Package manager (language)",
-    "def": "Installs libraries for a project: npm for JavaScript, pip/uv for Python, NuGet for .NET, cargo for Rust."
+    "def": "Installs libraries for one project: npm/pnpm/yarn for JavaScript, pip/uv/poetry for Python, cargo for Rust, NuGet for .NET."
    },
    {
     "term": "Lock file",
-    "def": "Records the exact versions of every dependency installed (package-lock.json, poetry.lock, Cargo.lock) so every machine gets the same ones."
+    "def": "Records the exact version, download URL and integrity hash of every installed dependency (package-lock.json, pnpm-lock.yaml, poetry.lock, Cargo.lock) so every machine resolves the same tree."
    },
    {
     "term": "Version manager",
-    "def": "Lets you install and switch between versions of a runtime per project, e.g. nvm or fnm for Node, pyenv for Python."
+    "def": "Installs and switches runtimes per project, e.g. nvm or fnm for Node, pyenv for Python, rustup for Rust. It works by putting a shim folder first on PATH."
    },
    {
-    "term": "WSL 2",
-    "def": "Windows Subsystem for Linux: a real Linux kernel running alongside Windows, the recommended way to do backend and DevOps work on Windows."
+    "term": "Semantic versioning",
+    "def": "MAJOR.MINOR.PATCH. MAJOR may break compatibility, MINOR adds features compatibly, PATCH fixes bugs. Ranges such as ^1.4.2 rely on this promise."
+   },
+   {
+    "term": "Direct dependency",
+    "def": "A library you named yourself in package.json, pyproject.toml or Cargo.toml. It is the part of the tree you chose."
+   },
+   {
+    "term": "Transitive dependency",
+    "def": "A library pulled in by one of your dependencies. Express depends on body-parser, which depends on qs; you ship all three even though you named only Express."
+   },
+   {
+    "term": "Virtual environment",
+    "def": "A folder holding its own interpreter link and site-packages. Activating it only changes PATH and VIRTUAL_ENV, so project libraries never mix with the system Python."
+   },
+   {
+    "term": "Docker image",
+    "def": "An immutable, layered filesystem plus metadata (entrypoint, env, ports). It is a build artifact identified by a digest, not a running program."
+   },
+   {
+    "term": "Docker container",
+    "def": "A running (or stopped) process created from an image, with its own namespaces and a thin writable layer. Deleting the container throws that layer away."
+   },
+   {
+    "term": "Docker volume",
+    "def": "Storage managed by Docker with a lifecycle separate from any container. A volume survives docker rm and is how a database keeps its data."
    },
    {
     "term": "Dev container",
-    "def": "A Docker-based development environment described in `.devcontainer/devcontainer.json`, so everyone develops inside the same container."
-   },
-   {
-    "term": "PATH",
-    "def": "The list of folders your shell searches for commands. 'command not found' usually means the program is not on PATH."
+    "def": "A Docker-based development environment described in .devcontainer/devcontainer.json, so every teammate's editor, runtime and extensions match."
    }
   ],
   "interview": [
    {
-    "q": "Why commit a lock file?",
-    "a": "Version ranges in the manifest can resolve to different versions over time. The lock file records the exact versions resolved, so every developer, CI run and deployment installs the same tree. That makes builds reproducible and avoids surprise breakage from upstream releases."
+    "q": "A teammate says \"it works on my machine\" but CI fails. How do you diagnose it?",
+    "a": "Treat it as drift in four layers and compare them in order. First runtimes: print node -v, python --version, dotnet --list-sdks on both sides and compare with .nvmrc, .python-version and global.json. Second dependencies: confirm the lock file is committed, compare its hash, and run npm ci locally to see whether the manifest and lock actually agree. Third operating system: CPU architecture, libc, native build tools and line endings can all differ; a package with a compiled extension may have been built for the wrong platform. Fourth configuration and state: missing environment variables, a different database version, a cache or a migration that only exists locally. Then reproduce: run the failing command in the same container image CI uses, or open the repo in a dev container. The fix is not 'install the same things by hand'; it is to encode the answer in version files, a lock file, .env.example and a setup script, so the next person does not repeat the investigation."
    },
    {
-    "q": "npm install vs npm ci?",
-    "a": "npm install resolves ranges and may update the lock file. npm ci deletes node_modules and installs exactly what the lock file says, failing if it does not match package.json. Use ci in automation."
+    "q": "Explain lock files, semantic versioning, and the difference between direct and transitive dependencies.",
+    "a": "Semantic versioning is a promise about compatibility: MAJOR may break, MINOR adds features, PATCH fixes bugs. A manifest uses that promise to state a range, such as ^1.4.2 meaning any 1.x at or above 1.4.2. The registry keeps publishing, so the same range can resolve differently next month; the lock file records the exact decision, including each package's version, tarball URL and integrity hash. Direct dependencies are the ones you named; transitive dependencies are pulled in by them, and you ship both. Express depends on body-parser, which depends on qs, so a lock file can pin dozens of packages for a one-line manifest. npm install may update the lock when the manifest changes; npm ci installs the lock exactly and fails on a mismatch, which is why CI uses it. pnpm, yarn, uv, Poetry and cargo all implement the same contract with different file names, and applications commit the lock while reusable libraries usually do not, because a library must remain compatible with its consumers' choices."
    },
    {
-    "q": "How would you make onboarding fast for a multi-language repo?",
-    "a": "Pin runtime versions with version files, commit lock files, provide .env.example, add a setup script that checks prerequisites and installs dependencies, and offer a dev container so the whole toolchain is one click."
+    "q": "What is the difference between an image, a container and a volume, and where do secrets belong?",
+    "a": "An image is an immutable build artifact: ordered read-only layers plus metadata such as the entrypoint, environment and exposed ports, identified by a digest. A container is one process created from that image, with its own namespaces, cgroup limits and a thin writable layer. Deleting the container discards the writable layer but leaves the image. A volume is storage with a lifecycle independent of any container, mounted in at run time; that is where a database's files must live, because docker rm must not destroy data. On Windows and macOS, Docker Desktop runs a Linux VM and all Linux containers share its kernel, so containers are isolated processes, not separate kernels. Secrets should be injected as environment variables at run time or read from a secret manager; they must not be committed in .env, baked into an image with ARG or ENV, or copied into a layer, because image history and Git history both retain them. If a secret did leak, rotate it: removing the file is not enough."
    }
   ],
   "quickCheck": [
@@ -743,7 +896,7 @@ export const lessonMeta: LessonMeta[] = [
      "node_modules/.bin"
     ],
     "answer": 1,
-    "explanation": "package.json has ranges; the lock file has exact resolved versions."
+    "explanation": "package.json has ranges; the lock file has exact resolved versions, URLs and integrity hashes."
    },
    {
     "kind": "bug",
@@ -755,85 +908,113 @@ export const lessonMeta: LessonMeta[] = [
      "You need to reinstall Git"
     ],
     "answer": 1,
-    "explanation": "Version managers work through PATH. Run `nvm use 22` or `nvm alias default 22`."
+    "explanation": "Version managers work through PATH. Run `nvm use 22` or `nvm alias default 22`, and restart the editor so its terminal inherits the new PATH."
    },
    {
     "kind": "mcq",
-    "prompt": "What should go in the repository to document required configuration without leaking secrets?",
+    "prompt": "You delete a database container with `docker rm`. What happens to its data?",
     "options": [
-     ".env",
-     ".env.example with placeholder values",
-     "A screenshot of your terminal",
-     "Nothing"
+     "It stays in the image",
+     "It stays in the container's writable layer forever",
+     "It is gone unless the data was in a named volume or bind mount",
+     "Docker automatically moves it to a volume"
     ],
-    "answer": 1,
-    "explanation": "An example file lists every variable with fake values; real values stay out of Git."
+    "answer": 2,
+    "explanation": "The writable layer belongs to the container and is deleted with it. Volumes and bind mounts have separate lifecycles."
    }
   ],
   "cheatSheet": [
-   "Tools per machine; runtimes per project (.nvmrc, .python-version, global.json); deps per project (lock files).",
-   "Commit lock files for apps; use `npm ci` in CI.",
-   "Windows: WSL 2, code in ~/code inside Linux.",
-   "`.env.example` in Git, `.env` never.",
-   "`.editorconfig` for shared formatting basics.",
-   "Dev container = whole toolchain in Docker, one click.",
-   "'command not found' → check PATH and which version manager is active."
+   "Tools per machine; runtimes per project (.nvmrc, .python-version, global.json); deps per project (manifest + lock file); config per environment (.env, never committed).",
+   "Semver: ^1.4.2 = 1.x, ~1.4.2 = 1.4.x, 1.4.2 = exact. The manifest states intent; the lock file records the tree.",
+   "Commit lock files for apps; use `npm ci` / `uv sync --frozen` / `cargo build --locked` in CI.",
+   "Direct deps you named; transitive deps they pulled in. `npm ls <pkg>` explains why a package is present.",
+   "`python -m venv .venv` then activate; `sys.prefix` is the venv, `sys.base_prefix` is the base interpreter.",
+   "Windows: WSL 2, code in ~/code inside Linux; restart VS Code after PATH changes.",
+   "Image = immutable layers; container = running process + writable layer; volume = data that outlives the container.",
+   "Dev container = editor server + toolchain in Docker, one click; commit devcontainer.json and .vscode/ tasks and launch files.",
+   "`.env.example` in Git, `.env` never; secrets at runtime or from a secret manager, not in ARG, ENV or image layers.",
+   "'command not found' → check PATH and which version manager is active; `which -a` shows the candidates."
   ],
   "capstone": {
    "title": "DevAtlas: pinned and containerised dev setup",
    "criteria": [
     "All version files committed",
     "Dev container opens and runs setup.sh",
-    "README setup section tested on a clean clone"
+    "README setup section tested on a clean clone",
+    "No secret appears in any committed file or image layer"
    ]
   },
-  "codeSamples": 10,
+  "codeSamples": 9,
   "file": "l0-4-1.ts"
  },
  {
   "id": "1.1.1",
   "title": "Python essentials: data model, functions and type hints",
-  "minutes": 70,
+  "minutes": 85,
   "level": "Beginner",
-  "summary": "Learn how Python really handles variables, mutability and functions, and write typed, tested code like a professional from day one.",
+  "summary": "Learn how Python really handles names, objects, mutability and functions, why mutable defaults leak state, and how to use type hints as a checked contract without pretending they are runtime validation.",
   "terms": [
    {
     "term": "Object",
-    "def": "Everything in Python is an object with a type, a value and an identity (id)."
+    "def": "Everything in Python is an object with a type, a value and an identity (`id`). Functions, classes and modules are objects too."
    },
    {
     "term": "Name / variable",
-    "def": "A label bound to an object. Assignment never copies; it binds a name to an object."
+    "def": "A label bound to an object. Assignment never copies; it binds a name to an object (or rebinds it to a different one)."
+   },
+   {
+    "term": "Identity",
+    "def": "Which object a name refers to. `id(x)` returns an integer that is unique while the object lives; `a is b` is true only when both names refer to the same object."
    },
    {
     "term": "Mutable",
-    "def": "Can be changed in place: list, dict, set. Immutable: int, str, tuple, frozenset."
+    "def": "Can be changed in place: list, dict, set, bytearray. Immutable: int, float, str, tuple, frozenset, bytes."
+   },
+   {
+    "term": "Aliasing",
+    "def": "Two or more names (or containers) referring to the same object. A change made through one alias is visible through the others."
+   },
+   {
+    "term": "Copy (shallow vs deep)",
+    "def": "A shallow copy (`list(a)`, `a[:]`, `a.copy()`, `copy.copy(a)`) builds a new outer container whose elements are still shared. `copy.deepcopy(a)` recursively copies the graph, so nested objects are independent."
+   },
+   {
+    "term": "Function signature",
+    "def": "The parameter list plus annotations and return type. `/` marks positional-only parameters, `*` marks the start of keyword-only parameters, `*args` collects extra positionals and `**kwargs` collects extra keywords."
+   },
+   {
+    "term": "First-class function",
+    "def": "A function is an ordinary object: you can store it in a list or dict, pass it to another function, return it, and attach attributes to it."
    },
    {
     "term": "Type hint",
     "def": "An annotation like `def f(x: int) -> str` that documents types and lets tools such as mypy or pyright check them. Python does not enforce hints at runtime."
    },
    {
-    "term": "Virtual environment",
-    "def": "An isolated folder of packages for one project, created with `python3 -m venv .venv`."
+    "term": "Gradual typing",
+    "def": "Typing a program one boundary at a time. Untyped values are treated as `Any`, which is compatible with everything, so checks improve as you add hints instead of demanding a rewrite."
    },
    {
     "term": "Comprehension",
-    "def": "Compact syntax to build a list/dict/set: `[x*x for x in nums if x > 0]`."
+    "def": "Compact syntax to build a list/dict/set: `[x*x for x in nums if x > 0]`. The result is a new object, which is often the cleanest way to avoid mutating while iterating."
+   },
+   {
+    "term": "Virtual environment",
+    "def": "An isolated folder of packages for one project, created with `python3 -m venv .venv`."
    }
   ],
   "interview": [
    {
-    "q": "Explain mutable vs immutable types with an example of a bug.",
-    "a": "Lists, dicts and sets are mutable; ints, strings and tuples are not. The classic bug is a mutable default argument: the default list is created once at definition time and shared by every call, so items accumulate. Use None and create the list inside."
+    "q": "Explain names, objects, mutability and the mutable-default bug, with a concrete example.",
+    "a": "Start with the model: assignment binds a name to an object, and `b = a` makes two names refer to the same object, which you can prove with `id(a) == id(b)` and `a is b`. A list is mutable, so `b.append(3)` is visible through `a`; an int or string is immutable, so `n += 1` or `s += 'x'` creates a new object and rebinds only that name. Slices and `.copy()` create a new outer container but share the elements, so a nested list is still aliased; `copy.deepcopy` copies the graph and uses a memo to preserve internal sharing and handle cycles. A default such as `def add_tag(tag, tags=[])` is evaluated once when the `def` executes and stored in `add_tag.__defaults__`, so every call appends to the same list; the same applies to methods and to `datetime.now()` defaults. The fix is `tags=None` and a fresh list inside the function, and a test that calls the function twice and asserts the second result is independent. If asked to go deeper, mention that `+=` reflects this distinction: `list.__iadd__` mutates, `str.__add__` rebinds, and `is` compares identity while `==` compares value."
    },
    {
-    "q": "Is Python pass-by-value or pass-by-reference?",
-    "a": "Neither exactly: it is pass-by-object-reference. The function gets a reference to the same object. Mutating it is visible to the caller; reassigning the parameter only rebinds the local name."
+    "q": "Is Python pass-by-value or pass-by-reference? What does a function actually receive, and how do signatures change the answer?",
+    "a": "Neither label fits exactly; the usual description is pass-by-object-reference or call by sharing. The caller evaluates an object and the callee binds a new local name to that same object. Mutating the object (`items.append(x)`, `d['k'] = v`) is visible to the caller because there is one object; rebinding the parameter (`items = items + [x]`, `items = None`) only changes the local name. That is why a function can safely return a new list without changing its input. The signature controls how arguments are matched, not whether they are copied: `/` makes parameters positional-only, `*` makes the rest keyword-only, `*args` collects extra positionals into a tuple and `**kwargs` collects extra keywords into a dict; those containers are new, but the objects inside them are still shared. Defaults are bound once at definition time, which is why a mutable default is shared across calls. A strong answer ends with the practical rule: copy at the boundary if you need ownership, and return new values instead of mutating arguments."
    },
    {
-    "q": "Why use type hints if Python ignores them at runtime?",
-    "a": "They document intent, enable editor autocomplete, and let static checkers catch type errors before runtime. Libraries like Pydantic also use them for runtime validation."
+    "q": "If Python ignores type hints at runtime, why use them at all? When are they worth the cost?",
+    "a": "Hints are a static contract. A checker such as mypy or pyright reads them with the rest of the program and proves that calls, returns and attribute access are consistent; that catches refactor breakage in code paths your tests may never execute, and it powers editor completion and rename. At runtime the interpreter only stores them in `__annotations__`, so `def double(x: int) -> int` still accepts a string; enforcement is a separate concern handled by Pydantic, dataclass validation or explicit checks at a trust boundary. Gradual typing is the economic argument: unannotated code is `Any`, which is compatible with everything, so you can annotate public functions and data models first and tighten over time. They are worth it for shared modules, APIs, data models and anything that will be refactored; they are often not worth it for a short script or heavily dynamic metaprogramming. The cost is annotation effort, checker configuration and occasional fights with third-party stubs, so use targeted ignores with error codes rather than blanket `Any`."
    }
   ],
   "quickCheck": [
@@ -887,39 +1068,59 @@ export const lessonMeta: LessonMeta[] = [
    }
   ],
   "cheatSheet": [
-   "Variables are names bound to objects; assignment never copies.",
-   "Mutable: list, dict, set. Immutable: int, float, str, tuple.",
-   "Never use mutable defaults; use `None`.",
-   "`==` compares value, `is` compares identity (use for None).",
-   "One venv per project: `python3 -m venv .venv`.",
-   "dict/set lookups are O(1) average; list `in` is O(n).",
-   "Type hints + mypy/pyright + pytest from day one."
+   "Variables are names bound to objects; `b = a` never copies, it aliases.",
+   "`==` compares value, `is` compares identity (use `is` only for None and sentinels).",
+   "Mutable: list, dict, set. Immutable: int, float, str, tuple, frozenset.",
+   "`a[:]`, `list(a)` and `a.copy()` are shallow; `copy.deepcopy(a)` copies nested objects too.",
+   "Never use mutable defaults; default to `None` and create the object inside. Defaults run once at `def` time and live in `__defaults__` / `__kwdefaults__`.",
+   "Parameters are local names for the caller's objects: mutation escapes, rebinding does not.",
+   "Signature marks: `/` positional-only, `*` keyword-only, `*args` tuple, `**kwargs` dict.",
+   "Hints live in `__annotations__` and are not enforced; mypy/pyright check them statically.",
+   "Gradual typing: `Any` disables checks. Annotate public boundaries and data models first.",
+   "One venv per project (`python3 -m venv .venv`), pinned deps, pytest + mypy in CI; dict/set lookups are O(1) average, list `in` is O(n)."
   ],
   "capstone": {
    "title": "DevAtlas step 4: the AI service skeleton",
    "criteria": [
     "pytest passes from a clean checkout following the README",
     "mypy passes",
-    ".venv is gitignored"
+    ".venv is gitignored",
+    "Add one test that calls `add_tag` twice and proves there is no shared state"
    ]
   },
-  "codeSamples": 10,
+  "codeSamples": 9,
   "file": "l1-1-1.ts"
  },
  {
   "id": "1.1.2",
   "title": "OOP, dataclasses and protocols",
-  "minutes": 65,
+  "minutes": 75,
   "level": "Beginner",
-  "summary": "Model real domains with classes, use dataclasses to remove boilerplate, prefer composition over inheritance, and use Protocols to write code that is easy to test and swap.",
+  "summary": "Model real domains with classes, use dataclasses to remove boilerplate, understand __eq__/__hash__, prefer composition over inheritance, and use Protocols to write code that is easy to test and swap.",
   "terms": [
    {
     "term": "Class",
     "def": "A blueprint that bundles data (attributes) and behaviour (methods). An object is one instance of it."
    },
    {
+    "term": "Instance attribute",
+    "def": "A value stored on one object, usually in `obj.__dict__`. `self.title = title` creates one per instance."
+   },
+   {
+    "term": "Class attribute",
+    "def": "A value stored on the class and shared by every instance unless an instance shadows it. A mutable class attribute is shared mutable state."
+   },
+   {
     "term": "self",
-    "def": "The first parameter of a method: the specific object the method is called on."
+    "def": "The first parameter of an instance method: the specific object the method is called on. Python passes it for you when you write `obj.method()`."
+   },
+   {
+    "term": "__repr__",
+    "def": "The developer-facing string for an object, shown by `repr(obj)` and inside containers. Without it you get `<Point object at 0x...>`, which hides the state."
+   },
+   {
+    "term": "__hash__",
+    "def": "Returns an integer used by `set` and `dict`. Objects that compare equal must return the same hash. Defining `__eq__` sets `__hash__` to `None` unless you define one."
    },
    {
     "term": "Dataclass",
@@ -927,7 +1128,7 @@ export const lessonMeta: LessonMeta[] = [
    },
    {
     "term": "Inheritance",
-    "def": "A class reusing and extending another class (`class Admin(User)`). An 'is-a' relationship."
+    "def": "A class reusing and extending another class (`class Admin(User)`). An 'is-a' relationship, checked nominally by the type system."
    },
    {
     "term": "Composition",
@@ -938,22 +1139,26 @@ export const lessonMeta: LessonMeta[] = [
     "def": "A typing.Protocol describes the methods an object must have, without requiring inheritance (structural typing, 'duck typing' that the type checker can verify)."
    },
    {
-    "term": "Encapsulation",
-    "def": "Keeping an object's data consistent by changing it only through its methods."
+    "term": "ABC",
+    "def": "Abstract base class from `abc`. A nominal base you must inherit from; `@abstractmethod` makes instantiation fail until every abstract method is implemented."
+   },
+   {
+    "term": "Structural typing",
+    "def": "Compatibility decided by members, not by ancestry: if it has `send(to, text)`, it can be used where a Notifier is expected."
    }
   ],
   "interview": [
    {
     "q": "Composition vs inheritance?",
-    "a": "Inheritance models 'is-a' and shares implementation, but couples the subclass to the parent's internals. Composition models 'has-a': an object holds collaborators and delegates. Composition is more flexible and testable, so I default to it and keep inheritance shallow for real hierarchies like exceptions."
+    "a": "Inheritance models 'is-a' and shares implementation, but the child depends on the parent's internals, so a base-class change can break distant subclasses (the fragile base class problem). Composition models 'has-a': an object holds collaborators and delegates, so each part can be replaced and tested alone. It also scales better when two dimensions vary independently: 3 formats x 2 deliveries is 10 classes in an inheritance tree but 6 small classes with a formatter and a delivery composed into one pipeline. I default to composition, use Protocols at the seams, and keep inheritance shallow for genuine hierarchies such as exceptions."
    },
    {
-    "q": "What is a Protocol in Python and why use it?",
-    "a": "A typing construct describing required methods and attributes. Any class with matching members satisfies it without inheriting (structural typing). It lets me depend on capabilities, inject fakes in tests and have the type checker verify compatibility."
+    "q": "Protocol vs ABC vs plain inheritance in Python?",
+    "a": "A Protocol is structural: a class satisfies it by having compatible members, with no import or base class, and mypy/pyright verify it statically. An ABC is nominal: you inherit from it, @abstractmethod blocks instantiation until the methods exist, and it can share implementation; isinstance works at runtime. Plain inheritance is nominal too, but without the abstract enforcement. I use Protocols for adapters, fakes and boundaries where the caller should stay decoupled, and ABCs when I need runtime enforcement or shared base behaviour. @runtime_checkable only checks attribute presence, not signatures."
    },
    {
-    "q": "What does @dataclass generate?",
-    "a": "__init__, __repr__ and __eq__ from annotated fields; optionally ordering, immutability (frozen) with __hash__, and __slots__. __post_init__ is available for validation."
+    "q": "What does @dataclass generate, and what is the __eq__/__hash__ rule?",
+    "a": "@dataclass generates __init__, __repr__ and __eq__ from annotated fields; optionally order, frozen (which also generates __hash__), slots and keyword-only fields. __post_init__ runs after the generated init for validation, and field(default_factory=...) gives each instance its own mutable default. The rule is that equal objects must have equal hashes: Python sets __hash__ = None when a class defines __eq__ without one, making it unhashable, which is why a plain value class breaks in a set. A frozen dataclass is hashable; a mutable one is not, and a hash that disagrees with equality silently lets duplicates into a set."
    }
   ],
   "quickCheck": [
@@ -1005,11 +1210,14 @@ export const lessonMeta: LessonMeta[] = [
   "cheatSheet": [
    "`@dataclass(frozen=True)` for value-like domain objects.",
    "Validate in `__post_init__`; computed values with `@property`.",
-   "`field(default_factory=list)` for mutable defaults.",
+   "`field(default_factory=list)` for mutable defaults; `field(repr=False)` for secrets.",
+   "`__eq__` without `__hash__` means unhashable: no sets, no dict keys.",
+   "Equal objects must have equal hashes; `frozen=True` generates a consistent one.",
+   "`@dataclass(frozen=True, slots=True)` for many small immutable objects.",
    "Composition by default; inheritance only for shallow 'is-a'.",
    "Protocol = interface without inheritance; checked by mypy/pyright.",
-   "Inject collaborators via `__init__`; use fakes in tests.",
-   "`_name` = internal by convention."
+   "ABC = nominal base with runtime enforcement and shared code.",
+   "Inject collaborators via `__init__`; use fakes in tests. No state, no rules, no class."
   ],
   "capstone": {
    "title": "DevAtlas: domain models",
@@ -1019,57 +1227,77 @@ export const lessonMeta: LessonMeta[] = [
     "Tests for validation errors"
    ]
   },
-  "codeSamples": 8,
+  "codeSamples": 9,
   "file": "l1-1-2.ts"
  },
  {
   "id": "1.1.3",
   "title": "Async Python and packaging",
-  "minutes": 70,
+  "minutes": 90,
   "level": "Intermediate",
-  "summary": "Use asyncio to run many I/O tasks concurrently with timeouts and limits, know when threads or processes are the better tool, and package a project properly with pyproject.toml.",
+  "summary": "Use asyncio to run many I/O tasks concurrently with timeouts and limits, understand what the event loop can and cannot speed up, and package a project properly with pyproject.toml and a wheel.",
   "terms": [
    {
     "term": "Coroutine",
-    "def": "A function defined with `async def`. Calling it returns a coroutine object that runs only when awaited or scheduled."
+    "def": "A function declared with `async def`. Calling it does not run the body; it returns a coroutine object that runs when awaited or scheduled as a Task, and can pause at each await."
    },
    {
     "term": "Event loop",
-    "def": "The asyncio scheduler that runs coroutines, switching between them whenever one awaits I/O."
+    "def": "The single-threaded scheduler at the centre of asyncio. It runs ready callbacks, asks the OS which sockets are ready, and resumes the coroutine waiting on each one. Between awaits, one coroutine runs to completion."
    },
    {
     "term": "await",
-    "def": "Pause this coroutine until the awaited operation finishes, letting others run meanwhile."
+    "def": "A suspension point. It hands control back to the event loop until the awaited operation finishes, then resumes this coroutine where it stopped. Awaiting is sequential: it does not start a second copy of anything."
    },
    {
     "term": "Task",
-    "def": "A coroutine scheduled to run concurrently, created with asyncio.create_task or a TaskGroup."
+    "def": "A coroutine wrapped and scheduled on the loop by `asyncio.create_task` or a TaskGroup. It starts eagerly, runs concurrently with the caller, and holds a result, an exception and a cancellation state."
    },
    {
     "term": "GIL",
-    "def": "Global Interpreter Lock: in standard CPython only one thread executes Python bytecode at a time, so threads do not speed up CPU-bound Python code (free-threaded builds exist from 3.13 but are optional)."
+    "def": "Global Interpreter Lock. In standard CPython only one thread runs Python bytecode at a time, so threads do not speed up pure-Python CPU work. They do help blocking I/O because the lock is released during system calls. Free-threaded builds exist from 3.13 but are optional."
+   },
+   {
+    "term": "Semaphore",
+    "def": "A counter with a wait queue. `async with sem` decrements on entry and increments on exit, blocking when the count is zero. It bounds how many operations are in flight, not how many tasks exist."
+   },
+   {
+    "term": "Cancellation",
+    "def": "A request, delivered as `CancelledError` at a task's next await, to stop it. It is cooperative: code that never awaits cannot be interrupted, and `CancelledError` derives from `BaseException`, so it must normally be re-raised after cleanup."
+   },
+   {
+    "term": "TaskGroup",
+    "def": "Structured concurrency from Python 3.11. Tasks created inside `async with asyncio.TaskGroup()` must all finish before the block exits; if one fails, the rest are cancelled and the failures surface together as an `ExceptionGroup`."
    },
    {
     "term": "pyproject.toml",
-    "def": "The standard file describing a Python project: name, version, dependencies, build system and tool settings."
+    "def": "The standard project file (PEP 518 and PEP 621). `[build-system]` names the build backend; `[project]` holds name, version, dependencies and entry points; `[tool.*]` configures pytest, mypy and friends."
    },
    {
-    "term": "Editable install",
-    "def": "`pip install -e .` links your source folder into the environment so code changes take effect without reinstalling."
+    "term": "src layout",
+    "def": "Putting importable code in `src/<package>/` and tests outside it. The project root is then not importable, so tests only pass when the package is installed, which catches missing files and packaging mistakes early."
+   },
+   {
+    "term": "Wheel",
+    "def": "A built distribution: a zip of the package plus `<name>-<version>.dist-info/` metadata. Installing a wheel is an unzip, not a build. `py3-none-any` means pure Python, any OS and CPU."
+   },
+   {
+    "term": "venv",
+    "def": "A directory holding its own interpreter link and `site-packages`. It isolates one project's dependencies from the system Python and from other projects; `pip install -e .` links your source into it for development."
    }
   ],
   "interview": [
    {
-    "q": "When would you use asyncio vs threads vs processes in Python?",
-    "a": "asyncio for many concurrent I/O-bound operations with async libraries; threads for I/O with blocking libraries; processes for CPU-bound work because of the GIL in standard CPython. Many services combine them: async server, to_thread for a blocking SDK, a process pool for heavy computation."
+    "q": "When would you use asyncio, threads or processes in Python?",
+    "a": "Pick by workload, not by fashion. asyncio for many concurrent I/O-bound operations with async libraries: it uses one thread and one event loop, so thousands of waits cost little. Threads for I/O with blocking libraries that have no async version; the GIL is released during system calls, so threads still overlap network waits, though each thread costs memory and context switches. Processes for CPU-bound work, because standard CPython runs one thread's bytecode at a time; ProcessPoolExecutor uses multiple cores and pays serialization and startup costs. Real services combine them: an async server, asyncio.to_thread for a legacy SDK, and a process pool for heavy computation. Say explicitly that asyncio does not speed up CPU work and that threads do not either for pure Python."
    },
    {
-    "q": "What happens if you call time.sleep(5) in an async handler?",
-    "a": "It blocks the event loop thread for 5 seconds, so every other coroutine, including other users' requests, stops. Use await asyncio.sleep or move blocking work to a thread."
+    "q": "Compare gather and TaskGroup, and explain cancellation.",
+    "a": "Both run awaitables concurrently; gather returns results in input order, while TaskGroup scopes lifetime and errors. With gather, the first exception propagates to the awaiter and the remaining tasks keep running unless you cancel them; return_exceptions=True turns failures into values, which is how ingestion jobs report per-feed errors. TaskGroup, added in 3.11, waits for all tasks in the async with block, cancels siblings when one fails, and raises an ExceptionGroup you can handle with except*. Cancellation is cooperative: task.cancel() injects CancelledError at the next await, cleanup runs in finally, and the error must be re-raised; a blocking call cannot be interrupted until it returns. Timeouts build on the same mechanism: wait_for and asyncio.timeout cancel the work and raise TimeoutError, and asyncio.timeout composes with nested scopes."
    },
    {
-    "q": "gather vs TaskGroup?",
-    "a": "gather runs awaitables concurrently and returns results in order; by default the first exception propagates while other tasks keep running unless you handle it, and return_exceptions=True collects errors. TaskGroup (3.11+) gives structured concurrency: if one task fails, the others are cancelled and errors are raised together as an ExceptionGroup."
+    "q": "How do you package a Python service so a teammate can run exactly what you run?",
+    "a": "Create a venv, declare everything in pyproject.toml, use a src layout, and install the package rather than relying on the working directory. [build-system] names the backend; [project] carries name, version, requires-python, dependencies and optional dev extras; [project.scripts] creates the console command. pip install -e \".[dev]\" gives the development loop and pytest against the installed package. For release, python -m build produces an sdist and a wheel, and the wheel is the artifact I install in a clean venv and promote. Pinning closes the loop: exact versions or a lock file, hashes for deployment, and the same wheel in staging and production. The test is simple: clone, create a venv, install the wheel, run the command, and nothing depends on my laptop."
    }
   ],
   "quickCheck": [
@@ -1087,7 +1315,7 @@ export const lessonMeta: LessonMeta[] = [
      "It never finishes"
     ],
     "answer": 0,
-    "explanation": "The three sleeps overlap, so it takes about as long as the longest: ~1 s."
+    "explanation": "The three sleeps overlap, so it takes about as long as the longest: ~1 s. Awaiting them one by one would take ~3 s."
    },
    {
     "kind": "bug",
@@ -1103,36 +1331,40 @@ export const lessonMeta: LessonMeta[] = [
      "GET should be POST"
     ],
     "answer": 1,
-    "explanation": "requests is synchronous. Use httpx.AsyncClient with await, or define the handler with plain def so the framework runs it in a thread pool."
+    "explanation": "requests is synchronous. Every other request in the worker waits while it runs. Use httpx.AsyncClient with await, or define the handler with plain def so the framework runs it in a thread pool."
    },
    {
     "kind": "mcq",
-    "prompt": "You need to resize 10,000 images in Python as fast as possible on an 8-core machine. Best choice?",
+    "prompt": "You must fetch 1,000 URLs but the provider allows only 8 requests in flight. What bounds the work?",
     "options": [
      "asyncio.gather",
-     "One thread",
-     "ProcessPoolExecutor",
-     "await asyncio.sleep(0) between images"
+     "asyncio.Semaphore(8)",
+     "asyncio.TaskGroup",
+     "asyncio.to_thread"
     ],
-    "answer": 2,
-    "explanation": "CPU-bound work needs multiple processes to use multiple cores under the GIL (unless the library releases it)."
+    "answer": 1,
+    "explanation": "gather and TaskGroup start everything at once; TaskGroup structures errors but does not limit. A Semaphore(8) caps in-flight requests. to_thread is for blocking calls, not rate limiting."
    }
   ],
   "cheatSheet": [
-   "async def + await; run with asyncio.run(main()).",
-   "Concurrent: asyncio.gather(...) or async with asyncio.TaskGroup().",
-   "Limit: asyncio.Semaphore(n). Timeout: async with asyncio.timeout(s).",
-   "Blocking I/O → asyncio.to_thread. CPU-bound → ProcessPoolExecutor.",
-   "Never time.sleep / requests in async code.",
-   "One shared AsyncClient for connection reuse.",
-   "pyproject.toml + src/ layout + pip install -e \".[dev]\"."
+   "async def + await; run with asyncio.run(main()). Awaiting is sequential; create_task or gather creates concurrency.",
+   "Async buys I/O concurrency, not CPU speed. CPU-bound work belongs in processes.",
+   "gather: results in input order; return_exceptions=True turns errors into values.",
+   "TaskGroup (3.11+): cancel siblings on failure, raise ExceptionGroup, nothing outlives the block.",
+   "Semaphore(n) bounds in flight; Queue(maxsize) + workers gives backpressure for streams.",
+   "Timeout: asyncio.timeout or wait_for. CancelledError is BaseException: clean up, then re-raise.",
+   "Blocking call in async → to_thread / run_in_executor. PYTHONASYNCIODEBUG=1 names slow callbacks.",
+   "Package: pyproject.toml [build-system] + [project], src layout, venv, pip install -e \".[dev]\".",
+   "python -m build → sdist + wheel; wheel = package + dist-info; [project.scripts] makes the command.",
+   "Pin exact versions or lock; build once, install the same wheel everywhere; never commit .venv."
   ],
   "capstone": {
    "title": "DevAtlas: async feed fetcher package",
    "criteria": [
     "pip install -e \".[dev]\" works on a clean venv",
     "devatlas-ingest command runs",
-    "Unit test with a fake transport (httpx.MockTransport)"
+    "Unit test with a fake transport (httpx.MockTransport)",
+    "python -m build produces a wheel that installs and runs the command"
    ]
   },
   "codeSamples": 9,
@@ -1143,49 +1375,69 @@ export const lessonMeta: LessonMeta[] = [
   "title": "Testing with pytest",
   "minutes": 65,
   "level": "Beginner",
-  "summary": "Write fast, readable tests with pytest: arrange-act-assert, fixtures, parametrize, testing errors, and mocking only at the boundaries of your system.",
+  "summary": "Use pytest as a tool: arrange-act-assert, fixtures and scopes, parametrize, errors and warnings, monkeypatch at the boundary, tmp_path, conftest.py, markers and coverage that is honest.",
   "terms": [
    {
     "term": "Unit test",
-    "def": "Tests one small piece (a function or class) in isolation, in milliseconds."
+    "def": "Tests one small piece (a function or class) in isolation, in milliseconds. Its failure should point at one behaviour."
    },
    {
     "term": "Integration test",
-    "def": "Tests several pieces together, often with a real database or HTTP layer."
+    "def": "Tests several pieces together, often with a real database or HTTP layer, to catch wiring and SQL mistakes."
    },
    {
     "term": "Assertion",
-    "def": "A check that must be true, e.g. `assert total == 30`. pytest shows a detailed diff when it fails."
+    "def": "A check that must be true, e.g. `assert total == 30`. pytest rewrites assertions so a failure shows the values on both sides."
+   },
+   {
+    "term": "Arrange-act-assert",
+    "def": "The three visible parts of a test: build inputs, call the behaviour once, check the observable result. Often shortened to AAA."
    },
    {
     "term": "Fixture",
     "def": "A function that prepares something a test needs (data, a temp folder, a fake client). Tests receive it by naming it as a parameter."
    },
    {
-    "term": "Parametrize",
-    "def": "Running the same test with many input/expected pairs."
+    "term": "Fixture scope",
+    "def": "How often a fixture runs: `function` (default), `class`, `module`, `package` or `session`. Wider scopes are faster but share state, so they must be read-only or carefully reset."
    },
    {
-    "term": "Mock / fake",
-    "def": "A stand-in for a real dependency. A fake has working simple logic; a mock records how it was called."
+    "term": "Parametrize",
+    "def": "Running the same test body with many input/expected pairs; each pair becomes its own test id in the report."
+   },
+   {
+    "term": "Test double",
+    "def": "A stand-in for a real dependency. A stub returns canned answers, a fake has working simple logic, a spy records calls, and a mock is pre-programmed with expectations."
+   },
+   {
+    "term": "monkeypatch",
+    "def": "A built-in pytest fixture that temporarily changes an attribute, dictionary entry or environment variable and undoes it automatically after the test."
+   },
+   {
+    "term": "tmp_path",
+    "def": "A built-in fixture giving each test a unique `pathlib.Path` under pytest's temporary base directory; it disappears from your repo and is cleaned up by the OS."
+   },
+   {
+    "term": "conftest.py",
+    "def": "A file pytest loads automatically. Fixtures and hooks defined there are shared by every test in that directory and below, without imports."
    },
    {
     "term": "Coverage",
-    "def": "The percentage of code lines executed by tests. Useful to find untested code, not proof of quality."
+    "def": "The share of statements (line coverage) or branches executed by tests. It shows what was not run, not whether the assertions were any good."
    }
   ],
   "interview": [
    {
-    "q": "What makes a good unit test?",
-    "a": "Fast, deterministic, independent of other tests, testing one behaviour through the public interface, with a descriptive name and clear Arrange–Act–Assert structure. It should fail for the right reason and survive refactors that keep behaviour."
+    "q": "What makes a good pytest test?",
+    "a": "Fast, deterministic, independent of other tests, testing one behaviour through the public interface, with a descriptive name and a clear Arrange-Act-Assert structure. It fails for the right reason, and it survives refactors that keep behaviour. In pytest terms: plain `assert` with informative values, fixtures instead of duplicated setup, parametrize for input tables, and no hidden dependence on execution order."
    },
    {
-    "q": "When do you use mocks?",
-    "a": "At system boundaries: network, email, payment, clock, randomness, slow or non-deterministic dependencies. I avoid mocking my own internal code; I prefer simple fakes for complex collaborators and real implementations where they are fast."
+    "q": "How do fixture scopes and teardown work, and when is monkeypatch the right tool?",
+    "a": "Fixtures are resolved by parameter name from the module, then conftest.py upward, then plugins; the first definition wins. A fixture is cached once per scope and its teardown (code after `yield`, or `request.addfinalizer`) runs in reverse setup order. Use function scope by default, module or session for expensive read-only resources such as a container or connection pool, and reset any mutable state. `monkeypatch` is for temporary changes to environment variables or third-party globals that you cannot pass in; it records an undo and replays it after the test. If you control the code, inject the dependency instead."
    },
    {
-    "q": "Unit vs integration tests?",
-    "a": "Unit tests isolate a small piece and run in milliseconds; integration tests check pieces working together, like code plus a real database. You want many unit tests for fast feedback and enough integration tests to catch wiring, SQL and configuration issues."
+    "q": "How do you test exceptions and warnings, and what does coverage prove?",
+    "a": "Use `pytest.raises(ValueError, match='negative')` around the call: it fails if nothing is raised, if the type differs, or if the message does not match, and `exc.value` lets you assert on details. Use `pytest.warns(UserWarning, match='capped')` for warnings, and turn unexpected warnings into errors in CI. Coverage tells you which lines and branches ran; it does not tell you whether the assertions are meaningful. Read the `Missing` column, set floors for critical modules, and use mutation testing when the assertions themselves need checking."
    }
   ],
   "quickCheck": [
@@ -1235,14 +1487,16 @@ export const lessonMeta: LessonMeta[] = [
    }
   ],
   "cheatSheet": [
-   "Files test_*.py, functions test_*; plain assert.",
-   "Arrange–Act–Assert; one behaviour per test.",
-   "@pytest.mark.parametrize for many cases; test thresholds -1, =, +1.",
-   "pytest.raises(Error, match=...) for errors.",
-   "Fixtures by parameter name; yield for teardown; conftest.py to share.",
-   "tmp_path, monkeypatch, capsys are built in.",
-   "Mock boundaries (network, clock, email), not your own logic.",
-   "Money: Decimal. Bug fix → regression test."
+   "Files `test_*.py`, functions `test_*`; plain `assert`; one behaviour per test.",
+   "Arrange-Act-Assert; name the behaviour, not the function.",
+   "@pytest.mark.parametrize for many cases; test thresholds -1, =, +1; `-k`, `-x`, `--lf`.",
+   "pytest.raises(Error, match=...) for errors; pytest.warns(Warning, match=...) for warnings.",
+   "Fixtures by parameter name; `yield` for teardown; scopes function (default), class, module, package, session.",
+   "tmp_path per test, tmp_path_factory for wider scopes; monkeypatch for env/attributes, auto-undone.",
+   "conftest.py shares fixtures without imports; keep it small and local.",
+   "Mock boundaries (network, clock, email), not your own logic; dependency injection before patching.",
+   "Markers: `@pytest.mark.slow`, run `-m 'not slow'`; register markers and use `--strict-markers`.",
+   "Coverage: `--cov=pkg --cov-branch --cov-report=term-missing`; read Missing, do not chase 100%."
   ],
   "capstone": {
    "title": "DevAtlas: test suite and coverage in CI",
@@ -1252,53 +1506,77 @@ export const lessonMeta: LessonMeta[] = [
     "--cov-fail-under set to a realistic number"
    ]
   },
-  "codeSamples": 10,
+  "codeSamples": 9,
   "file": "l1-1-4.ts"
  },
  {
   "id": "1.2.1",
   "title": "The event loop, promises and async/await",
-  "minutes": 65,
+  "minutes": 85,
   "level": "Intermediate",
-  "summary": "Build an exact mental model of the JavaScript event loop so you can predict execution order, run work in parallel safely and never block the UI or your server.",
+  "summary": "Build an exact mental model of the JavaScript event loop so you can predict execution order, run work concurrently without blocking, and never let a floating promise take down a server.",
   "terms": [
    {
     "term": "Call stack",
-    "def": "The list of functions currently executing. JavaScript runs one stack at a time: single-threaded."
+    "def": "The list of function frames currently executing, last in first out. JavaScript runs one stack at a time on one thread, and a function runs to completion before anything else can use that thread."
    },
    {
     "term": "Event loop",
-    "def": "The mechanism that takes the next queued task when the call stack is empty."
+    "def": "The scheduler that runs one queued task at a time, then drains all microtasks, then picks the next task. It never runs two pieces of your JavaScript at the same instant."
    },
    {
     "term": "Macrotask (task)",
-    "def": "A queued callback such as setTimeout, I/O completion or a UI event."
+    "def": "A unit of work taken from a queue by the event loop: a due setTimeout/setInterval, an I/O completion, a UI or message event. Exactly one macrotask runs per loop turn, after microtasks are empty."
    },
    {
     "term": "Microtask",
-    "def": "A higher-priority queue for promise callbacks (.then, await continuations) and queueMicrotask."
+    "def": "A higher-priority callback queued by a promise reaction (.then/.catch/.finally), an await continuation, or queueMicrotask. The whole microtask queue is drained after every callback, before the next macrotask or render."
+   },
+   {
+    "term": "Poll phase",
+    "def": "The libuv phase that collects ready I/O events, runs their callbacks, and blocks waiting for I/O when there is nothing else to do (bounded by the next timer)."
+   },
+   {
+    "term": "Check phase",
+    "def": "The libuv phase right after poll, where setImmediate callbacks run. Inside an I/O callback, setImmediate reliably runs before a setTimeout(fn, 0) scheduled at the same moment."
    },
    {
     "term": "Promise",
-    "def": "An object representing a future value: pending, then fulfilled or rejected."
+    "def": "An object representing a future value. It is pending, then fulfilled with a value or rejected with a reason. A promise settles once; later calls cannot change it."
+   },
+   {
+    "term": "Promise state",
+    "def": "pending → fulfilled or rejected (together called settled). Calling .then on a settled promise queues its reaction as a microtask immediately; on a pending one it stores the reaction until settlement."
    },
    {
     "term": "async/await",
-    "def": "Syntax over promises. `await` pauses the async function and resumes it as a microtask when the promise settles."
+    "def": "Syntax over promises. An async function returns a promise immediately, runs synchronously until its first await, then resumes as a microtask when the awaited value settles. A throw becomes a rejection."
+   },
+   {
+    "term": "libuv",
+    "def": "The C library under Node.js that owns the event loop, its phases, and a small thread pool (default 4 threads) used for file system, dns.lookup, crypto and zlib work. Network I/O is handled by the OS, not that pool."
+   },
+   {
+    "term": "Concurrency vs parallelism",
+    "def": "Concurrency means several tasks are in progress in overlapping time windows, interleaved by one thread while they wait. Parallelism means they literally execute at the same instant on different cores (worker_threads, cluster, another process)."
+   },
+   {
+    "term": "Unhandled rejection",
+    "def": "A rejected promise with no handler attached by the end of the turn in which it rejected. Since Node 15 the default is to throw and exit with code 1, which kills the process."
    }
   ],
   "interview": [
    {
-    "q": "Explain the difference between microtasks and macrotasks.",
-    "a": "After each macrotask (timer, I/O, event), the event loop drains the entire microtask queue (promise callbacks, await continuations, queueMicrotask) before taking the next macrotask or rendering. So promise callbacks always run before a setTimeout(0) that was scheduled at the same time."
+    "q": "Explain the difference between microtasks and macrotasks, and where the event loop drains each.",
+    "a": "A macrotask is a unit taken from the task queue: a due timer, an I/O completion, a UI or message event. A microtask is a promise reaction, an await continuation or a `queueMicrotask` callback. After each macrotask the loop runs the current callback to completion, then drains the **entire** microtask queue - including microtasks queued while draining - before taking the next macrotask or rendering. In Node the `process.nextTick` queue drains before the promise queue after each callback in each phase, though at the very top level of an ES module the module's own promise callbacks can run first, so do not build logic on the nextTick-versus-promise race. That is why `Promise.resolve().then(fn)` runs before `setTimeout(fn, 0)` scheduled at the same time, why the async body before its first await runs synchronously, and why a microtask that keeps re-queueing itself starves timers and painting. In a browser, rendering is also between tasks, which is why long tasks hurt INP."
    },
    {
-    "q": "Is Node.js single-threaded?",
-    "a": "Your JavaScript runs on a single thread per event loop, but Node uses a thread pool (libuv) for some I/O like file system and DNS lookups, and the OS handles network I/O asynchronously. You can also use worker_threads for CPU-bound work."
+    "q": "Is Node.js single-threaded? Explain concurrency and parallelism in that runtime.",
+    "a": "Your JavaScript runs on one thread, one call stack, one event loop at a time - so two callbacks never execute simultaneously. Concurrency comes from asynchronous I/O: the OS handles network sockets and libuv's thread pool (default 4 threads) handles file system, `dns.lookup`, crypto and zlib, and the loop is free while those waits are in flight. That is enough to hold thousands of idle connections, because waiting costs no CPU. Parallelism for CPU-bound work needs extra threads or processes: `worker_threads` (shared memory via `SharedArrayBuffer` if needed), a cluster or multiple containers. The practical consequence: `Promise.all` overlaps waits, not computation, and a synchronous 500 ms parse still blocks every request on that loop. Measure event-loop lag to see it."
    },
    {
-    "q": "Promise.all vs Promise.allSettled?",
-    "a": "all rejects on the first rejection and gives you all values only if every promise fulfils; allSettled waits for every promise and returns each result with a status. Use all when everything is required, allSettled when partial success is fine."
+    "q": "Promise.all vs Promise.allSettled vs race vs any - and what happens to the promises that lose?",
+    "a": "`all` fulfils with an array in input order when every promise fulfils and rejects with the first rejection; the other promises are not cancelled and keep running, but their outcomes are already handled internally so they do not become unhandled rejections. `allSettled` waits for all and returns `{status: 'fulfilled', value}` or `{status: 'rejected', reason}` in input order, which is what dashboards and batch jobs want. `race` settles with the first promise to settle, success or failure - useful for a timeout guard. `any` fulfils with the first success and rejects with an `AggregateError` only if all fail, useful for mirrors. None of them cancel work; cancellation is a separate mechanism (`AbortController` plus a signal), and you must call `abort()` yourself. Elapsed time is roughly the slowest (or first) promise, not the sum, and all callbacks still share one thread."
    }
   ],
   "quickCheck": [
@@ -1316,7 +1594,7 @@ export const lessonMeta: LessonMeta[] = [
      "B C A"
     ],
     "answer": 2,
-    "explanation": "Synchronous code first (C), then microtasks (B), then the timer macrotask (A)."
+    "explanation": "Synchronous code first (C), then the whole microtask queue (B), then the timer macrotask (A). The zero delay does not move A ahead of B."
    },
    {
     "kind": "bug",
@@ -1332,7 +1610,7 @@ export const lessonMeta: LessonMeta[] = [
      "console.log is async"
     ],
     "answer": 1,
-    "explanation": "forEach discards each callback's promise. Use `await Promise.all(items.map(save))` or a for...of loop."
+    "explanation": "forEach discards each callback's promise. Use `await Promise.all(items.map(save))` or a for...of loop; with forEach, a rejected save also becomes an unhandled rejection."
    },
    {
     "kind": "mcq",
@@ -1344,18 +1622,20 @@ export const lessonMeta: LessonMeta[] = [
      "300 ms"
     ],
     "answer": 1,
-    "explanation": "They run concurrently, so you wait for the slowest one: ~400 ms."
+    "explanation": "They run concurrently, so you wait for the slowest one: ~400 ms. Sequential awaits would cost ~900 ms."
    }
   ],
   "cheatSheet": [
-   "Order: sync code → all microtasks → (render) → next macrotask.",
-   "Microtasks: .then, await continuations, queueMicrotask. Macrotasks: setTimeout, I/O, events.",
-   "An async function runs synchronously until its first await.",
-   "Independent calls: `await Promise.all([a(), b()])`.",
-   "Partial results OK: `Promise.allSettled`.",
-   "fetch: check `res.ok`; add `AbortSignal.timeout(ms)`.",
-   "Never `forEach(async ...)`.",
-   "CPU-heavy work → Worker threads / Web Workers / job queue."
+   "Order: sync code → drain all microtasks → (render) → next macrotask; Node's nextTick queue is separate and drained around each callback.",
+   "Microtasks: .then/.catch/.finally, await continuations, queueMicrotask. Macrotasks: timers, I/O, events, setImmediate.",
+   "An async function runs synchronously until its first await, then resumes as a microtask; `await null` still costs one tick.",
+   "Node phases: timers → pending → poll → check (setImmediate) → close. Microtasks drain after every callback.",
+   "Independent calls: `await Promise.all([a(), b()])`. Total time is the slowest call, not the sum.",
+   "Partial results: `allSettled`. First to settle: `race`. First success: `any`. `all` rejects fast but cancels nothing.",
+   "await inside a loop is serial: use `map` + `Promise.all`, or a bounded `mapLimit` pool.",
+   "Never `forEach(async ...)`; return or await every promise, and give every request an AbortSignal timeout.",
+   "Unhandled rejection → exit code 1 in Node 15+; `process.exitCode` and handlers exist but do not fix the bug.",
+   "CPU-bound work blocks the loop: worker_threads, Web Workers or a job queue. Concurrency is not parallelism."
   ],
   "capstone": {
    "title": "DevAtlas step 5: dashboard data loader",
@@ -1371,47 +1651,71 @@ export const lessonMeta: LessonMeta[] = [
  {
   "id": "1.2.2",
   "title": "Closures, scope and modules",
-  "minutes": 55,
+  "minutes": 70,
   "level": "Beginner",
-  "summary": "Understand how JavaScript decides which variable a name refers to, how functions remember their surroundings (closures), how `this` works, and how ES modules organise code.",
+  "summary": "Understand how JavaScript decides which variable a name refers to, why var and let behave differently, how closures capture bindings rather than values, and how ES modules and CommonJS shape the code your bundler can remove.",
   "terms": [
    {
-    "term": "Scope",
-    "def": "The region of code where a variable is visible. JavaScript has global, module, function and block scope."
+    "term": "Scope (lexical scope)",
+    "def": "The region of code where a binding is visible. JavaScript scope is **lexical**: it is decided by where code is written, not by where it is called."
    },
    {
-    "term": "Lexical scope",
-    "def": "Scope is decided by where code is written, not where it is called."
-   },
-   {
-    "term": "Closure",
-    "def": "A function together with the variables from the scope where it was created, which it keeps access to even after that scope has finished."
+    "term": "Scope chain",
+    "def": "The ordered list of environment records a name lookup walks through: current function, enclosing functions, module scope, then the global scope."
    },
    {
     "term": "Hoisting",
-    "def": "Declarations are processed before code runs. `var` is initialised to undefined; `let`/`const` exist but cannot be used before their line (temporal dead zone)."
+    "def": "Before a scope runs, declarations are registered. `var` is created and set to `undefined`; function declarations are created with their body; `let`, `const` and `class` are created but not initialised."
    },
    {
-    "term": "this",
-    "def": "A value set by how a function is called (method call, plain call, new, call/apply/bind). Arrow functions do not have their own `this`; they use the surrounding one."
+    "term": "Temporal dead zone (TDZ)",
+    "def": "The time between entering a scope and the declaration's initialisation. Reading a `let`, `const` or `class` binding during that window throws a `ReferenceError`, even with `typeof`."
    },
    {
-    "term": "ES module",
-    "def": "A file with `import`/`export`. Each module has its own scope and is evaluated once."
+    "term": "Closure",
+    "def": "A function together with the environment record where it was created. The function can read and write those bindings even after the outer call has returned."
+   },
+   {
+    "term": "IIFE",
+    "def": "Immediately Invoked Function Expression: a function that runs as soon as it is defined, used to create a private scope or capture a value in a new parameter."
+   },
+   {
+    "term": "Currying",
+    "def": "Turning a function of several arguments into a chain of functions that take one argument at a time: `f(a, b, c)` becomes `f(a)(b)(c)`."
+   },
+   {
+    "term": "Partial application",
+    "def": "Fixing some arguments now and returning a function for the rest. Unlike currying it does not require one argument per call."
+   },
+   {
+    "term": "Memoisation",
+    "def": "Caching a pure function's result by its arguments, usually in a `Map` held by a closure, so repeated calls return the cached value."
+   },
+   {
+    "term": "Module pattern",
+    "def": "Using an IIFE or a module's own scope to keep state private, then returning or exporting only the public functions that need it."
+   },
+   {
+    "term": "CommonJS (CJS)",
+    "def": "Node's original module system: `require()` loads a file at runtime and returns `module.exports`. Exports are cached per resolved path; destructuring a primitive export copies its current value, while object exports share a reference."
+   },
+   {
+    "term": "Live binding",
+    "def": "An ES module import stays connected to the exporter's binding. If the exporter changes an exported `let`, importers see the new value; a CommonJS require usually sees a copy."
    }
   ],
   "interview": [
    {
-    "q": "What is a closure? Give a practical use.",
-    "a": "A function bundled with references to the variables of the scope where it was defined, which stay alive as long as the function does. Uses: private state (counters, caches), function factories (configurable middleware), memoisation, once(), and callbacks that remember their context."
+    "q": "Explain lexical scope, the scope chain, hoisting and the temporal dead zone. What actually differs between var, let and const?",
+    "a": "Scope is lexical: a name resolves against the environment where the code was written, then each enclosing environment outward to module and global scope. At the start of a scope the engine creates bindings: `var` is initialised to `undefined`, function declarations are initialised with their function object, and `let`, `const` and `class` are created but uninitialised. That uninitialised window is the temporal dead zone; touching the binding there throws a ReferenceError, and even `typeof` throws. `var` is function-scoped and can be redeclared; `let` and `const` are block-scoped and cannot be redeclared in the same scope. `const` prevents reassignment of the binding but does not freeze the object. A function expression assigned to `var` is `undefined` before the assignment because only the variable is hoisted, not the value."
    },
    {
-    "q": "How is `this` determined?",
-    "a": "By the call site: method call gives the object; plain call gives undefined in strict mode; new gives the new instance; call/apply/bind set it explicitly. Arrow functions do not bind this and use the enclosing scope's this."
+    "q": "What is a closure, and why does the classic loop bug happen? Give at least two fixes.",
+    "a": "A closure is a function plus the environment record where it was created. The function keeps reading and writing those bindings after the outer call returns, which is how private counters, factories, memoisation and middleware configuration work. The loop bug happens because closures capture bindings, not snapshots of values. With `var i`, every callback closes over the same function-scoped binding, so after the loop all of them read the final value. With `let j`, the for statement creates a fresh per-iteration binding, so each callback reads its own value. The older fix is an IIFE that copies the current value into a new parameter: `((n) => () => n)(i)`. Other fixes are `forEach`, whose callback parameter is a new binding per item, `bind`, or a small factory function. If you need the current value later, read it through a function rather than copying it too early."
    },
    {
-    "q": "var vs let vs const?",
-    "a": "var is function-scoped and hoisted with undefined; let and const are block-scoped and in a temporal dead zone before declaration. const prevents reassignment of the binding (the object can still be mutated). Use const by default, let when needed."
+    "q": "Compare ES modules and CommonJS: syntax, evaluation, live bindings, circular imports and tree shaking.",
+    "a": "ESM uses static `import`/`export`, is parsed and linked before evaluation, is always strict, and is evaluated once per resolved module. Named imports are live read-only views of the exporter's bindings; a namespace import exposes the same live properties. CommonJS uses `require()` at runtime and returns `module.exports`; the result is cached per resolved path, destructuring a primitive export copies its current value, and object references are shared. ESM cycles are linked first but evaluated depth-first, so one module can see an uninitialised binding in the TDZ or `undefined`; CommonJS cycles return whatever exports exist at that moment, often a partial object. The structural fix is to move shared code into a third module or inject dependencies, not to catch the error. Tree shaking depends on static ESM syntax and proven side-effect freedom: named exports, no top-level side effects, and a correct `sideEffects` field help; CommonJS `require`, namespace imports and dynamic property access usually prevent it. Default exports can be removed if unused, but named exports are easier to analyse and refactor."
    }
   ],
   "quickCheck": [
@@ -1429,7 +1733,7 @@ export const lessonMeta: LessonMeta[] = [
      "3 1"
     ],
     "answer": 0,
-    "explanation": "f and g each have their own x. f is called three times (2, 3, 4); g once (2)."
+    "explanation": "f and g each close over their own x. f is called three times (2, 3, 4); g is called once (2). The numbers are bindings, not copies shared between the two calls."
    },
    {
     "kind": "output",
@@ -1445,7 +1749,7 @@ export const lessonMeta: LessonMeta[] = [
      "ReferenceError immediately"
     ],
     "answer": 0,
-    "explanation": "var a is hoisted as undefined. b is in the temporal dead zone, so typeof b throws a ReferenceError."
+    "explanation": "var a is hoisted and initialised to undefined. b is in the temporal dead zone, so typeof b throws a ReferenceError before the let line runs."
    },
    {
     "kind": "bug",
@@ -1461,24 +1765,29 @@ export const lessonMeta: LessonMeta[] = [
      "label is private"
     ],
     "answer": 1,
-    "explanation": "DOM listeners call the function with this = the element. Use () => m.onClick() or an arrow-function class field."
+    "explanation": "DOM listeners call the function with this = the element. Use () => m.onClick() or an arrow-function class field so the callback keeps the Menu's this."
    }
   ],
   "cheatSheet": [
-   "Lookup goes outward from where code is written (lexical scope).",
-   "Closure = function + remembered variables; each call makes a new set.",
-   "let/const block-scoped; var function-scoped (avoid).",
-   "this depends on the call; arrows inherit this.",
-   "Detached methods lose this: wrap in an arrow or bind.",
-   "ES modules: own scope, strict mode, evaluated once, live bindings.",
-   "Clean up listeners and timers to avoid leaks."
+   "Lookup is lexical: current scope, enclosing scopes, module scope, global. The call site does not choose the scope.",
+   "var is hoisted as undefined; let/const/class are hoisted but stay in the TDZ. typeof does not rescue a TDZ binding.",
+   "let in a for loop creates a fresh binding per iteration; var shares one binding. IIFE or a factory copies the current value.",
+   "A closure captures bindings, not values. Each outer call creates a new environment, so counters and caches stay independent.",
+   "Curry = one argument at a time; partial application = fix some arguments now. Both return closures.",
+   "Memoise only pure functions, key the cache correctly, and plan for eviction; the cache lives in a closure.",
+   "The module pattern is an IIFE or module scope plus a public API. ES modules give every file that scope for free.",
+   "ESM is static, strict, evaluated once, and imports are live read-only views. Default is one export, named is many.",
+   "CommonJS uses runtime require, caches module.exports, and destructuring copies primitives. Circular requires can return partial objects.",
+   "Tree shaking needs static ESM, named exports and no required side effects; `sideEffects` tells bundlers what is safe to drop."
   ],
   "capstone": {
    "title": "DevAtlas: frontend utilities module",
    "criteria": [
     "Named exports only",
     "Tests use fake timers for debounce/throttle",
-    "No var"
+    "No var",
+    "A test proves memoize returns the cached value and once runs a single time",
+    "No circular imports"
    ]
   },
   "codeSamples": 9,
@@ -1489,49 +1798,69 @@ export const lessonMeta: LessonMeta[] = [
   "title": "TypeScript: types that catch real bugs",
   "minutes": 70,
   "level": "Beginner",
-  "summary": "Use TypeScript to describe your data so the compiler catches typos, missing cases and null bugs before users do: interfaces, unions, narrowing, generics and validating untrusted data at runtime.",
+  "summary": "Use TypeScript to describe your data so the compiler catches typos, missing cases and null bugs before users do: structural typing, unions, narrowing, generics, utility types and validating untrusted data at runtime.",
   "terms": [
+   {
+    "term": "Structural typing",
+    "def": "A value fits a type when it has the required shape, not because it was declared with that name. `{ id: \"1\", title: \"x\" }` is assignable to `{ id: string; title: string }` even if the object was never annotated."
+   },
    {
     "term": "Type annotation",
     "def": "Declaring a type explicitly: `let score: number`. TypeScript can often infer it instead."
    },
    {
-    "term": "Interface / type alias",
-    "def": "Names for object shapes: `interface User { id: number; name: string }` or `type User = {...}`."
+    "term": "Inference",
+    "def": "The compiler working out a type without an annotation: `const xs = [1, 2]` is `number[]`. Annotate parameters and public APIs; let inference handle locals."
+   },
+   {
+    "term": "Literal type",
+    "def": "A type with one exact value, such as `\"Beginner\"`. A union of literals models a fixed set, and `as const` stops a value from widening to `string` or `number`."
    },
    {
     "term": "Union type",
-    "def": "A value that can be one of several types: `string | number`, or `\"ok\" | \"error\"`."
+    "def": "A value that can be one of several types: `string | number`, or `\"ok\" | \"error\"`. Optional (`tags?: string[]`) adds `undefined`; `tags: string[] | null` allows an explicit `null` instead."
+   },
+   {
+    "term": "Discriminated union",
+    "def": "A union whose variants share a literal tag, such as `kind` or `status`. Checking the tag tells the compiler exactly which other fields exist."
    },
    {
     "term": "Narrowing",
-    "def": "TypeScript refining a union to a specific member after a check like `typeof x === \"string\"` or `if (result.ok)`."
+    "def": "TypeScript refining a union to a specific member after a check like `typeof x === \"string\"`, `x.kind === \"mcq\"` or `if (result.ok)`."
+   },
+   {
+    "term": "Type guard",
+    "def": "A function whose return type is `data is T`, such as `isRepo(d): d is Repo`. When it returns true, the compiler narrows `d` for the caller."
+   },
+   {
+    "term": "Assertion function",
+    "def": "A function declared `asserts value is T` or `asserts condition` that throws when the check fails, so the compiler can narrow after the call."
    },
    {
     "term": "Generic",
-    "def": "A type with a parameter, like `Array<T>` or `function first<T>(xs: T[]): T | undefined`, so one definition works for many types safely."
+    "def": "A type with a parameter, like `Array<T>` or `function first<T>(xs: T[]): T | undefined`. A constraint (`T extends { id: string }`) states what every `T` must support."
    },
    {
-    "term": "strict mode",
-    "def": "The `strict` compiler option that enables null checks and other important checks. Always on for new projects."
+    "term": "unknown vs any vs never",
+    "def": "`unknown` accepts anything but must be narrowed before use. `any` switches checking off. `never` has no values at all: it marks impossible states and forgotten branches."
    },
    {
-    "term": "unknown vs any",
-    "def": "`any` turns type checking off. `unknown` means 'could be anything, check before use', which is the safe choice for external data."
+    "term": "Utility type",
+    "def": "A type-level function shipped with TypeScript: `Partial<T>`, `Pick<T, K>`, `Omit<T, K>`, `Record<K, V>`, `Readonly<T>`, `Required<T>` and more."
    }
   ],
   "interview": [
    {
-    "q": "any vs unknown?",
-    "a": "any disables type checking: you can do anything with it and errors are not caught. unknown accepts any value but forces you to narrow (typeof, instanceof, a type guard) before using it. Use unknown for external data."
+    "q": "What is the difference between `any`, `unknown` and `never`?",
+    "a": "`any` disables checking: you can read any property, call it, assign it anywhere, and no error is reported. `unknown` is the safe top type: every value is assignable to it, but you must narrow it with `typeof`, `instanceof`, `in`, a type guard or a schema before using it, so it is the right type for external data. `never` is the bottom type: it has no values, is assignable to every type, and nothing except `never` is assignable to it. It marks functions that never return and impossible branches; assigning a union to `never` in a `default` case is how exhaustive checks are enforced."
    },
    {
-    "q": "What is a discriminated union and why is it useful?",
-    "a": "A union of object types that share a literal field such as kind or status. Checking that field narrows to one variant, so the compiler knows which properties exist. Combined with an exhaustive switch and never, adding a new variant forces every handler to be updated."
+    "q": "What is a discriminated union, and why is it better than optional fields?",
+    "a": "It is a union of object types that share a literal field such as `kind` or `status`. Checking that field narrows to one variant, so the compiler knows which properties exist and rejects properties from the other variants. Optional fields let invalid combinations exist (`loading: true` with `data` and `error`), while a union makes those states unrepresentable. Combined with an exhaustive `switch` and a `never` default, adding a new variant turns every unhandled handler into a compile error instead of a runtime `undefined`."
    },
    {
     "q": "Does TypeScript make your app type-safe at runtime?",
-    "a": "No. Types are erased at compile time. It prevents mistakes within your code, but data from the network, storage or users must still be validated at runtime."
+    "a": "No. Types are erased at compile time; the browser or Node runs plain JavaScript. TypeScript prevents mistakes inside code you control, but data from the network, storage, environment variables or users must be validated at runtime. A type guard or schema library is the bridge: it performs a real check and, on success, narrows `unknown` to `T`. Assertion functions work the same way but must actually throw when the check fails; `as` is only a promise to the compiler and validates nothing."
    }
   ],
   "quickCheck": [
@@ -1577,74 +1906,96 @@ export const lessonMeta: LessonMeta[] = [
    }
   ],
   "cheatSheet": [
-   "Turn on strict. Run tsc --noEmit in CI.",
-   "Literal unions over plain string: 'Beginner' | 'Advanced'.",
-   "Discriminated union + switch + assertNever = exhaustive handling.",
-   "unknown for external data; validate, then use.",
-   "Avoid any and `as` on untrusted data.",
-   "Generics keep type info: getJson<T>(...): Promise<T>.",
-   "Pick, Omit, Partial, Record, typeof, as const.",
-   "Optional chaining ?. and nullish ?? for possibly-missing values."
+   "Turn on strict, `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`. Run `tsc --noEmit` in CI.",
+   "Structural typing: shape over name. Fresh object literals get excess-property checks.",
+   "Literal unions over plain string: `'Beginner' | 'Advanced'`. `as const` preserves literals.",
+   "Discriminated union + switch + `assertNever` = exhaustive handling.",
+   "`unknown` for external data; validate, then use. `any` switches checking off; `never` has no values.",
+   "Generics keep type info: `getJson<T>(...): Promise<T>`; constrain with `T extends { id: string }`.",
+   "Utility types: `Partial`, `Required`, `Pick`, `Omit`, `Record`, `Readonly`; derive unions with `(typeof xs)[number]`.",
+   "Optional `?` means absent; `| null` means an explicit null. Use `?.` and `??`, not `||`, for missing values.",
+   "Type guards return `x is T`; assertion functions declare `asserts x is T` and must throw when the check fails."
   ],
   "capstone": {
    "title": "DevAtlas: shared API types",
    "criteria": [
     "No any in the API layer",
     "Every response validated before use",
-    "tsc --noEmit passes in CI"
+    "tsc --noEmit passes in CI",
+    "A malformed response fails at the boundary, not in a component"
    ]
   },
-  "codeSamples": 10,
+  "codeSamples": 9,
   "file": "l1-2-3.ts"
  },
  {
   "id": "1.3.1",
   "title": "C# fundamentals and the .NET runtime",
-  "minutes": 70,
+  "minutes": 85,
   "level": "Beginner",
-  "summary": "Learn C# the way backend teams use it: the .NET runtime, value vs reference types, classes vs records, nullable reference types, exceptions and the project structure of a real solution.",
+  "summary": "Learn C# the way backend teams use it: what a variable actually holds, structs vs classes vs records, the three kinds of equality, string immutability and interning, nullable reference types, boxing, and the managed heap and GC - with real .NET output for every experiment.",
   "terms": [
    {
     "term": ".NET",
-    "def": "Microsoft's open-source, cross-platform runtime and libraries. C# compiles to IL (intermediate language) that the .NET runtime runs."
+    "def": "Microsoft's open-source, cross-platform runtime and libraries. C# compiles to IL (intermediate language); the runtime executes it. The SDK also contains the CLI: `dotnet new`, `build`, `run` and `test`."
    },
    {
     "term": "CLR / JIT",
-    "def": "The Common Language Runtime executes IL; the Just-In-Time compiler turns it into machine code at runtime, optimising hot paths."
+    "def": "The Common Language Runtime loads and executes IL. The Just-In-Time compiler turns IL into machine code, usually method by method, and optimises hot paths. Tiered compilation starts fast and re-JITs code that runs often."
    },
    {
     "term": "Value type",
-    "def": "A type whose variable holds the data itself (int, double, bool, DateTime, structs). Assigning copies the value."
+    "def": "A type whose variable holds the data itself (`int`, `double`, `bool`, `DateTime`, structs, enums). Assigning or passing it copies the value unless you use `ref`, `in` or `out`."
    },
    {
     "term": "Reference type",
-    "def": "A type whose variable holds a reference to an object on the heap (classes, strings, arrays). Assigning copies the reference."
+    "def": "A type whose variable holds a reference to an object (`class`, `string`, arrays, delegates). Assigning copies the reference, so two variables can name the same object."
+   },
+   {
+    "term": "struct",
+    "def": "A value type with fields and methods, but no inheritance. Good for small, immutable values. A mutable struct is a trap: reading it from a list, property or dictionary gives you a copy."
    },
    {
     "term": "record",
-    "def": "A type designed for data, with value-based equality, a readable ToString and non-destructive mutation via `with`."
+    "def": "A type where the compiler generates value equality, `==`, `Equals`, `GetHashCode`, a readable `ToString`, deconstruction and `with`. A `record class` is a reference type; a `record struct` is a value type."
    },
    {
-    "term": "Nullable reference types",
-    "def": "A compiler feature (enabled by default in new projects) that warns when a value that might be null is used without a check. `string?` may be null; `string` should not be."
+    "term": "Value vs reference equality",
+    "def": "Value equality compares the data (`record`, `record struct`, `string`, boxed primitives through `Equals`). Reference equality asks whether two references point at the same object (`ReferenceEquals`). A class gets reference equality by default."
    },
    {
-    "term": "Solution / project",
-    "def": "A .sln groups projects; each .csproj is one project (an API, a class library, a test project)."
+    "term": "String interning",
+    "def": "The runtime keeps one copy of each compile-time string literal in an intern pool, so equal literals share an object. `string.Intern` can add a runtime string to the pool; `new string(...)` and most runtime concatenations are not interned."
+   },
+   {
+    "term": "Nullable reference types (NRT)",
+    "def": "A compiler feature that makes nullability part of the type: `string?` may be null, `string` should not be. It emits warnings (CS8600, CS8602, CS8604), not runtime checks; the annotations are erased in IL."
+   },
+   {
+    "term": "Boxing / unboxing",
+    "def": "Boxing copies a value type into a heap object (`object o = 42`); unboxing copies the value back out (`(int)o`). Both copy, and the unbox must use the exact original type."
+   },
+   {
+    "term": "Managed heap",
+    "def": "The region where the GC allocates reference-type objects and boxed values. Allocation is usually a pointer bump in a contiguous segment; the GC later reclaims objects that are no longer reachable."
+   },
+   {
+    "term": "GC generations",
+    "def": "The heap is split into generation 0 (small, collected often), generation 1 (short-lived survivors) and generation 2 (long-lived). Surviving a collection promotes an object. Objects of 85,000 bytes or more go to the Large Object Heap."
    }
   ],
   "interview": [
    {
-    "q": "Value types vs reference types in C#?",
-    "a": "Value types (int, structs, enums) hold their data directly and are copied on assignment. Reference types (classes, arrays, strings) hold a reference to a heap object, so assignments share the object. Strings are reference types but immutable."
+    "q": "Value types vs reference types in C# - and what does 'on the stack' really mean?",
+    "a": "Value types (int, enums, structs, DateTime) hold their data directly and copy on assignment, argument passing and return. Reference types (classes, arrays, strings, delegates) hold a reference; assignment copies the reference, so both variables reach one object. A local value type is often stored inline in a stack frame, and a reference-type local holds a pointer to a heap object, but that is a simplification: the JIT can use registers, inline a struct into another object, put structs in arrays, hoist async locals into a state-machine object, and box a value onto the heap. Strings are reference types but immutable. The practical test is copy versus share, not 'stack versus heap'. Mention boxing: converting a value type to object copies it into a heap object, and unboxing copies it back out."
    },
    {
-    "q": "When do you use a record instead of a class?",
-    "a": "For data-centric types where equality should be based on values: DTOs, messages, immutable domain values. Records give value equality, a useful ToString and with-expressions. Use classes for entities with identity and mutable state."
+    "q": "When do you use a record instead of a class or a struct?",
+    "a": "Use a record for data-centric types where equality should be based on values: DTOs, messages, events, immutable domain values. The compiler generates value equality, ==, GetHashCode, a readable ToString, deconstruction and with-expressions. A record class is still a reference type and with is a shallow copy, so nested mutable collections are shared. A record struct is a value type with value equality; use it for small values where you want no allocation. Use a class for an entity with identity and mutable behaviour, and a readonly struct for a tiny value such as a coordinate or a money amount. If a record is mutable and used as a dictionary key, changing it breaks the hash - keep it immutable."
    },
    {
-    "q": "How do nullable reference types help?",
-    "a": "They make nullability explicit in the type system: string? may be null, string should not be. The compiler warns on possible null dereferences and on assigning null to non-nullable references, catching NullReferenceExceptions at compile time."
+    "q": "How do nullable reference types work, and where do they stop helping?",
+    "a": "NRT makes nullability part of the type: string? may be null, string should not be. The compiler performs flow analysis and warns on a possible null dereference (CS8602), assigning null to a non-nullable type (CS8600) or passing a maybe-null argument (CS8604). `?.`, `??`, pattern checks and attributes such as [NotNullWhen(true)] narrow the flow; `!` suppresses the warning and moves the risk to runtime. The annotations are erased in IL, so there is no runtime enforcement: a null from JSON, a database or a native interop call can still arrive. Validate at the boundary and treat the warnings as errors in CI. Nullable value types (int?) are different: Nullable<int> is a real struct with HasValue and Value."
    }
   ],
   "quickCheck": [
@@ -1662,7 +2013,7 @@ export const lessonMeta: LessonMeta[] = [
      "False True"
     ],
     "answer": 1,
-    "explanation": "Records compare by value; classes compare references by default."
+    "explanation": "Records compare by value; classes compare references by default. The two class instances are different objects, even though their X fields are equal."
    },
    {
     "kind": "bug",
@@ -1681,26 +2032,33 @@ export const lessonMeta: LessonMeta[] = [
     "explanation": "Use nickname?.Substring(0, 1) ?? \"?\" or check for null first, and treat nullable warnings as errors."
    },
    {
-    "kind": "mcq",
-    "prompt": "What does `dotnet build` produce?",
+    "kind": "output",
+    "prompt": "What prints?",
+    "code": {
+     "lang": "csharp",
+     "code": "int x = 91;\nobject first = x;\nobject second = x;\nConsole.WriteLine($\"{ReferenceEquals(first, second)} {first.Equals(second)}\");"
+    },
     "options": [
-     "Machine code for one CPU",
-     "IL code in a .dll, run by the .NET runtime",
-     "JavaScript",
-     "A Docker image"
+     "True True",
+     "False True",
+     "False False",
+     "True False"
     ],
     "answer": 1,
-    "explanation": "IL is JIT-compiled at runtime (ahead-of-time native compilation is possible too, but not the default)."
+    "explanation": "Each assignment to object boxes x into a new heap object, so identity is false. Equals compares the boxed ints by value, so it is true."
    }
   ],
   "cheatSheet": [
    "dotnet new sln/console/classlib/xunit; dotnet sln add; dotnet add reference.",
-   "Value types copy; reference types share. Strings are immutable references.",
-   "record = value equality + with; class = identity.",
-   "string? may be null; use ?. ?? and is not null.",
-   "Nullable enabled + TreatWarningsAsErrors.",
-   "switch expressions and patterns for clean branching.",
-   "using / using var for IDisposable."
+   "Value types copy; reference types share. Strings are immutable references with value-based ==.",
+   "record = value equality + with; class = identity; record struct = value type with value equality.",
+   "== is an operator, Equals is virtual, ReferenceEquals is always identity. They can disagree.",
+   "String literals are interned; new string and runtime Concat are not. Use StringBuilder in loops.",
+   "string? may be null; use ?. ?? and is not null. NRT warnings are erased at runtime - validate at boundaries.",
+   "Boxing copies a value to the heap; unboxing copies it back. Generic collections avoid it.",
+   "GC generations: 0 nursery, 1 short-lived survivors, 2 long-lived; the LOH holds objects of 85,000 bytes or more.",
+   "using / using var for IDisposable; the GC frees memory but does not close handles.",
+   "Nullable enabled + TreatWarningsAsErrors in Directory.Build.props applies to every project."
   ],
   "capstone": {
    "title": "DevAtlas: .NET solution skeleton",
@@ -1716,51 +2074,71 @@ export const lessonMeta: LessonMeta[] = [
  {
   "id": "1.3.2",
   "title": "LINQ, generics and async/await",
-  "minutes": 70,
+  "minutes": 85,
   "level": "Intermediate",
-  "summary": "Query collections expressively with LINQ (and avoid its traps), write reusable type-safe code with generics, and use Task-based async/await correctly in servers.",
+  "summary": "Write LINQ that runs where you think it runs, use generics and constraints without fighting the compiler, and understand async/await down to the state machine, the deadlock and the cancellation token.",
   "terms": [
    {
     "term": "LINQ",
-    "def": "Language Integrated Query: methods like Where, Select, OrderBy, GroupBy that work on any IEnumerable<T> (and, via providers, on databases)."
+    "def": "Language Integrated Query: operators such as Where, Select, OrderBy and GroupBy that work on any IEnumerable<T>, and through providers such as EF Core, on IQueryable<T>."
    },
    {
     "term": "IEnumerable<T>",
-    "def": "A sequence you can iterate. LINQ over it is usually lazy: nothing runs until you iterate."
+    "def": "A sequence you can iterate. LINQ over it uses delegates and normally runs in memory, lazily, one element at a time."
    },
    {
     "term": "Deferred execution",
-    "def": "A LINQ query is a recipe; it executes when enumerated (foreach, ToList, Count...). Enumerating twice runs it twice."
+    "def": "A query is a recipe, not a result. It runs when enumerated (foreach, ToList, Count, First), and it runs again on the next enumeration."
    },
    {
     "term": "IQueryable<T>",
-    "def": "A query that a provider (like EF Core) translates to another language such as SQL instead of running in memory."
+    "def": "A sequence that carries an expression tree. A provider such as EF Core translates the composed query into SQL instead of running it in C#."
    },
    {
-    "term": "Generic",
-    "def": "A type or method with type parameters, like List<T> or T Max<T>(T a, T b) where T : IComparable<T>."
+    "term": "Expression tree",
+    "def": "A data structure describing code (`Expression<Func<T, bool>>`) rather than a compiled delegate. EF Core walks it to build WHERE, ORDER BY and JOIN clauses."
+   },
+   {
+    "term": "Generic constraint",
+    "def": "A `where T : ...` clause stating what a type parameter must support, such as `class`, `struct`, `new()`, `notnull`, an interface or a base class."
    },
    {
     "term": "Task",
-    "def": "An object representing an asynchronous operation that may produce a value later (Task<T>)."
+    "def": "A reference-type object representing an asynchronous operation that may produce a value later (Task<T>). It can be awaited many times and cached or shared."
+   },
+   {
+    "term": "ValueTask",
+    "def": "A struct wrapper around a Task or an IValueTaskSource. It avoids an allocation when the operation completes synchronously, but it should normally be awaited only once."
+   },
+   {
+    "term": "SynchronizationContext",
+    "def": "An abstraction that decides where continuations run. A UI thread or classic ASP.NET request context has one; ASP.NET Core does not."
+   },
+   {
+    "term": "ConfigureAwait(false)",
+    "def": "Tells the await not to capture the current SynchronizationContext. Library code uses it to avoid forcing continuations onto a caller's context and to avoid deadlocks."
    },
    {
     "term": "CancellationToken",
-    "def": "A signal passed through async calls so work can be stopped when the request is aborted or times out."
+    "def": "A cooperative stop signal passed through async calls so work can end when a request is aborted or a timeout expires."
+   },
+   {
+    "term": "IAsyncEnumerable<T>",
+    "def": "An asynchronous stream: `await foreach` pulls one element at a time while the producer awaits I/O, without buffering the whole result in memory."
    }
   ],
   "interview": [
    {
-    "q": "What is deferred execution in LINQ?",
-    "a": "Most LINQ operators build a query that runs only when enumerated (foreach, ToList, Count). The data source is read at that moment, and enumerating again runs the query again. Operators like ToList, Count, First force immediate execution."
+    "q": "Explain deferred versus immediate execution, and how it changes an EF Core query.",
+    "a": "Most LINQ operators build a recipe: `Where` returns an iterator that reads the source only when `MoveNext` is called. `ToList`, `ToArray`, `Count`, `First` and `Any` execute immediately. Enumerating a deferred query twice runs it twice, including side effects and database round trips. With EF Core, the query is an `IQueryable` carrying an expression tree; compose `Where`, `OrderBy`, `Take` and `Select` first, then call `ToListAsync` so the provider emits one SQL statement with WHERE, ORDER BY and LIMIT. Calling `ToList` early switches to `IEnumerable` and moves the work into memory. Also mention `First` throws when empty while `FirstOrDefault` returns `default(T)`."
    },
    {
-    "q": "IEnumerable vs IQueryable?",
-    "a": "IEnumerable executes in memory with delegates. IQueryable carries an expression tree that a provider like EF Core translates to SQL. Keep queries IQueryable until filtering and paging are composed, so the database does the work."
+    "q": "Why use generics, and what do `where T : class`, `new()` and `IComparable<T>` actually guarantee?",
+    "a": "Generics give reuse with compile-time type safety and, for value types, specialised code without boxing. Constraints are promises the compiler checks: `class` means a reference type (and enables null comparisons), `struct` means a non-nullable value type, `new()` requires a public parameterless constructor so `new T()` compiles, and `IComparable<T>` lets the method call `CompareTo` without a cast. Without the constraint, `new T()` fails with CS0304 and `CompareTo` needs reflection or a cast. The JIT specialises `List<int>` while reference types share an implementation. Keep constraints minimal and meaningful."
    },
    {
-    "q": "Why not use .Result in ASP.NET Core?",
-    "a": "It blocks a thread-pool thread while waiting for I/O. Under load, many blocked threads cause thread-pool starvation: requests queue and latency spikes. In contexts with a synchronization context it can also deadlock. Use await throughout."
+    "q": "What happens inside an async method, and why can `.Result` deadlock?",
+    "a": "The compiler turns the method into a state machine. It runs synchronously to the first incomplete `await`, captures the awaiter and the current `SynchronizationContext`, returns an incomplete `Task`, and schedules a continuation for when the I/O completes. If the context is single-threaded and the caller blocks on `.Result`, the continuation is queued to the same thread that is blocked, so neither can progress: a deadlock. ASP.NET Core has no SynchronizationContext, so the usual symptom is thread-pool starvation instead. Use `await` throughout; libraries can use `ConfigureAwait(false)` to avoid capturing the caller's context. `Task` is a reusable heap object, `ValueTask` is a single-use struct for allocation-sensitive paths, and `CancellationToken` plus `IAsyncEnumerable<T>` handle cancellation and streaming."
    }
   ],
   "quickCheck": [
@@ -1810,12 +2188,16 @@ export const lessonMeta: LessonMeta[] = [
    }
   ],
   "cheatSheet": [
-   "Where · Select · OrderBy · GroupBy · Take/Skip · Any/Count/Sum · FirstOrDefault.",
-   "LINQ is lazy; enumerate once (ToList) if reused.",
-   "IQueryable: compose, then ToListAsync. Select only needed columns. AsNoTracking for reads.",
-   "Generics: List<T>, where T : constraint.",
-   "async Task<T>; await; never .Result/.Wait()/async void.",
-   "Pass CancellationToken everywhere; Task.WhenAll for parallel I/O."
+   "Where · Select · OrderBy · GroupBy · Take/Skip · Any/Count/Sum · First/FirstOrDefault.",
+   "Deferred until enumerated: foreach, ToList, Count, First, Any. Enumerating twice runs twice.",
+   "Materialise once with ToList when reused; otherwise keep the single enumeration.",
+   "IEnumerable = delegates in memory. IQueryable = expression tree translated by a provider.",
+   "Compose IQueryable first, then ToListAsync; Select only needed columns; AsNoTracking for reads.",
+   "First throws on empty; FirstOrDefault returns default(T): null for classes, 0 for int.",
+   "Generics: where T : class / struct / new() / notnull / IComparable<T> / base or interface.",
+   "async Task; await; never .Result/.Wait()/async void; Task.WhenAll for independent I/O.",
+   "ConfigureAwait(false) in libraries; Task for reusable results, ValueTask once on hot paths.",
+   "Pass CancellationToken; link timeouts; use IAsyncEnumerable<T> + await foreach for streams."
   ],
   "capstone": {
    "title": "DevAtlas: leaderboard service (in memory)",
@@ -1831,47 +2213,67 @@ export const lessonMeta: LessonMeta[] = [
  {
   "id": "1.3.3",
   "title": "Dependency injection",
-  "minutes": 55,
+  "minutes": 70,
   "level": "Intermediate",
-  "summary": "Understand dependency injection from first principles, use the built-in .NET container with the right lifetimes (singleton, scoped, transient), and avoid the captive-dependency bug.",
+  "summary": "Understand dependency injection as a pattern and a container, choose the right lifetime (singleton, scoped, transient), catch captive dependencies with provider validation, use the options pattern, and test by swapping fakes.",
   "terms": [
    {
     "term": "Dependency",
-    "def": "Something a class needs to do its job: a database context, an HTTP client, a clock, a logger."
+    "def": "Something a class needs to do its job: a database context, an HTTP client, a clock, a logger, a configuration object."
    },
    {
     "term": "Dependency injection (DI)",
-    "def": "Giving a class its dependencies from outside (usually through the constructor) instead of the class creating them."
+    "def": "A pattern: a class declares what it needs and receives it from outside, usually through its constructor. The class does not create or look up its dependencies."
+   },
+   {
+    "term": "DI container",
+    "def": "The object that maps registrations to instances and builds object graphs: in .NET, IServiceProvider. A container is one way to implement the DI pattern, not the pattern itself."
    },
    {
     "term": "Inversion of Control",
-    "def": "The general idea that a framework or container creates and wires objects for you."
+    "def": "The general idea that a framework or container creates and wires objects for you, so your code is called rather than calling everything itself."
+   },
+   {
+    "term": "Service descriptor",
+    "def": "One registration: service type, implementation type or factory, and lifetime. IServiceCollection holds descriptors; BuildServiceProvider turns them into a provider."
    },
    {
     "term": "Service lifetime",
-    "def": "How long the container keeps an instance: Singleton (one for the app), Scoped (one per request), Transient (new each time)."
+    "def": "How long the container keeps an instance: Singleton (one for the app), Scoped (one per scope, usually one HTTP request), Transient (a new one on every resolution)."
+   },
+   {
+    "term": "Scope",
+    "def": "A boundary that owns scoped instances. ASP.NET Core creates one per HTTP request; background code creates one per unit of work with CreateScope or CreateAsyncScope."
    },
    {
     "term": "Captive dependency",
-    "def": "A longer-lived service holding a shorter-lived one (a singleton holding a scoped DbContext), causing shared state and bugs."
+    "def": "A longer-lived service holding a shorter-lived one, such as a singleton holding a scoped DbContext. The short-lived object is created once and never released per request."
    },
    {
     "term": "Composition root",
-    "def": "The single place where services are registered and wired: Program.cs in ASP.NET Core."
+    "def": "The one place where the object graph is assembled: Program.cs in ASP.NET Core, or a single startup function in a console app."
+   },
+   {
+    "term": "Service locator",
+    "def": "Asking a container for dependencies inside a method (IServiceProvider.GetService) instead of declaring them. It hides the dependency graph and makes tests need a container."
+   },
+   {
+    "term": "Options pattern",
+    "def": "Binding a configuration section to a typed class and injecting IOptions<T>, IOptionsSnapshot<T> or IOptionsMonitor<T> instead of reading string keys throughout the code."
    }
   ],
   "interview": [
    {
     "q": "Explain singleton, scoped and transient in ASP.NET Core.",
-    "a": "Singleton: one instance for the app, must be thread-safe. Scoped: one per request scope, typical for DbContext. Transient: new instance each resolution, for lightweight stateless services. A service must not depend on a shorter-lived one; a singleton capturing a scoped service is a captive dependency bug."
+    "a": "Singleton: one instance for the app, created in the root provider, must be thread-safe. Scoped: one instance per DI scope, and ASP.NET Core creates one scope per HTTP request; a DbContext is the canonical example. Transient: a new instance on every resolution, even twice in one object graph. The rule is that a service may depend on the same or a longer lifetime, never a shorter one; a singleton capturing a scoped service is a captive dependency. With ValidateScopes the container rejects that wiring, and ValidateOnBuild checks every registration at startup. Also mention disposal: the container owns and disposes what it creates, scoped objects when the scope ends and singletons at shutdown."
    },
    {
-    "q": "Why use dependency injection?",
-    "a": "It decouples classes from concrete implementations: they declare what they need and receive it. This enables testing with fakes, swapping implementations per environment, centralised configuration and controlled lifetimes and disposal."
+    "q": "Why use dependency injection, and when is it overkill?",
+    "a": "The pattern decouples a class from concrete implementations: dependencies are declared in the constructor, so tests can pass fakes, environments can swap implementations, and lifetimes and disposal are managed in one place. The container is optional; a composition root that calls new is still DI. It is overkill for a small script, a pure function, a class with one implementation that will never be substituted, or a library that should not force a container on its consumers. Service location - injecting IServiceProvider and resolving inside methods - is the failure mode to avoid: it hides the graph and moves wiring errors to runtime."
    },
    {
-    "q": "How do you use a scoped service from a background service?",
-    "a": "Inject IServiceScopeFactory, create a scope per unit of work, resolve the scoped service from it, and dispose the scope when done. Or use IDbContextFactory for EF Core."
+    "q": "How do you use a scoped service from a background service, and how do options fit?",
+    "a": "The background service is a singleton, so it must not hold a scoped instance. Inject IServiceScopeFactory, create a scope per unit of work with CreateAsyncScope, resolve the scoped service from that scope, and dispose the scope when the work ends; for EF Core, IDbContextFactory is often simpler. For configuration, use IOptionsMonitor<T> in the singleton so CurrentValue stays current and OnChange can react to reloads. IOptionsSnapshot<T> is scoped and would be another captive dependency in a singleton; IOptions<T> is a one-time singleton snapshot."
    }
   ],
   "quickCheck": [
@@ -1885,7 +2287,7 @@ export const lessonMeta: LessonMeta[] = [
      "None"
     ],
     "answer": 1,
-    "explanation": "One DbContext per request scope."
+    "explanation": "One DbContext per request scope. A DbContext is a unit of work and is not thread-safe, so it must not be shared across requests."
    },
    {
     "kind": "bug",
@@ -1917,13 +2319,16 @@ export const lessonMeta: LessonMeta[] = [
    }
   ],
   "cheatSheet": [
-   "Ask for dependencies in the constructor; depend on interfaces.",
-   "Register in Program.cs: AddSingleton / AddScoped / AddTransient.",
-   "Singleton: app lifetime, thread-safe. Scoped: per request. Transient: per resolve.",
-   "Never let a longer-lived service hold a shorter-lived one.",
-   "DbContext scoped; HttpClient via AddHttpClient; time via TimeProvider.",
-   "Background services: IServiceScopeFactory per unit of work.",
-   "Tests: construct classes directly with fakes; no container needed."
+   "Ask for dependencies in the constructor; depend on interfaces. DI is the pattern; IServiceProvider is just the container.",
+   "Register in Program.cs: AddSingleton / AddScoped / AddTransient; the last registration for a service type wins.",
+   "Singleton: app lifetime, thread-safe, no request state. Scoped: per request scope. Transient: per resolution.",
+   "Never let a longer-lived service hold a shorter-lived one: that is a captive dependency.",
+   "DbContext scoped; HttpClient via AddHttpClient; time via TimeProvider; per-job work via IServiceScopeFactory or IDbContextFactory.",
+   "Options: IOptions<T> is a singleton snapshot; IOptionsSnapshot<T> is scoped per request; IOptionsMonitor<T> is a singleton with CurrentValue and OnChange.",
+   "Validate options with ValidateDataAnnotations and ValidateOnStart. Validate the provider with ValidateScopes and ValidateOnBuild.",
+   "Tests: construct classes directly with fakes; use a container test only to prove the wiring and lifetimes.",
+   "Service locator is not DI: resolving inside a method hides dependencies and defers failures to runtime.",
+   "Skip DI for scripts, pure functions, one-implementation classes and libraries; explicit new at the edge is clearer."
   ],
   "capstone": {
    "title": "DevAtlas: API composition root",
@@ -1939,9 +2344,9 @@ export const lessonMeta: LessonMeta[] = [
  {
   "id": "1.4.1",
   "title": "Ownership, borrowing and lifetimes",
-  "minutes": 75,
+  "minutes": 90,
   "level": "Intermediate",
-  "summary": "Understand Rust's core idea, ownership, which gives memory safety without a garbage collector. Learn moves, borrows, slices and lifetimes, and how to read borrow-checker errors calmly.",
+  "summary": "Understand Rust's core idea, ownership, which gives memory safety without a garbage collector. Learn moves, Copy versus Clone, shared and mutable borrows, non-lexical lifetimes, lifetime annotations, Rc and RefCell, and how to read borrow-checker errors calmly.",
   "terms": [
    {
     "term": "Ownership",
@@ -1949,41 +2354,61 @@ export const lessonMeta: LessonMeta[] = [
    },
    {
     "term": "Move",
-    "def": "Assigning or passing a heap-owning value (like String or Vec) transfers ownership; the old variable can no longer be used."
-   },
-   {
-    "term": "Borrow",
-    "def": "A reference to a value without taking ownership: `&T` (shared, read-only) or `&mut T` (exclusive, can modify)."
-   },
-   {
-    "term": "Borrow checker",
-    "def": "The part of the compiler that enforces: many shared borrows OR one mutable borrow at a time, and no reference outlives its data."
-   },
-   {
-    "term": "Lifetime",
-    "def": "The span of code during which a reference is valid. Usually inferred; sometimes written as 'a to relate input and output references."
-   },
-   {
-    "term": "Slice",
-    "def": "A borrowed view into part of a collection: `&str` into a String, `&[T]` into a Vec."
+    "def": "Assigning or passing a heap-owning value (like String or Vec) transfers ownership; the old variable can no longer be used. The transfer itself is cheap: only the stack part is copied, never the heap bytes."
    },
    {
     "term": "Copy type",
-    "def": "Simple stack-only types (integers, bool, char, f64) that are copied instead of moved."
+    "def": "A type whose bits can be duplicated implicitly (integers, bool, char, f64, shared references, and tuples/arrays of Copy types). Assignment copies it and both variables stay usable."
+   },
+   {
+    "term": "Clone",
+    "def": "An explicit deep copy through the `Clone` trait. `String::clone` allocates new heap bytes, so it costs time and memory; `Rc::clone` is the exception because it only increments a reference count."
+   },
+   {
+    "term": "Borrow",
+    "def": "A reference to a value without taking ownership: `&T` (shared, read-only, many allowed) or `&mut T` (exclusive, may modify, only one allowed). References are just pointers at runtime; the rules are checked at compile time."
+   },
+   {
+    "term": "Borrow checker",
+    "def": "The compiler pass that enforces: many shared borrows OR exactly one mutable borrow at a time, and no reference outlives the data it points to. It also rejects moving or mutating a value while it is borrowed."
+   },
+   {
+    "term": "Slice",
+    "def": "A borrowed view into part of a collection: `&str` into a String or string literal, `&[T]` into a Vec, array or other slice. A slice is a pointer plus a length, so it never owns the elements."
+   },
+   {
+    "term": "Non-lexical lifetimes (NLL)",
+    "def": "The rule, stable since Rust 1.31, that a borrow ends at its last use rather than at the end of the enclosing block. This is why two sequential `&mut` borrows in one block usually compile."
+   },
+   {
+    "term": "Lifetime ('a)",
+    "def": "The span of code during which a reference is valid. `'a` is a name for such a region, not a duration you can measure. Annotations relate input and output references; they never change how long a value lives."
+   },
+   {
+    "term": "Lifetime elision",
+    "def": "The inference rules that let you omit most lifetime annotations: each input reference gets its own lifetime; one input lifetime is copied to the output; `&self`/`&mut self` supplies the output lifetime."
+   },
+   {
+    "term": "Rc<T> (reference counting)",
+    "def": "A single-threaded smart pointer that shares immutable ownership of a heap value. `Rc::clone` increments a non-atomic strong count; the value is dropped when the last strong reference goes away. Not `Send` or `Sync`."
+   },
+   {
+    "term": "RefCell<T> (interior mutability)",
+    "def": "A container that moves the borrow check to runtime with a borrow flag. `borrow()` and `borrow_mut()` return guards; a conflicting access panics with `already borrowed`. Usually paired with Rc: `Rc<RefCell<T>>`."
    }
   ],
   "interview": [
    {
-    "q": "What problem does Rust's ownership system solve?",
-    "a": "Memory safety without garbage collection. The compiler enforces single ownership, automatic drop at scope end, and borrowing rules (many readers or one writer, no dangling references). That eliminates use-after-free, double free, dangling pointers and data races at compile time, with no runtime GC cost."
+    "q": "What problem does Rust's ownership system solve, and what are the three rules?",
+    "a": "It gives memory safety without a garbage collector. The rules are: every value has one owner; there is only one owner at a time; when the owner goes out of scope the value is dropped. On top of that, borrowing allows many &T or one &mut T, never both, and no reference may outlive its data. Together these eliminate use-after-free, double free, dangling pointers and data races at compile time, with no runtime GC pauses. The cost is that ownership must be designed explicitly, and the borrow checker rejects programs that would be safe only by accident."
    },
    {
-    "q": "Move vs borrow vs clone?",
-    "a": "A move transfers ownership; the source can no longer be used. A borrow (&T or &mut T) lends access without transferring ownership. A clone creates an independent deep copy. Copy types like integers are copied implicitly."
+    "q": "Explain move, Copy, Clone and borrowing, with the cost of each.",
+    "a": "A move transfers ownership: assigning a String or Vec copies the small stack header, invalidates the source, and is O(1). Copy is an implicit bitwise duplicate for simple types such as i32 and bool; both bindings stay valid and there is no allocation. Clone is an explicit call that may allocate and copy deeply, so String::clone costs time and memory proportional to the contents; Rc::clone is the exception and only increments a reference count. A borrow lends access without ownership: &T is a read-only pointer and &mut T is an exclusive pointer; both are zero-cost at runtime, but the compiler forbids aliasing mutation and mutation while shared. Choose a borrow for reading, &mut for in-place change, a move to transfer responsibility, and clone only for a genuinely independent copy."
    },
    {
-    "q": "When do you need explicit lifetime annotations?",
-    "a": "When the compiler cannot infer how output references relate to input references, typically a function with several reference parameters returning a reference, or structs that hold references. The annotation does not change how long anything lives; it describes the relationship so the compiler can check it."
+    "q": "When must you write explicit lifetimes, and why can't a function return a reference to a local?",
+    "a": "You write lifetimes when the compiler cannot infer how output references relate to inputs: a function with several reference parameters returning a reference, a struct holding references, or an impl with borrowed data. Elision covers the common cases: one input lifetime flows to the output, and &self supplies the output lifetime. An annotation does not change any value's lifetime; it states an outlives constraint the compiler verifies, such as the result of `longest<'a>(a: &'a str, b: &'a str) -> &'a str` being valid only while both inputs are. A function cannot return a reference to a local because the local's stack frame is gone at return, so the pointer would dangle: rustc reports E0106 without a lifetime, or E0515 with one. Return owned data such as String, or return a borrow of an input. For shared ownership that outlives any single stack frame, use Rc (single-threaded) or Arc (threaded); add RefCell or Mutex when mutation is needed, accepting runtime checks."
    }
   ],
   "quickCheck": [
@@ -2013,7 +2438,7 @@ export const lessonMeta: LessonMeta[] = [
      "One &mut and the owner reading directly"
     ],
     "answer": 2,
-    "explanation": "Any number of shared borrows, or exactly one mutable borrow, never both."
+    "explanation": "Any number of shared borrows, or exactly one mutable borrow, never both. While a &mut is live the owner cannot be read either."
    },
    {
     "kind": "output",
@@ -2029,17 +2454,20 @@ export const lessonMeta: LessonMeta[] = [
      "Runtime panic"
     ],
     "answer": 1,
-    "explanation": "i32 is Copy; t only borrows s, so all four are usable."
+    "explanation": "i32 is Copy; t only borrows s, so all four are usable. Shared borrows do not take ownership."
    }
   ],
   "cheatSheet": [
-   "One owner; dropped at end of scope.",
-   "String/Vec/Box move on assignment; integers/bools are Copy.",
-   "&T many readers OR &mut T one writer.",
-   "References must not outlive the data.",
-   "Params: &str, &[T], &mut T; return owned data you create.",
-   "clone() is explicit and costs a copy.",
-   "rustc --explain E0502 for any error code."
+   "Three rules: one owner per value; one owner at a time; drop when the owner leaves scope.",
+   "Move = O(1) header copy plus invalidation of the source. Copy = implicit bitwise duplicate. Clone = explicit, possibly deep, copy.",
+   "Borrowing: many &T OR exactly one &mut T, never both; no reference may outlive its data.",
+   "NLL ends a borrow at its last use, not at the closing brace. Reorder statements before cloning.",
+   "Lifetime annotations describe relationships and never extend a value's life. `'static` means the reference can live for the whole program.",
+   "Elision: one input lifetime flows to the output; &self supplies the output lifetime; otherwise write `'a`.",
+   "Never return a reference to a local (E0106/E0515); return owned data or borrow an input.",
+   "Rc::clone only increments a non-atomic count; the last strong reference drops the value. Use Weak to break cycles.",
+   "RefCell checks borrows at runtime and panics with `already borrowed`; Rc<RefCell<T>> is not Send/Sync. Use Arc<Mutex<T>> across threads.",
+   "Error map: E0382 after move, E0499 two &mut, E0502 shared then mutable, E0597 borrow outlives owner. `rustc --explain <code>`."
   ],
   "capstone": {
    "title": "DevAtlas: Rust ingester skeleton",
@@ -2049,7 +2477,7 @@ export const lessonMeta: LessonMeta[] = [
     "cargo clippy has no warnings"
    ]
   },
-  "codeSamples": 10,
+  "codeSamples": 9,
   "file": "l1-4-1.ts"
  },
  {
@@ -2061,15 +2489,15 @@ export const lessonMeta: LessonMeta[] = [
   "terms": [
    {
     "term": "Option<T>",
-    "def": "Either Some(value) or None. Rust's replacement for null: you must handle the None case."
+    "def": "Either Some(value) or None. Rust's replacement for null: absence is a normal outcome, and you must handle the None case."
    },
    {
     "term": "Result<T, E>",
-    "def": "Either Ok(value) or Err(error). Used for operations that can fail."
+    "def": "Either Ok(value) or Err(error). Used when an operation can fail and the caller may need to know why."
    },
    {
     "term": "? operator",
-    "def": "Inside a function returning Result (or Option), `expr?` returns the error early or unwraps the success value."
+    "def": "Inside a function returning Result (or Option), `expr?` returns the error early or unwraps the success value. It converts the error with From."
    },
    {
     "term": "panic",
@@ -2080,26 +2508,46 @@ export const lessonMeta: LessonMeta[] = [
     "def": "A set of methods a type can implement; Rust's version of an interface. Example: Display, Iterator, or your own Summarize."
    },
    {
+    "term": "Default method",
+    "def": "A trait method with a body. Implementors get it for free and may override it. Example: `fn summary(&self) { ... }`."
+   },
+   {
+    "term": "Trait object (dyn Trait)",
+    "def": "A value whose concrete type is erased behind a vtable, e.g. `Box<dyn Summarize>`. Enables mixed types in one collection with dynamic dispatch."
+   },
+   {
+    "term": "Monomorphisation",
+    "def": "The compiler generating a specialised copy of a generic function for each concrete type. This is static dispatch: direct, inlinable calls."
+   },
+   {
     "term": "Crate",
     "def": "A Rust package/library. Published crates live on crates.io and are added with cargo add."
    },
    {
-    "term": "derive",
-    "def": "`#[derive(Debug, Clone, PartialEq)]` asks the compiler to generate common trait implementations."
+    "term": "thiserror",
+    "def": "A crate whose derive macro generates Display, Error and From for your error enum, so `?` and logging work without boilerplate."
+   },
+   {
+    "term": "anyhow",
+    "def": "A crate providing one type-erased error with context chaining. Convenient in applications where callers do not match on error kinds."
+   },
+   {
+    "term": "Workspace",
+    "def": "One Cargo.toml grouping several crates that share a lockfile, a target directory and dependency versions."
    }
   ],
   "interview": [
    {
-    "q": "How does Rust handle errors without exceptions?",
-    "a": "Recoverable errors are values: Result<T, E>. Absence is Option<T>. The ? operator propagates errors upward concisely, converting types via From. Unrecoverable bugs use panic. Because errors are in the type signature, callers cannot forget them."
+    "q": "How does Rust handle errors without exceptions, and when do you choose Option, Result, thiserror or anyhow?",
+    "a": "Recoverable errors are values: Result<T, E> for failure with a reason, Option<T> for absence. `?` propagates and converts via From, so a function returning Result<T, AppError> stays readable. panic is for bugs, not expected failures. In a library, expose a typed error enum, usually with thiserror, because callers can match variants and you can attach #[source]. In an application, anyhow with .context(...) is often enough because the top level logs rather than branches. Add context at boundaries and never stringify early."
    },
    {
     "q": "Generics vs trait objects?",
-    "a": "Generics with trait bounds are monomorphised: static dispatch, inlinable, zero runtime overhead, but one copy per type. Trait objects (dyn Trait) use a vtable for dynamic dispatch, allowing heterogeneous collections and smaller binaries at a small runtime cost."
+    "a": "Generics with trait bounds are monomorphised: static dispatch, inlinable, zero runtime overhead, but one copy of the code per concrete type, which can increase binary size and compile time. Trait objects (dyn Trait) use a fat pointer and a vtable: dynamic dispatch, a small runtime cost, but one Vec can hold different types and the code is not duplicated. Prefer generics by default; choose dyn when you need heterogeneous collections, plugin-style extensibility or smaller binaries. Both rely on the same trait definition, including default methods."
    },
    {
-    "q": "When is unwrap acceptable?",
-    "a": "In tests, examples, and when an invariant guarantees success and failure would be a bug (prefer expect with a message explaining the invariant). Not for input, network or file operations."
+    "q": "How do you keep a Rust project healthy with cargo?",
+    "a": "Use semver requirements and commit Cargo.lock for binaries so builds are reproducible; run cargo update deliberately, not incidentally. Keep features additive and default features small, because feature unification enables a feature across the whole dependency graph. In a workspace, share one lockfile and target directory and centralise versions in [workspace.dependencies]. In CI run cargo test, cargo clippy --all-targets -- -D warnings, cargo fmt --check and cargo doc; build release artifacts with the release profile, using lto and codegen-units when binary size or runtime matters more than build time."
    }
   ],
   "quickCheck": [
@@ -2133,26 +2581,28 @@ export const lessonMeta: LessonMeta[] = [
    },
    {
     "kind": "mcq",
-    "prompt": "You need a Vec holding both Article and Video values that implement Summarize. What type do you use?",
+    "prompt": "You are writing a library and callers must match on the kind of failure. What should the public error type be?",
     "options": [
-     "Vec<Summarize>",
-     "Vec<T: Summarize>",
-     "Vec<Box<dyn Summarize>>",
-     "Vec<impl Summarize>"
+     "String",
+     "anyhow::Error",
+     "A thiserror enum with one variant per failure kind",
+     "Box<dyn std::error::Error>"
     ],
     "answer": 2,
-    "explanation": "Different concrete types in one collection need trait objects."
+    "explanation": "A typed enum keeps variants inspectable and still generates Display, Error and From. anyhow and boxed errors erase the type, which is fine for applications but not for callers that match."
    }
   ],
   "cheatSheet": [
-   "Option<T>: Some/None. Result<T, E>: Ok/Err.",
-   "? propagates errors (with From conversion).",
-   "unwrap_or, map, and_then, ok_or for combinators.",
-   "No unwrap in production paths; expect(\"why\") for invariants.",
-   "trait = interface; impl Trait for Type; default methods.",
-   "Generics T: Trait (static) vs dyn Trait (dynamic).",
-   "cargo add · test · clippy · fmt · build --release.",
-   "serde derive for JSON in and out."
+   "Option<T>: Some/None, for absence. Result<T, E>: Ok/Err, for failure with a reason.",
+   "? propagates errors and converts them via From; it also works on Option in an Option-returning function.",
+   "Combinators: map, and_then, ok_or, unwrap_or. Reserve unwrap for tests and true invariants.",
+   "Libraries: typed thiserror enum. Applications: anyhow with context. Keep #[source] for the chain.",
+   "trait = interface; impl Trait for Type; default methods supply shared behaviour.",
+   "Generics T: Trait = static dispatch (monomorphised). dyn Trait = dynamic dispatch via vtable.",
+   "Use generics by default; Vec<Box<dyn Trait>> when one collection holds different types.",
+   "cargo add · test · clippy --all-targets -- -D warnings · fmt --check · doc · build --release.",
+   "Cargo.lock pins the graph for binaries; features are additive and unify across the graph.",
+   "Workspaces share a lockfile and target dir; profiles trade compile time for runtime performance."
   ],
   "capstone": {
    "title": "DevAtlas: ingester with real parsing and errors",
@@ -2166,6 +2616,254 @@ export const lessonMeta: LessonMeta[] = [
   "file": "l1-4-2.ts"
  },
  {
+  "id": "1.5.1",
+  "title": "How to test software: the pyramid, doubles and testable design",
+  "minutes": 80,
+  "level": "Intermediate",
+  "summary": "Choose the right level for each test, replace slow dependencies with the right double, and design seams so logic can be tested without a browser or a database.",
+  "terms": [
+   {
+    "term": "Unit test",
+    "def": "A test of one function or class with its slow dependencies replaced. Runs in milliseconds and points at the exact behaviour that broke."
+   },
+   {
+    "term": "Integration test",
+    "def": "A test of your code against a real boundary such as a database, HTTP service, queue or filesystem. Catches SQL, serialization and wiring mistakes that unit tests cannot see."
+   },
+   {
+    "term": "End-to-end (E2E) test",
+    "def": "A test that drives the deployed system through a user journey, from the browser or public API to the database. Highest confidence, slowest and flakiest."
+   },
+   {
+    "term": "Test double",
+    "def": "Any object that stands in for a real dependency during a test, like a stunt double. Stub, fake, spy and mock are kinds of double."
+   },
+   {
+    "term": "Fake",
+    "def": "A working implementation with a shortcut, such as an in-memory store instead of PostgreSQL. It behaves like the real thing but is not production-grade."
+   },
+   {
+    "term": "Seam",
+    "def": "A place where a dependency can be swapped without editing the code under test, usually a constructor parameter or function argument."
+   },
+   {
+    "term": "Flaky test",
+    "def": "A test that passes and fails on the same code, usually because of time, test order, randomness, the network or shared state."
+   }
+  ],
+  "interview": [
+   {
+    "q": "Explain the test pyramid and why you would not test everything end to end.",
+    "a": "Many unit tests, fewer integration tests, very few end-to-end tests. The pyramid follows the cost of feedback: a unit test gives a precise failure in milliseconds, an integration test catches SQL and wiring in around a tenth of a second, and an end-to-end test proves a real journey but takes seconds and flakes for reasons unrelated to the change. An E2E-heavy suite is slow to run and slow to diagnose, so most rules are proven at the lowest level that can see them, and E2E is reserved for critical paths and deploy confidence."
+   },
+   {
+    "q": "What is the difference between a stub, a fake, a spy and a mock, and when do you use each?",
+    "a": "A stub returns canned answers to drive a branch. A fake is a working lightweight implementation, such as an in-memory repository. A spy is a stub that also records calls so you can assert what happened. A mock is pre-programmed with expectations and fails if the interaction differs. I use stubs and fakes by default because state-based tests survive refactors, a spy when the side effect is the point, and a mock only where the call itself is the contract, such as a payment authorization or an email send."
+   },
+   {
+    "q": "A test is flaky in CI but passes locally. How do you debug it?",
+    "a": "Reproduce first: run the test repeatedly and in random order in an environment close to CI, and log the timestamp, random seed and database state. Common causes are real time, unseeded randomness, test order and shared module state, async waits, and data left by another test. I would bisect by running the test alone, then with the file, then with the suite, and inspect fixtures and globals. The fix is to inject a clock or seed, create isolated state per test, and replace sleeps with deterministic synchronization. Until fixed, quarantine it with an owner so it cannot erode trust in the suite."
+   }
+  ],
+  "quickCheck": [
+   {
+    "kind": "mcq",
+    "prompt": "The news ingester calls a paid summarization API. You need a test where the API returns HTTP 429 so you can check the retry and backoff logic. Which double fits best?",
+    "options": [
+     "A stub that returns a 429 response",
+     "A fake that stores summaries in memory",
+     "A spy that records how many calls were made",
+     "The real API with a staging key"
+    ],
+    "answer": 0,
+    "explanation": "You need a canned answer to drive the retry branch, which is exactly a stub. A fake is for a working lightweight implementation, a spy observes calls, and the real API is slow, costs money and cannot reliably produce a 429."
+   },
+   {
+    "kind": "output",
+    "prompt": "What does this program print?",
+    "code": {
+     "lang": "python",
+     "file": "streak.py",
+     "code": "from datetime import date, timedelta\n\ndef streak(days, today):\n    n = 0\n    while today - timedelta(days=n) in days:\n        n += 1\n    return n\n\ndays = {date(2026, 10, 22), date(2026, 10, 21), date(2026, 10, 19)}\nprint(streak(days, date(2026, 10, 22)))"
+    },
+    "options": [
+     "0",
+     "1",
+     "2",
+     "4"
+    ],
+    "answer": 2,
+    "explanation": "The count walks back from 22 October: the 22nd and 21st are present, the 20th is missing, so the loop stops at 2. The 19th does not count because the streak is broken."
+   },
+   {
+    "kind": "bug",
+    "prompt": "A test passes when run alone but fails when the whole file runs. It uses a module-level `CACHE` dict, and a later test asserts the loader was called. What is the most likely cause?",
+    "options": [
+     "The production code is too slow",
+     "Shared mutable state leaks between tests",
+     "The coverage percentage is below the gate",
+     "The test double returns random values"
+    ],
+    "answer": 1,
+    "explanation": "An earlier test filled the module-level cache, so the later test no longer exercises the loader. Each test passes in isolation because it starts with an empty cache. Inject a fresh cache or reset it in a fixture."
+   }
+  ],
+  "cheatSheet": [
+   "Pyramid: many unit, fewer integration, very few E2E; cost and flakiness grow as you go up.",
+   "Unit test = logic with doubles; integration = real boundary; E2E = real journey.",
+   "Arrange, act, assert: one behaviour, one act, one clear assertion.",
+   "Stub supplies answers, fake works with shortcuts, spy records calls, mock expects interactions.",
+   "Prefer state-based tests with stubs and fakes; mock only when the interaction is the contract.",
+   "Seams: inject the clock, client and repository through the constructor or arguments.",
+   "TDD: red for the right reason, green with the simplest code, refactor while green.",
+   "Flake symptoms: passes alone, fails in suite; passes locally, fails in CI; same commit changes colour.",
+   "Coverage shows execution, not verification; set floors per critical module, not one vanity number."
+  ],
+  "capstone": {
+   "title": "DevAtlas: test suite and coverage gate",
+   "criteria": [
+    "A table mapping each behaviour to unit, integration or E2E with a reason",
+    "Unit tests inject clock, feed and store; integration tests use a real database",
+    "The gate checks a total floor and per-module floors",
+    "CI runs unit tests on every PR, integration on merge and E2E before release"
+   ]
+  },
+  "codeSamples": 8,
+  "file": "l1-5-1.ts"
+ },
+ {
+  "id": "1.6.1",
+  "title": "Debugging and profiling: find the real bottleneck",
+  "minutes": 80,
+  "level": "Intermediate",
+  "summary": "Turn \"it is slow\" or \"it is wrong\" into a reproducible case, a falsifiable hypothesis and a measurement that proves the fix, using pdb, cProfile, py-spy, flame graphs and tracemalloc in one loop.",
+  "terms": [
+   {
+    "term": "Stack trace",
+    "def": "A report of the active calls when something failed. Python prints the most recent call last, so the final frame is where the exception surfaced; the frames above it are the callers that led there."
+   },
+   {
+    "term": "Breakpoint",
+    "def": "A deliberate pause at a file and line, or at a function's first line. It can carry a condition, so the debugger stops only when that condition is true."
+   },
+   {
+    "term": "Watch expression",
+    "def": "An expression the debugger evaluates in the paused frame every time execution stops, so you can watch a value change without editing the code."
+   },
+   {
+    "term": "pdb",
+    "def": "Python's standard interactive debugger, built on the bdb module and sys.settrace. It can step, inspect frames, evaluate expressions and run post-mortem on a traceback."
+   },
+   {
+    "term": "Logging",
+    "def": "Discrete, timestamped records of what happened, emitted at levels such as DEBUG, INFO, WARNING and ERROR. Cheap per event, expensive at volume if handlers write synchronously."
+   },
+   {
+    "term": "Tracing",
+    "def": "Following one request across services as a tree of spans, each with a start, end and parent, linked by a correlation ID. It shows where time went across process boundaries, not which function inside one process is hot."
+   },
+   {
+    "term": "Profiler",
+    "def": "A tool that measures where a process spends time or memory and aggregates the result over many calls. It answers \"what is expensive overall\", not \"what happened to request 8f3c\"."
+   },
+   {
+    "term": "Deterministic profiler",
+    "def": "A profiler that records every call and return, such as cProfile. Counts and totals are exact, overhead is high, and functions called very often are penalised by the instrumentation itself."
+   },
+   {
+    "term": "Sampling profiler",
+    "def": "A profiler that snapshots the call stack periodically, such as py-spy. Overhead is low and it can attach to a running process, but results are statistical and short functions may be missed."
+   },
+   {
+    "term": "Flame graph",
+    "def": "An aggregation of many stack samples. Each rectangle is a stack frame; width is the share of samples or time, and vertical position is stack depth. The horizontal order is a merge order, not a timeline."
+   },
+   {
+    "term": "tracemalloc",
+    "def": "A standard-library allocation tracer. It records Python allocations with the traceback that made them and can compare snapshots, reporting current and peak traced memory by file and line."
+   },
+   {
+    "term": "CPU time vs wall time",
+    "def": "CPU time is time actually executing on a processor; wall time is elapsed clock time. Wall time also includes waiting for I/O, locks, timers, garbage collection and downstream services."
+   }
+  ],
+  "interview": [
+   {
+    "q": "A production endpoint is slow, but CPU is low. How do you investigate?",
+    "a": "Start by defining the workload and the metric: which endpoint, which request size, what latency, and for which users. Then separate waiting from computing. A trace of one representative request is the cheapest first step: it shows time in the handler, in database spans, in downstream calls and in queueing. If the trace shows a large span around a dependency, the bottleneck is there; if it shows time unaccounted for inside the service, sample the stacks with py-spy, including idle/off-CPU time, to see whether threads are blocked on a lock, a socket, a timer or the GIL. Low CPU with high wall time is the signature of waiting, not of a hot loop, so cProfile would be the wrong first instrument. Once you have a hypothesis, reproduce locally with the same payload, use cProfile for CPU-bound code or I/O instrumentation for waits, fix the largest measured contributor, and verify with the same trace and latency percentiles."
+   },
+   {
+    "q": "How do you debug a bug you cannot reproduce?",
+    "a": "Treat reproduction as the first deliverable. Capture everything that defines the failing case: exact input, request ID, user/tenant, Python and package versions, environment variables, feature flags, time window and the sequence of preceding requests. Add structured logs with a correlation ID and log decisions and state transitions rather than \"entered function\". Compare a working and a failing case to find the smallest difference; shrink the input with delta debugging and, for a regression, use git bisect to find the commit. If it is intermittent, classify it: concurrency, ordering, a cache with stale state, a timeout, or data left by an earlier request. Stress the suspected schedule, increase logging around it, and consider a sampling profiler or faulthandler rather than a breakpoint, which changes timing. Once reproduced, freeze it as a test before touching the fix."
+   },
+   {
+    "q": "Explain cProfile tottime versus cumtime, and when you would use a sampling profiler instead.",
+    "a": "In pstats, `tottime` is the time spent in the function's own bytecode, excluding calls it makes; `cumtime` is the time in the function plus everything it called. Sort by tottime to find leaf hotspots, and by cumtime to understand which call paths own the total time. cProfile is deterministic: it records every call and return, so counts are exact, but per-call overhead inflates functions called very often, and recursion complicates cumulative accounting. That makes it excellent for a reproducible local workload and a poor fit for production. A sampling profiler such as py-spy snapshots stacks at a fixed rate, so overhead stays low, it can attach to a running process without importing code into it, and it can measure wall-clock time including time blocked off-CPU. The trade-off is statistical noise: short functions may never be sampled, and counts are estimates. Use cProfile to explain a known CPU-bound case precisely; use py-spy when you need the real production behaviour, are chasing I/O or lock waits, or cannot afford to perturb the process."
+   }
+  ],
+  "quickCheck": [
+   {
+    "kind": "mcq",
+    "prompt": "A pstats table sorted by `tottime` shows `parse` with high `tottime` but low `cumtime`. What does that mean?",
+    "options": [
+     "`parse` burns CPU in its own code",
+     "`parse` spends most of its time waiting for callees",
+     "`parse` is blocked on I/O",
+     "`parse` is never called"
+    ],
+    "answer": 0,
+    "explanation": "`tottime` excludes callees, so high self time with low cumulative time means the function's own work is the cost. Waiting would show up as wall time, not self CPU time."
+   },
+   {
+    "kind": "output",
+    "prompt": "A request takes 900 ms of wall time and 70 ms of CPU time. What should you investigate next?",
+    "options": [
+     "A tighter loop in the handler",
+     "I/O, locks, timers, GC or downstream calls",
+     "A faster regex",
+     "The size of the Python bytecode cache"
+    ],
+    "answer": 1,
+    "explanation": "Wall time far above CPU time means the process is waiting, not computing. Function-level CPU profiling is not the first tool; look at spans, blocking calls and off-CPU samples."
+   },
+   {
+    "kind": "bug",
+    "prompt": "At `return best`, pdb shows `best = 2` and `current = 3`, and the input ends with three `True` values. What is the bug?",
+    "options": [
+     "`best` is never updated for a run that ends at the end of the list",
+     "`current` is counted twice",
+     "The input list is mutated",
+     "The loop skips every third element"
+    ],
+    "answer": 0,
+    "explanation": "The update to `best` only happens in the `else` branch. A run that finishes at the end of the list never reaches it, so the final `current` is discarded."
+   }
+  ],
+  "cheatSheet": [
+   "Loop: reproduce → shrink → hypothesise → instrument → verify → guard with a test.",
+   "Stack trace: Python prints the most recent call last. The last frame is the failure site; walk upward for the path.",
+   "pdb: `b file:line`, `b func`, `b 10, x > 3`, `p`/`pp`, `n`, `s`, `c`, `until`, `where`, `up`/`down`, `q`.",
+   "cProfile: `tottime` = self time; `cumtime` = self plus callees. Sort by tottime for hotspots, cumtime for paths.",
+   "cProfile overhead grows with call count; compare ratios on a fixed workload, never absolute production seconds.",
+   "py-spy: sampling, low overhead, attaches to a running process, can show wall-clock and off-CPU waits.",
+   "Flame graph: width = time or sample share, y = stack depth, x = merge order. Top-down for the path, bottom-up for wide leaves.",
+   "tracemalloc: `start()`, `take_snapshot()`, `statistics(\"lineno\")`; current and peak; Python allocations only, not all RSS.",
+   "Wall >> CPU means waiting; wall ≈ CPU means CPU-bound. Measure both before choosing a profiler.",
+   "Prove the fix with the same benchmark and a regression test; delete the temporary instrumentation."
+  ],
+  "capstone": {
+   "title": "DevAtlas: a reproducible debugging and profiling workflow",
+   "criteria": [
+    "A single script or Make target reproduces every artifact from a clean checkout",
+    "pdb, cProfile and benchmark outputs are saved under `artifacts/`",
+    "The benchmark compares before and after with correctness checks",
+    "The runbook states how to attach py-spy and how to redact sensitive data"
+   ]
+  },
+  "codeSamples": 9,
+  "file": "l1-6-1.ts"
+ },
+ {
   "id": "2.1.1",
   "title": "Big-O and hash maps: from O(n²) to O(n)",
   "minutes": 70,
@@ -2174,41 +2872,65 @@ export const lessonMeta: LessonMeta[] = [
   "terms": [
    {
     "term": "Big-O",
-    "def": "How the work grows as input size n grows, ignoring constants. O(n) doubles when n doubles; O(n²) quadruples."
+    "def": "A vocabulary for how work grows as input size n grows, keeping only the dominant term and dropping constants. O(n) doubles when n doubles; O(n²) quadruples."
    },
    {
     "term": "Time complexity",
-    "def": "How the number of operations grows with n."
+    "def": "How the number of elementary operations grows with n - not how many seconds a particular machine takes."
    },
    {
     "term": "Space complexity",
-    "def": "How the extra memory used grows with n."
+    "def": "How the extra (auxiliary) memory used grows with n. A hash map buys speed with O(n) extra memory."
    },
    {
     "term": "Hash map",
-    "def": "A key→value structure (Python dict, JS Map, C# Dictionary) with average O(1) insert and lookup."
+    "def": "A key to value structure (Python dict, JS Map, C# Dictionary) that finds a bucket from hash(key), so lookup is O(1) expected."
    },
    {
     "term": "Hash function",
-    "def": "Turns a key into a number used to pick a bucket. Equal keys must produce equal hashes."
+    "def": "Turns a key into an integer used to pick a bucket. Equal keys must produce equal hashes; unequal keys may collide."
+   },
+   {
+    "term": "Collision",
+    "def": "Two different keys landing in the same bucket. A few are normal; many turn expected O(1) into worst-case O(n)."
+   },
+   {
+    "term": "Load factor",
+    "def": "Entries divided by slots. CPython resizes a dict or set when it is about two-thirds full, which keeps collisions rare."
+   },
+   {
+    "term": "Expected O(1)",
+    "def": "O(1) on average over the hash function's distribution, not a guarantee for every single call. The worst case is O(n)."
    },
    {
     "term": "Amortised O(1)",
-    "def": "Usually O(1), occasionally expensive (e.g. resizing), but O(1) on average over many operations."
+    "def": "A sequence guarantee: rare O(n) resizes spread over many O(1) inserts. Different from average case, which is about input distribution."
+   },
+   {
+    "term": "Best / average / worst case",
+    "def": "Three bounds for the same algorithm on different inputs: linear search is O(1) best, O(n) average and O(n) worst."
+   },
+   {
+    "term": "Set",
+    "def": "A hash-based collection of unique keys (Python set, JS Set). Same bucket machinery as a dict, with no values."
+   },
+   {
+    "term": "Space-time trade-off",
+    "def": "Spending O(n) memory on a set or dict to remove an O(n) inner loop, turning O(n²) into O(n)."
    }
   ],
   "interview": [
    {
     "q": "What is the time complexity of dict lookup, and when can it be worse?",
-    "a": "O(1) average. It degrades toward O(n) when many keys collide into the same buckets, e.g. with a poor hash function or adversarial keys. Resizing makes inserts amortised O(1)."
+    "a": "Expected O(1), not guaranteed O(1). A dict hashes the key, masks it to a bucket index, and compares the stored key there; the number of entries does not change the number of buckets examined. Collisions are handled by probing, and CPython resizes when the table is about two-thirds full, so inserts are amortised O(1) over the O(n) rehash. The worst case is O(n) per lookup when many keys collide, for example a custom __hash__ that returns a constant or attacker-chosen keys, which turns n lookups into O(n²). Hashing a long string also costs O(length) the first time, although CPython caches the hash on the string object. Python randomises string hashing per process to make adversarial collisions hard; say 'expected' and mention the worst case, and you have the complete answer."
    },
    {
     "q": "Walk me through Two Sum and its trade-offs.",
-    "a": "Brute force checks every pair, O(n²) time and O(1) space. With a hash map from value to index, for each x I look up target − x, O(n) time and O(n) space. If the array is sorted, two pointers give O(n) time and O(1) space."
+    "a": "Brute force checks every pair, O(n²) time and O(1) space. With a hash map from value to index, for each x I look up target − x; that is O(n) time and O(n) space. The order matters: check the complement before inserting x, otherwise a single element can pair with itself. There is also a two-pointer solution: sort first (O(n log n), O(n) or O(1) space depending on the sort) then move the pointers inward in O(n); if the input is already sorted, that is O(n) time and O(1) space. Best case for the hash version is O(1) when the first two elements match; quote the average and worst cases too. At tiny n the brute force can win on constants, which is why you measure at the real input size."
    },
    {
-    "q": "How do you recognise that a problem needs a hash map?",
-    "a": "Phrases like 'seen before', 'count', 'frequency', 'pair that sums to', 'group by', 'duplicate', 'first unique'. Or a brute force with an inner loop that searches for something specific."
+    "q": "How do you recognise that a problem needs a hash map - and when is it the wrong tool?",
+    "a": "Look for 'seen before', 'count', 'frequency', 'pair that sums to', 'group by', 'duplicate', 'first unique', or a brute force whose inner loop searches for something specific. Replace that inner loop with a dict or set built once. But a hash map only answers exact-key questions well: hashes scatter keys, so ordered iteration, nearest-value, range queries and prefix search are better served by a sorted list with bisect, a B-tree index, or a trie. Top-k and streaming minimums want a heap; tiny collections may be faster as a plain list because hashing has overhead; and attacker-controlled keys make the worst-case collision behaviour a security concern. The right answer names the operations the problem needs, not just 'dict is O(1)'."
    }
   ],
   "quickCheck": [
@@ -2226,7 +2948,7 @@ export const lessonMeta: LessonMeta[] = [
      "O(n + m)"
     ],
     "answer": 2,
-    "explanation": "Two different inputs, nested: n·m. It is only O(n²) if both are the same collection."
+    "explanation": "Two different inputs, nested: n·m. It is only O(n²) if both are the same collection. Name each input separately."
    },
    {
     "kind": "bug",
@@ -2242,7 +2964,7 @@ export const lessonMeta: LessonMeta[] = [
      "Use recursion"
     ],
     "answer": 1,
-    "explanation": "`x not in out` is O(n) on a list, making the whole thing O(n²). A seen-set makes each check O(1): O(n) total."
+    "explanation": "`x not in out` is O(n) on a list, making the whole thing O(n²). A seen-set makes each check expected O(1): O(n) total, at the cost of O(n) memory."
    },
    {
     "kind": "output",
@@ -2254,22 +2976,25 @@ export const lessonMeta: LessonMeta[] = [
      "None"
     ],
     "answer": 1,
-    "explanation": "i=0: need 3, not seen; store 3. i=1: need 4, not seen; store 2. i=2: need 2, seen at 1 → (1, 2)."
+    "explanation": "i=0: need 3, not seen; store 3. i=1: need 4, not seen; store 2. i=2: need 2, seen at 1 -> (1, 2). Checking before inserting is what prevents (0, 0)."
    }
   ],
   "cheatSheet": [
    "O(1) < O(log n) < O(n) < O(n log n) < O(n²) < O(2ⁿ).",
-   "Keep the dominant term, drop constants; name each input separately.",
-   "dict/set: O(1) average insert and lookup; list `in`: O(n).",
-   "Inner loop searching for something? → hash map.",
-   "Signals: seen, count, pair, group, duplicate, first unique.",
-   "Two Sum: check complement first, then insert.",
-   "Always state time AND space complexity."
+   "Big-O is growth, not seconds. Keep the dominant term, drop constants, and name each input separately.",
+   "Constants decide small n, growth decides large n: with constants 10 and 1, O(n) is slower than O(n²) until n = 10.",
+   "Best/average/worst describe inputs. Amortised O(1) is a sequence guarantee (rare resizes), not an average.",
+   "dict/set: expected O(1) insert and lookup; list `in`: O(n) always.",
+   "Hash map worst case is O(n) under collisions; CPython resizes at about two-thirds load and randomises string hashes.",
+   "Space: Two Sum with a hash map is O(n), brute force O(1). Always state time AND space.",
+   "Inner loop searching for something? Build a set/dict once, then look up.",
+   "Wrong tool: order/range -> sorted list + bisect or B-tree; top-k -> heap; prefix -> trie; tiny n -> list.",
+   "Two Sum: check complement first, then insert. Signals: seen, count, pair, group, duplicate, first unique."
   ],
   "capstone": {
    "title": "DevAtlas step 6: fast article dedupe",
    "criteria": [
-    "O(new + stored) complexity",
+    "O(new + stored) average complexity, with the worst case named",
     "Benchmark numbers recorded",
     "Unit tests"
    ]
@@ -2280,9 +3005,9 @@ export const lessonMeta: LessonMeta[] = [
  {
   "id": "2.1.2",
   "title": "Two pointers and sliding window",
-  "minutes": 70,
+  "minutes": 85,
   "level": "Beginner",
-  "summary": "Master two patterns that turn many O(n²) array and string problems into O(n): two pointers moving through a sequence, and a window that grows and shrinks over it.",
+  "summary": "Master two patterns that turn many O(n²) array and string problems into O(n): two pointers moving through a sequence, and a window that grows and shrinks over it. Learn to recognise the shape, state the invariant, and prove the pointer moves are safe.",
   "terms": [
    {
     "term": "Two pointers",
@@ -2307,20 +3032,40 @@ export const lessonMeta: LessonMeta[] = [
    {
     "term": "Subarray / substring",
     "def": "A contiguous piece of an array/string. (A subsequence need not be contiguous; windows do not apply to it.)"
+   },
+   {
+    "term": "Amortised cost",
+    "def": "The average cost per step over a whole run. A shrink loop inside every iteration looks expensive, but left only moves n times in total, so the run is O(n)."
+   },
+   {
+    "term": "Monotone predicate",
+    "def": "A window rule whose truth is one-directional as the range grows: adding an element cannot repair an upper-bound violation ('too many duplicates', 'sum too high'), and adding cannot break a covering rule ('missing a required character'). Sliding windows are only correct when the rule has a consistent direction."
+   },
+   {
+    "term": "Opposite-end pointers",
+    "def": "l starts at 0 and r at n-1; each step moves exactly one of them inward. Works on sorted or symmetric data, and needs a proof that the discarded pointer cannot be in an answer."
+   },
+   {
+    "term": "Fast/slow pointers",
+    "def": "Both pointers move forward, usually at different speeds or for different jobs: read scans, write compacts, fast hunts for a cycle while slow advances one node."
+   },
+   {
+    "term": "Window state",
+    "def": "The running data a window keeps instead of re-scanning: a sum, a count map, a deque of timestamps, or a 'formed / required' pair. Updating it must be O(1) per move."
    }
   ],
   "interview": [
    {
     "q": "How do you know a problem is a sliding-window problem?",
-    "a": "It asks about a contiguous subarray or substring (longest, shortest, max sum, count) under a condition that can be maintained incrementally as the range grows and shrinks, like 'at most k distinct' or 'sum <= budget' with non-negative values."
+    "a": "Ask three questions. First, is the answer a contiguous subarray or substring? If it is a subsequence, a window cannot represent it. Second, can the condition be maintained incrementally as the range grows and shrinks ('at most k distinct', 'sum <= budget', 'contains all of t')? Third, is the predicate monotone in the direction you need: for longest-valid, adding elements must not repair a violation (so non-negative values or duplicate counts); for shortest-covering, removing elements must not repair a violation. If all three hold, expand right and shrink left; each index enters and leaves once, so it is O(n). If values can be negative and the sum must be exact, say so and use prefix sums plus a hash map instead."
    },
    {
     "q": "Why is the variable sliding window O(n) despite the nested while loop?",
-    "a": "Both pointers only move forward. right moves n times and left moves at most n times over the whole run, so total pointer moves are at most 2n."
+    "a": "Count pointer moves, not loop iterations. right moves from 0 to n-1, exactly n times. left starts at 0 and only ever increases, so across the entire run it moves at most n times. Every iteration of the inner while performs one left increment, so the inner loop's total work over the whole algorithm is at most n - not n per outer iteration. Total pointer moves are at most 2n, hence O(n). The same potential argument proves it: right - left rises by one per expansion and falls by one per shrink. Compare with brute force, which sums k elements for each of n positions: Θ(nk), or Θ(n²) when k is proportional to n."
    },
    {
     "q": "Two Sum on a sorted array: hash map or two pointers?",
-    "a": "Two pointers: O(n) time and O(1) extra space, exploiting the order. The hash map is also O(n) time but uses O(n) space; it is the better choice when the array is unsorted and sorting would lose original indexes."
+    "a": "Two pointers. Start l at 0 and r at n-1. If a[l] + a[r] equals the target, return the pair. If it is too large, a[r] cannot pair with any l' >= l because a[l'] is at least a[l], so decrement r. If it is too small, a[l] cannot pair with any r' <= r, so increment l. Each step discards a row of the pair table, giving O(n) time and O(1) extra space. The hash map is also O(n) time but O(n) space; it is the better choice when the array is unsorted and you must preserve original indexes, or when you need all pairs or a count. If duplicates or multiple answers are allowed, say how the pointer version should handle equal values."
    }
   ],
   "quickCheck": [
@@ -2362,100 +3107,127 @@ export const lessonMeta: LessonMeta[] = [
      "dicts are unordered"
     ],
     "answer": 1,
-    "explanation": "At the final 'a', last_seen['a']=0 moves left from 2 back to 1. Only move left forward."
+    "explanation": "At the final 'a', last_seen['a']=0 moves left from 2 back to 1. Only move left forward: require last_seen[ch] >= left."
    }
   ],
   "cheatSheet": [
-   "Contiguous + condition → sliding window. Sorted + pair → two pointers.",
-   "Fixed window: add entering, subtract leaving.",
-   "Variable window: expand right; while invalid, shrink left; record best.",
+   "Contiguous + monotone condition → sliding window. Sorted/symmetric + pair → opposite-end pointers.",
+   "Fixed window: add entering, subtract leaving; state is O(1).",
+   "Longest variable window: expand right; while invalid shrink left; record after valid.",
+   "Shortest variable window: expand until valid; while valid shrink and record each candidate.",
    "Window length = right - left + 1.",
-   "Each pointer moves forward only → O(n).",
+   "Each pointer moves forward only → at most 2n moves → O(n), even with a nested while.",
+   "Opposite ends: discard the pointer that cannot be in an answer (too big → r--, too small → l++).",
    "Negatives + exact sum → prefix sums + hash map, not windows.",
-   "Fast/slow pointers for in-place dedupe and partitioning.",
-   "deque for time-based windows."
+   "Fast/slow pointers for in-place dedupe, partitioning, middle node and Floyd cycle detection.",
+   "deque for time-based windows; never list.pop(0)."
   ],
   "capstone": {
    "title": "DevAtlas: best-week badge and API rate limiter",
    "criteria": [
     "O(n) badge computation",
     "Limiter tests with explicit times (no real clock)",
-    "Documented memory cost per key"
+    "Documented memory cost per key",
+    "At least one test comparing the window against brute force"
    ]
   },
-  "codeSamples": 10,
+  "codeSamples": 9,
   "file": "l2-1-2.ts"
  },
  {
   "id": "2.2.1",
   "title": "Stacks, queues and linked lists",
-  "minutes": 70,
+  "minutes": 85,
   "level": "Beginner",
-  "summary": "Know when last-in-first-out, first-in-first-out and linked structures are the right tool, including the monotonic stack trick and fast/slow pointers on linked lists.",
+  "summary": "Know when last-in-first-out, first-in-first-out and linked structures are the right tool, why Python's list is a bad queue, and how monotonic stacks and fast/slow pointers turn O(n²) scans into O(n).",
   "terms": [
    {
     "term": "Stack",
-    "def": "Last-in, first-out (LIFO): push on top, pop from the top. Python list append/pop, C# Stack<T>."
+    "def": "Last-in, first-out (LIFO): push onto the top, pop from the top. Python list append/pop, C# Stack<T>. All operations at the top are O(1) amortised."
    },
    {
     "term": "Queue",
-    "def": "First-in, first-out (FIFO): enqueue at the back, dequeue from the front. Python collections.deque, C# Queue<T>."
+    "def": "First-in, first-out (FIFO): enqueue at the back, dequeue from the front. Python collections.deque, C# Queue<T>. Both ends must be O(1)."
+   },
+   {
+    "term": "LIFO",
+    "def": "Last in, first out. The rule a stack obeys: the most recent item is the first one handled (undo, back button, call frames)."
+   },
+   {
+    "term": "FIFO",
+    "def": "First in, first out. The rule a queue obeys: arrival order is service order (jobs, BFS, message buffers)."
    },
    {
     "term": "Deque",
-    "def": "Double-ended queue: O(1) adds and removes at both ends."
+    "def": "Double-ended queue: O(1) adds and removes at both ends. CPython implements it as a doubly linked list of fixed-size blocks, so indexing the middle is O(n)."
    },
    {
     "term": "Linked list",
-    "def": "Nodes that each hold a value and a pointer to the next node. O(1) insert/remove at a known node; O(n) to find by position."
+    "def": "Nodes that each hold a value and a pointer to the next node. O(1) insert/remove when you already hold the node; O(n) to find by position."
+   },
+   {
+    "term": "Node",
+    "def": "One element of a linked structure: a value plus one pointer (singly linked) or two (doubly linked). The head is the first node; a sentinel is a dummy node that removes edge cases."
    },
    {
     "term": "Monotonic stack",
-    "def": "A stack kept in increasing or decreasing order, used to find the next greater/smaller element for every item in O(n)."
+    "def": "A stack whose values stay increasing or decreasing, holding indexes rather than values. Each index is pushed and popped once, so next greater/smaller element takes O(n)."
    },
    {
-    "term": "Call stack",
-    "def": "The stack of active function calls. Recursion uses it; too deep recursion causes a stack overflow."
+    "term": "Min stack",
+    "def": "A stack that also answers get_min in O(1), usually by storing (value, minimum so far) pairs or keeping a second stack of minima."
+   },
+   {
+    "term": "Fast/slow pointers",
+    "def": "Two pointers where slow moves one node and fast moves two. Detects a cycle and finds the middle in O(n) time and O(1) extra space."
+   },
+   {
+    "term": "Amortised O(1)",
+    "def": "A cost averaged over a sequence of operations. list.append occasionally reallocates and copies, but the total cost of n appends is O(n), so each append is O(1) amortised."
+   },
+   {
+    "term": "Cache locality",
+    "def": "Contiguous data loads whole cache lines and lets the CPU prefetch; following pointers jumps around memory and causes cache misses. It often decides real speed more than Big-O does."
    }
   ],
   "interview": [
    {
-    "q": "How would you check that brackets are balanced?",
-    "a": "Scan characters; push opening brackets onto a stack; on a closing bracket, the stack must be non-empty and its top must be the matching opener, which you pop. At the end the stack must be empty. O(n) time, O(n) space."
+    "q": "Compare LIFO and FIFO. Implement a queue using two stacks, and explain the amortised cost.",
+    "a": "A stack exposes one end: push and pop both touch the most recent item, which is what undo, bracket matching, DFS and the call stack need. A queue exposes two ends: enqueue at the back and dequeue at the front, which is what BFS, job processing and buffering need. The implementation rule follows from the contract: a stack needs one O(1) end, a queue needs two. In Python a list gives the stack for free, but `pop(0)` is O(n) because every remaining pointer shifts, so a queue uses `deque`. To build a queue from two stacks, keep an `in` stack and an `out` stack. Push onto `in`. To dequeue, if `out` is empty, pop every element from `in` and push it onto `out`, which reverses the order, then pop `out`. Each element is pushed onto `in` once, moved to `out` at most once, and popped once, so the total work for n operations is O(n) and each dequeue is amortised O(1) - a single dequeue can be O(n), but only after many cheap ones. The worst-case per-operation cost is O(n), which is the distinction interviewers listen for. A ring buffer over a preallocated array achieves O(1) worst case for both ends with two indexes and a count."
    },
    {
-    "q": "Implement a queue using two stacks.",
-    "a": "Push to an 'in' stack. To dequeue, if the 'out' stack is empty, pop everything from 'in' and push onto 'out' (reversing order), then pop from 'out'. Each element moves at most twice, so operations are amortised O(1)."
+    "q": "Design a stack with push, pop, top and get_min in O(1). Then use a monotonic stack to find the next greater element for every index in O(n).",
+    "a": "For the min stack, store a pair per entry: the value and the minimum of the whole stack at the moment it was pushed. `push(x)` appends `(x, min(x, top_min))`; `pop` removes the pair and automatically restores the previous minimum; `top` and `get_min` read the top pair. All four are O(1) because no entry is ever rescanned. The alternative is a second stack of minima: push onto it when the new value is less than or equal to the current minimum, and pop it whenever the main stack pops a value equal to the current minimum; the `<=` matters when duplicates exist. Recomputing `min(items)` is O(n) and is the usual wrong answer. For next greater element, scan left to right with a stack of indexes whose values are still waiting. For each `i`, while the stack is non-empty and `nums[stack[-1]] < nums[i]`, pop `j` and set `answer[j] = nums[i]`; then push `i`. The stack values are decreasing from bottom to top, so the first value that breaks the order resolves every smaller value above it. Each index is pushed once and popped at most once, so the loop is O(n) even though it contains a nested while. Use `<` for strictly greater and `<=` for greater-or-equal. To report the distance instead of the value, as in daily temperatures, store `i - j`. For a circular array, iterate `2n` indexes and use `i % n`, stopping once every index has an answer. Next smaller element flips the comparison; the same structure also solves largest rectangle in a histogram and stock span."
    },
    {
-    "q": "How do you detect a cycle in a linked list?",
-    "a": "Floyd's fast/slow pointers: slow moves one step, fast two. If they ever meet, there is a cycle; if fast reaches None, there is not. O(n) time, O(1) space."
+    "q": "Detect a cycle and find the middle of a linked list in O(1) extra space. Then explain why arrays usually beat linked lists in practice.",
+    "a": "Use two pointers starting at the head: slow moves one node, fast moves two. If fast reaches None or fast.next is None, the list is acyclic, because fast traversed the whole list. If there is a cycle, fast enters it and then gains one node per step on slow, so they must eventually point at the same node; return true at that meeting. This is Floyd's algorithm, O(n) time and O(1) space, versus a visited set that costs O(n) memory. To find the cycle entry, after the meeting move one pointer back to the head and advance both one step at a time; they meet at the entry, because the distance from the head to the entry equals the distance from the meeting point around the cycle to the entry. For the middle, run the same slow/fast walk until fast cannot advance two steps; slow is then at the middle. For an even-length list this returns the second middle; adjust the loop condition if the first is required. In practice, arrays beat linked lists for most workloads even though list insertion is textbook O(1): array access is O(1) with one address calculation, elements share cache lines, and the hardware prefetcher hides memory latency. Linked nodes are separate allocations, so traversal is a chain of dependent loads that can miss cache on every node, and insertion is O(1) only if you already hold the node - finding it is O(n). A dynamic array's O(n) insert is often a single fast `memmove` over contiguous memory, which can beat pointer manipulation. Linked lists win when references are stable (nodes do not move), when splicing a held node dominates (LRU caches, intrusive lists, free lists), or when the structure is part of a lock-free algorithm. The interview answer is to state the Big-O, then state the constant factors and cache behaviour that decide real performance."
    }
   ],
   "quickCheck": [
    {
     "kind": "output",
-    "prompt": "balanced('(]') returns:",
+    "prompt": "What does `next_greater([2, 1, 2, 4, 3])` return?",
     "options": [
-     "True",
-     "False",
-     "IndexError",
-     "None"
+     "[4, 2, 4, -1, -1]",
+     "[4, 4, 4, -1, -1]",
+     "[-1, 2, 4, -1, -1]",
+     "[4, 2, -1, 4, -1]"
     ],
-    "answer": 1,
-    "explanation": "On ']' the top of the stack is '(' which does not match '['."
+    "answer": 0,
+    "explanation": "The 2 at index 2 answers index 1; the 4 then answers index 2 and index 0 in stack order. Neither 4 nor 3 has a greater value to its right, so both stay -1."
    },
    {
     "kind": "mcq",
-    "prompt": "Which structure fits breadth-first processing (handle items in arrival order)?",
+    "prompt": "Which operation is O(n) on a Python list but O(1) on a `collections.deque`?",
     "options": [
-     "Stack",
-     "Queue",
-     "Linked list sorted by value",
-     "Heap"
+     "Appending at the end",
+     "Popping from the end",
+     "Removing from the front",
+     "Reading the length"
     ],
-    "answer": 1,
-    "explanation": "BFS processes nodes level by level in arrival order: a FIFO queue."
+    "answer": 2,
+    "explanation": "`list.pop(0)` shifts every remaining element; `deque.popleft()` unlinks the front block entry. Length is O(1) for both."
    },
    {
     "kind": "bug",
@@ -2471,24 +3243,27 @@ export const lessonMeta: LessonMeta[] = [
      "while loops are slow"
     ],
     "answer": 1,
-    "explanation": "Use deque and popleft for O(1) dequeues."
+    "explanation": "Each `pop(0)` moves the remaining n-1 pointers, so the total is quadratic. Use `deque` and `popleft()` for O(1) dequeues."
    }
   ],
   "cheatSheet": [
-   "Stack = LIFO: undo, brackets, DFS, backtracking.",
-   "Queue = FIFO: jobs, BFS, buffering. Python: deque.",
-   "list.append/pop O(1); list.pop(0) O(n).",
-   "Monotonic stack → next greater/smaller element in O(n).",
-   "Linked list: O(1) splice at a node, O(n) index access.",
-   "Reverse a list: prev/curr/next pointer dance.",
-   "Fast/slow pointers: middle of list, cycle detection."
+   "Stack = LIFO: undo, brackets, DFS, backtracking, call frames.",
+   "Queue = FIFO: jobs, BFS, buffering, rate limiting.",
+   "`list.append` / `list.pop()` are O(1) amortised; `list.pop(0)` is O(n).",
+   "`deque.append` / `appendleft` / `pop` / `popleft` are O(1); `deque[i]` in the middle is O(n).",
+   "Queue from two stacks: push to `in`; when `out` is empty, reverse `in` onto `out`; amortised O(1).",
+   "Monotonic stack: push indexes, pop while the new value wins, record the answer; O(n) total.",
+   "Next greater uses `<`; next greater-or-equal uses `<=`; temperatures store `i - j`; circular arrays iterate `2n` with `i % n`.",
+   "Min stack: store `(value, min_so_far)` or a second stack of minima; every operation is O(1).",
+   "Linked list: O(1) splice with a held node, O(n) lookup; singly vs doubly trades one pointer for backward moves and O(1) unlink.",
+   "Floyd: slow +1, fast +2; meeting means a cycle, fast reaching None means none; reset one pointer to the head to find the entry."
   ],
   "capstone": {
    "title": "DevAtlas: bracket checker for code answers",
    "criteria": [
-    "Reports position and bracket for each problem",
-    "Ignores brackets inside string literals (bonus)",
-    "Tests for each error type"
+    "Reports the position and bracket for each problem",
+    "Handles a mismatched closer that leaves an opener unclosed",
+    "Tests for each error type, and a valid snippet returns an empty list"
    ]
   },
   "codeSamples": 9,
@@ -2497,47 +3272,71 @@ export const lessonMeta: LessonMeta[] = [
  {
   "id": "2.2.2",
   "title": "Recursion, sorting and binary search",
-  "minutes": 75,
+  "minutes": 90,
   "level": "Beginner",
-  "summary": "Think recursively with base cases and trust, understand how merge sort and quicksort work and what sorting costs, and use binary search on sorted data and on answers.",
+  "summary": "Think recursively with base cases and trust, see recursion as a call stack and a recursion tree, understand what sorting costs (merge sort, quicksort, Timsort, the n log n floor), and use binary search on sorted data and on the answer space.",
   "terms": [
    {
     "term": "Recursion",
-    "def": "A function that solves a problem by calling itself on smaller versions of the same problem."
+    "def": "A function that solves a problem by calling itself on a smaller input of the same shape. The solution for n is built from the solution for smaller n."
    },
    {
     "term": "Base case",
     "def": "The smallest input the function answers directly, without recursing. Without it, recursion never ends."
    },
    {
+    "term": "Call stack",
+    "def": "The LIFO structure the runtime uses to track active calls. Each call pushes a frame; each return pops one. The frame holds arguments, locals and the return address."
+   },
+   {
+    "term": "Stack depth",
+    "def": "How many frames are live at once. Depth is the longest chain of calls, not the total number of calls. Python's default limit is about 1000 frames."
+   },
+   {
+    "term": "Recursion tree",
+    "def": "The tree of calls a recursive function makes. Its shape explains the cost: branching and depth multiply, which is why naive Fibonacci is exponential."
+   },
+   {
+    "term": "Memoisation",
+    "def": "Caching a function's result per argument, so a repeated subproblem returns from the cache instead of being recomputed. Trades memory for time."
+   },
+   {
     "term": "Divide and conquer",
-    "def": "Split the problem into parts, solve each recursively, combine the results (merge sort, quicksort)."
+    "def": "Split the problem into independent parts, solve each recursively, then combine. Merge sort and quicksort are the canonical examples."
    },
    {
     "term": "Stable sort",
-    "def": "A sort that keeps equal elements in their original relative order. Python's sorted() is stable."
+    "def": "A sort that keeps equal elements in their original relative order. Python's `sorted()` and `list.sort()` are stable."
+   },
+   {
+    "term": "Pivot",
+    "def": "The element quicksort partitions around. Everything smaller goes to one side, everything larger to the other; the pivot then sits at its final index."
+   },
+   {
+    "term": "Timsort",
+    "def": "The hybrid merge/insertion sort behind Python's `sorted()`. Stable, O(n log n) worst case, O(n) on already-sorted or reverse-sorted runs."
    },
    {
     "term": "Binary search",
-    "def": "Find a target in sorted data by repeatedly halving the search range: O(log n)."
+    "def": "Find a target in sorted data by repeatedly halving the search range: O(log n) comparisons and O(1) extra space."
    },
    {
     "term": "Binary search on the answer",
-    "def": "Binary search over possible answer values when you can test 'is X good enough?' and that test is monotonic."
+    "def": "Binary search over possible answer values when you can test 'is X good enough?' and that test is monotonic: false for small X, true from some point on."
    }
   ],
   "interview": [
    {
-    "q": "Merge sort vs quicksort?",
-    "a": "Merge sort: always O(n log n), stable, needs O(n) extra space, good for linked lists and external sorting. Quicksort: O(n log n) average, O(n²) worst case with bad pivots, in place, fast in practice due to cache friendliness. Production libraries use hybrids like Timsort or introsort."
+    "q": "Walk me through how you write a recursive function and what can go wrong.",
+    "a": "State the contract first: what does the function return for an input? Then write the base case - the smallest input you can answer directly - and make progress toward it on every call. Assume the recursive call already works for the smaller input (the leap of faith) and combine. In the runtime each call pushes a frame, so depth is the height of the call tree and Python's default limit is about 1000 frames; a missing base case or a non-shrinking step gives RecursionError. If subproblems repeat, memoise with `functools.cache` and show the change: naive fib(30) makes 2,692,537 calls, memoised makes 31. If the depth is unbounded, replace recursion with an explicit stack or a loop."
    },
    {
-    "q": "What is binary search on the answer?",
-    "a": "When the answer lies in a numeric range and a feasibility check is monotonic (once true, stays true for larger values), binary search the range using the check. Examples: minimum capacity to ship packages in D days, minimum speed to finish on time."
+    "q": "Compare merge sort, quicksort and Timsort. Why can't a comparison sort beat O(n log n)?",
+    "a": "Merge sort splits, sorts each half and merges: O(n log n) always, stable if ties take from the left, O(n) extra memory; good for linked lists and external sorting. Quicksort partitions in place around a pivot: O(n log n) average, O(n^2) worst when pivots are repeatedly extreme, O(log n) average stack, not stable; random or median-of-three pivots and an introsort fallback control the worst case. Timsort is a stable hybrid that finds natural runs, extends short runs with insertion sort and merges with galloping; it is what Python's sorted() uses, O(n) on already-sorted data and O(n log n) worst. The lower bound comes from the decision tree: a comparison sort must distinguish n! permutations, so its height is at least log2(n!), which is Theta(n log n). Counting and radix sort beat it only by not comparing keys."
    },
    {
-    "q": "How do you avoid stack overflow in recursion?",
-    "a": "Ensure recursion depth is bounded (e.g. log n for balanced divide and conquer), convert deep recursion to iteration with an explicit stack, or use tail-call friendly patterns in languages that optimise them (Python does not)."
+    "q": "What is binary search on the answer, and how do you avoid off-by-one bugs?",
+    "a": "It applies when the answer is a number in a range and a feasibility check is monotonic: false for small values, true from some threshold on. Binary search the range with that check instead of a sorted array; each check is often O(n), so the cost is O(n log range). Set `lo` to a value that is definitely infeasible and `hi` to one that is definitely feasible, then keep `mid` when the check passes (`hi = mid`) and discard it when it fails (`lo = mid + 1`). To avoid off-by-one bugs, write the invariant as a comment - the answer is always in `[lo, hi)` - use `mid = lo + (hi - lo) // 2`, and test the smallest cases (empty range, one element, answer at both ends). The same rules make ordinary binary search safe: `bisect_left` returns the first index `>= target`, `bisect_right` the first `> target`."
    }
   ],
   "quickCheck": [
@@ -2551,11 +3350,11 @@ export const lessonMeta: LessonMeta[] = [
      "~1,000,000"
     ],
     "answer": 0,
-    "explanation": "log₂(1,000,000) ≈ 20."
+    "explanation": "log2(1,000,000) is about 20. Each comparison halves the remaining range."
    },
    {
     "kind": "output",
-    "prompt": "bisect.bisect_left([1, 3, 3, 5], 3) returns:",
+    "prompt": "`bisect.bisect_left([1, 3, 3, 5], 3)` returns:",
     "options": [
      "1",
      "2",
@@ -2563,7 +3362,7 @@ export const lessonMeta: LessonMeta[] = [
      "0"
     ],
     "answer": 0,
-    "explanation": "bisect_left gives the first position where 3 could be inserted keeping order: index 1. bisect_right would give 3."
+    "explanation": "bisect_left gives the first position where 3 could be inserted keeping order: index 1. bisect_right would give 3, so the count of 3s is 3 - 1 = 2."
    },
    {
     "kind": "bug",
@@ -2583,13 +3382,16 @@ export const lessonMeta: LessonMeta[] = [
    }
   ],
   "cheatSheet": [
-   "Recursion: base case first, trust smaller calls, combine.",
-   "Merge sort O(n log n) stable; quicksort average O(n log n), worst O(n²).",
-   "Built-in sort: sorted(xs, key=..., reverse=...): stable, Timsort.",
-   "Binary search O(log n) on sorted data; bisect_left/bisect_right.",
-   "Invariant + one bound convention ([lo, hi)) prevents off-by-ones.",
-   "Binary search on the answer: monotonic feasible(x).",
-   "Overlapping subproblems → memoise."
+   "Recursion: base case first, make progress, trust the smaller call, combine.",
+   "Depth is live frames (the tallest chain), not total calls. Python's limit is about 1000; deep input needs an explicit stack or a loop.",
+   "Naive fib is about 1.6^n; memoised fib is O(n) time and O(n) space. Memoise only overlapping subproblems.",
+   "Merge sort: O(n log n) always, stable, O(n) extra. Quicksort: average O(n log n), worst O(n^2), in place, not stable.",
+   "Timsort is Python's sorted(): stable, O(n log n) worst, O(n) on already-sorted or reverse-sorted runs.",
+   "Comparison sorts are Omega(n log n); counting and radix beat that only for structured integer keys.",
+   "Binary search invariant: the answer stays in [lo, hi); mid = lo + (hi - lo) // 2; each step halves the range.",
+   "bisect_left = first index >= x; bisect_right = first index > x; equal values live in [left, right).",
+   "Binary search on the answer: monotonic feasible(x), definitely-infeasible lo, definitely-feasible hi, keep mid on success.",
+   "Do not sort if a heap, quickselect or one pass answers the question; sorting costs O(n log n) and often O(n) memory."
   ],
   "capstone": {
    "title": "DevAtlas: fast 'since' queries in memory",
@@ -2615,41 +3417,61 @@ export const lessonMeta: LessonMeta[] = [
    },
    {
     "term": "Binary tree",
-    "def": "Each node has at most two children: left and right."
+    "def": "Each node has at most two children: left and right. The shape - not the number of nodes - decides most of the cost."
    },
    {
-    "term": "BST",
-    "def": "Binary search tree: everything in a node's left subtree is smaller, everything in the right subtree is larger."
+    "term": "Leaf",
+    "def": "A node with no children. Every root-to-leaf path ends at a leaf; height and minimum-depth questions are really questions about leaves."
    },
    {
     "term": "Height",
-    "def": "The number of edges on the longest path from root to a leaf. Operations on a BST cost O(height)."
+    "def": "The number of edges on the longest path from root to a leaf. A single node has height 0, an empty tree -1, and operations on a BST cost O(height)."
    },
    {
-    "term": "DFS / BFS",
-    "def": "Depth-first search goes deep along a branch first (recursion or a stack); breadth-first search visits level by level (a queue)."
+    "term": "BST",
+    "def": "Binary search tree: everything in a node's left subtree is smaller, everything in the right subtree is larger. Search, insert and delete all walk one root-to-leaf path."
+   },
+   {
+    "term": "Balanced vs degenerate",
+    "def": "A balanced tree keeps height O(log n) as nodes are added; a degenerate one has one child per node, height n-1, and behaves like a linked list. Sorted inserts into a plain BST produce the degenerate shape."
+   },
+   {
+    "term": "DFS",
+    "def": "Depth-first search goes deep along a branch before backtracking, using recursion or an explicit stack. Preorder, inorder and postorder differ only in when the node itself is visited."
+   },
+   {
+    "term": "BFS / level order",
+    "def": "Breadth-first search visits every node at depth d before any node at depth d+1, using a queue. Memory is O(width), and the first leaf found is a nearest leaf."
    },
    {
     "term": "Heap",
-    "def": "A tree stored in an array where each parent is ≤ its children (min-heap). The smallest item is always at index 0. Python: heapq."
+    "def": "A complete binary tree where each parent is ≤ its children (min-heap) or ≥ them (max-heap). The extreme value is always at the root, so peek is O(1). Python: heapq."
+   },
+   {
+    "term": "Complete tree",
+    "def": "Every level is full except possibly the last, which is filled left to right. Completeness is why a heap fits a plain array with no gaps and no child pointers."
    },
    {
     "term": "Priority queue",
-    "def": "A queue that always returns the highest-priority item next, usually implemented with a heap."
+    "def": "A queue that always returns the highest-priority item next, usually implemented with a heap. Push and pop are O(log n), peek O(1)."
+   },
+   {
+    "term": "Sorted map",
+    "def": "An ordered dictionary backed by a balanced search tree, skip list or B-tree. Keys iterate in order and search/insert/delete are O(log n): Java TreeMap, C++ std::map, .NET SortedDictionary."
    }
   ],
   "interview": [
    {
-    "q": "DFS vs BFS on a tree?",
-    "a": "DFS goes deep first using recursion or a stack; memory is O(height); good for path questions and computing subtree values. BFS goes level by level with a queue; memory is O(width); good for 'nearest' or level-based questions, like minimum depth."
+    "q": "DFS vs BFS on a tree? Which traversal would you use for which question?",
+    "a": "DFS goes deep first using recursion or a stack; memory is O(height); good for path questions and computing subtree values. Preorder visits the node before its children, which is what you want to copy or serialize a tree; inorder visits left, node, right, which gives sorted order on a BST and the k-th smallest element; postorder visits both children first, which is what subtree totals, sizes and deletion need. BFS goes level by level with a queue; memory is O(width); good for 'nearest' or level-based questions, like minimum depth, the widest level, or the first node at a given depth. The rule of thumb: if the answer depends on a node's children, use postorder; if it depends on ancestors or a path, use preorder with backtracking; if it depends on depth, use BFS. Mention the memory trade: width can be n/2 in a balanced tree, while height is log n."
    },
    {
     "q": "How do you find the K largest elements in a stream?",
-    "a": "Maintain a min-heap of size K. For each element, if the heap has fewer than K items push it; otherwise if it is larger than the heap's minimum, replace the minimum. O(n log K) time, O(K) memory."
+    "a": "Maintain a min-heap of size K. For each element, if the heap has fewer than K items push it; otherwise if it is larger than the heap's minimum, replace the minimum with heapreplace. The root is always the weakest survivor, so anything smaller than it cannot be in the top K. O(n log K) time and O(K) memory, and the input can be a generator, which is why it works on an unbounded stream. If you need the result sorted, pop the heap K times, O(K log K). Sorting the whole stream is O(n log n) and needs all n items, so it is the wrong tool when K is small; but if you already have the data and need the full order anyway, sort. Watch ties and incomparable payloads: use (score, counter, id) so heapq never compares the payload itself."
    },
    {
     "q": "Why do databases use B-trees rather than binary search trees?",
-    "a": "Disk and memory pages are large. B-trees store many keys per node, so the tree is very shallow (often 3–4 levels for millions of rows), minimising page reads, and they stay balanced on inserts and deletes."
+    "a": "Disk and memory pages are large. A binary tree does one key comparison per node and one pointer chase per level, so a million rows cost about 20 page reads in the best case. A B-tree stores many keys per node, so the tree is very shallow (often 3-4 levels for millions of rows), minimising page reads, and it stays balanced on inserts and deletes by splitting and merging nodes. Binary search trees are still the right in-memory sorted map: red-black and AVL trees give O(log n) search, insert and delete with a small constant, and that is what Java's TreeMap, C++'s std::map and .NET's SortedDictionary implement. A plain unbalanced BST is the one you should not ship for untrusted input, because sorted keys degenerate it to a linked list with O(n) operations."
    }
   ],
   "quickCheck": [
@@ -2695,13 +3517,16 @@ export const lessonMeta: LessonMeta[] = [
    }
   ],
   "cheatSheet": [
-   "DFS: recursion/stack, O(h) memory. BFS: queue, level by level.",
-   "Pre/in/post order; inorder of BST = sorted.",
+   "DFS: recursion/stack, O(h) memory. BFS: queue, level by level, O(w) memory.",
+   "Preorder = copy/serialize; inorder = sorted on a BST; postorder = subtree totals; level order = nearest/width.",
    "BST ops O(h); balanced h = log n, degenerate h = n.",
-   "heapq: min-heap; heappush/heappop O(log n), heapify O(n).",
+   "BST delete: no child → remove; one child → splice; two children → replace with inorder successor.",
+   "Balanced trees: AVL (stricter) and red-black (fewer rotations); both keep O(log n). Sorted maps ship with them.",
+   "heapq: min-heap; heappush/heappop O(log n), peek O(1), heapify O(n).",
    "Max-heap: push -priority. Tie-breaker: (prio, counter, item).",
-   "Top K: min-heap of size K → O(n log K).",
-   "Deep trees: iterative traversal."
+   "Top K: min-heap of size K → O(n log K), O(K) memory, stream-friendly.",
+   "Sort when you need full order or n is small; heap when K ≪ n, data streams, or you need repeated min/max.",
+   "Iterating a heap array is not sorted; pop n times or sort."
   ],
   "capstone": {
    "title": "DevAtlas: trending news with a bounded heap",
@@ -2711,23 +3536,47 @@ export const lessonMeta: LessonMeta[] = [
     "Tests"
    ]
   },
-  "codeSamples": 8,
+  "codeSamples": 9,
   "file": "l2-3-1.ts"
  },
  {
   "id": "2.3.2",
   "title": "Graphs: BFS, DFS, Dijkstra, union-find",
-  "minutes": 85,
+  "minutes": 95,
   "level": "Intermediate",
-  "summary": "Model problems as graphs, choose the right representation, and apply BFS (shortest hops), DFS (reachability, cycles, topological order), Dijkstra (weighted shortest paths) and union-find (connectivity).",
+  "summary": "Model problems as graphs, choose a representation with your eyes open, and apply BFS (fewest hops), DFS (reachability, cycles, order), Dijkstra (non-negative weights) and union-find (dynamic connectivity).",
   "terms": [
    {
     "term": "Graph",
     "def": "Nodes (vertices) connected by edges. Edges can be directed (one-way) or undirected, weighted or unweighted."
    },
    {
+    "term": "Directed graph",
+    "def": "Every edge has a direction: A to B does not imply B to A. Prerequisites, follows, imports and one-way streets are directed."
+   },
+   {
+    "term": "Weighted graph",
+    "def": "Each edge carries a number: latency, distance, cost, capacity. Unweighted graphs are the special case where every edge costs the same."
+   },
+   {
     "term": "Adjacency list",
-    "def": "For each node, the list of its neighbours. The usual representation: O(V + E) memory."
+    "def": "For each node, the list of its neighbours (and weights). O(V + E) memory; the default for sparse graphs."
+   },
+   {
+    "term": "Adjacency matrix",
+    "def": "A V by V table where cell (u, v) says whether the edge u to v exists (or its weight). O(V^2) memory, O(1) edge lookup."
+   },
+   {
+    "term": "Sparsity",
+    "def": "E compared with V^2. Real graphs are usually sparse (E is a small multiple of V), which is why lists beat matrices in practice."
+   },
+   {
+    "term": "BFS",
+    "def": "Breadth-first search: expand the frontier ring by ring with a queue. In an unweighted graph, first arrival is the fewest-edge path."
+   },
+   {
+    "term": "DFS",
+    "def": "Depth-first search: follow one path to its end, then backtrack, using recursion or a stack. Good for reachability, components, cycles and order."
    },
    {
     "term": "Topological order",
@@ -2739,25 +3588,25 @@ export const lessonMeta: LessonMeta[] = [
    },
    {
     "term": "Dijkstra",
-    "def": "Shortest paths from one source in a graph with non-negative weights, using a priority queue."
+    "def": "Shortest paths from one source with non-negative weights: always settle the cheapest unfinalised node, using a min-heap."
    },
    {
     "term": "Union-find (disjoint set)",
-    "def": "A structure that tracks which items are in the same group, with near-O(1) union and find operations."
+    "def": "A structure that tracks which items share a group, supporting union and find in near-constant amortised time."
    }
   ],
   "interview": [
    {
-    "q": "How do you detect a cycle in a directed graph?",
-    "a": "Kahn's algorithm: if the topological sort cannot include all nodes, there is a cycle. Or DFS with three colours (unvisited, in progress, done): reaching an in-progress node means a back edge, which is a cycle."
+    "q": "How do you choose between BFS, DFS and Dijkstra?",
+    "a": "Start from the question and the edge weights. Fewest edges in an unweighted graph: BFS, because the queue finalises nodes in non-decreasing distance, so first arrival is shortest. Reachability, connected components, cycle detection or a dependency order: DFS (or BFS), because distance is irrelevant and the traversal order carries the information you need. Cheapest path with non-negative weights: Dijkstra, because the heap extends the cheapest known route and settling is safe. Negative weights: Bellman-Ford. All three traversals visit each node and edge once, so BFS and DFS are O(V + E); Dijkstra is O((V + E) log V) with a binary heap, dominated by heap operations and edge relaxations."
    },
    {
-    "q": "When BFS and when Dijkstra?",
-    "a": "BFS for unweighted graphs (or all weights equal): first arrival is shortest. Dijkstra for non-negative weights, using a min-heap of tentative distances. Negative weights need Bellman-Ford."
+    "q": "How do you detect a cycle in a directed graph, and how is it different in an undirected graph?",
+    "a": "Directed: Kahn's algorithm removes zero-in-degree nodes; if fewer than V are removed, the remainder is in a cycle, though it does not give the path. A colour DFS returns a path: keep white (unvisited), grey (on the current stack) and black (finished); an edge to a grey node is a back edge, and slicing the current path from that node produces the cycle. Undirected: an edge back to an already-visited neighbour is only a cycle if that neighbour is not your parent, because the parent edge is the one you just traversed. Union-find is cleaner: process edges and report a cycle when both endpoints already have the same root. The distinction matters because direction changes which subgraphs are cycles at all."
    },
    {
-    "q": "What is union-find good for?",
-    "a": "Dynamic connectivity: merging groups as edges arrive and checking whether two items are in the same group, in near-constant time. Uses include Kruskal's minimum spanning tree, connected components, and grouping linked accounts."
+    "q": "What is union-find good for, and when is DFS better?",
+    "a": "Union-find maintains connectivity as edges arrive: find with path compression and union by rank give near-constant amortised operations, which is ideal for dynamic connectivity, Kruskal's minimum spanning tree, percolation and grouping accounts that share devices. DFS is better for a static snapshot: one O(V + E) pass labels every component and can also return the actual paths or detect cycles, without the bookkeeping of unions. Use union-find when queries are interleaved with updates; use DFS when you have the whole graph once and need structure, not just a yes/no."
    }
   ],
   "quickCheck": [
@@ -2771,7 +3620,7 @@ export const lessonMeta: LessonMeta[] = [
      "Sorting"
     ],
     "answer": 1,
-    "explanation": "Each move costs the same; BFS gives the minimum number of moves."
+    "explanation": "Each move costs the same; BFS gives the minimum number of moves because it exhausts every shorter path first."
    },
    {
     "kind": "mcq",
@@ -2803,71 +3652,103 @@ export const lessonMeta: LessonMeta[] = [
    }
   ],
   "cheatSheet": [
-   "Adjacency list: dict[node, list[neighbour]].",
-   "BFS (queue) = fewest edges; mark seen on enqueue.",
-   "DFS (stack/recursion) = reachability, components, cycles.",
-   "Topological sort (Kahn): in-degree 0 queue; leftovers = cycle.",
-   "Dijkstra: min-heap, skip stale entries, non-negative weights.",
-   "Union-find: find with path compression, union by rank.",
-   "All traversals O(V + E)."
+   "Adjacency list: dict[node, list[neighbour]] or list[(neighbour, weight)]; O(V + E) memory, O(degree) edge check.",
+   "Adjacency matrix: V x V, O(V^2) memory, O(1) edge check; only for dense graphs or constant edge queries.",
+   "BFS (queue) = fewest edges; mark seen on enqueue; level[n] = level[parent] + 1.",
+   "DFS (stack/recursion) = reachability, components, cycles, pre/post order; not a distance order.",
+   "Directed cycle: colour DFS (grey back edge) or Kahn leftovers. Undirected cycle: skip the parent, or union-find.",
+   "Topological sort (Kahn): in-degree 0 queue; leftovers = cycle; order is valid but not unique.",
+   "Dijkstra: min-heap, skip stale entries, non-negative weights, O((V + E) log V).",
+   "Negative weights: Bellman-Ford O(V * E); a negative cycle makes shortest paths undefined.",
+   "Union-find: find with path compression + union by rank; ~O(1) amortised; Kruskal and dynamic connectivity.",
+   "Every traversal is O(V + E); a matrix turns that into O(V^2) because it scans absent edges too."
   ],
   "capstone": {
    "title": "DevAtlas: prerequisite graph validation",
    "criteria": [
     "Order respects every prerequisite",
     "CI fails on cycles with a readable path",
-    "Unit tests for both outcomes"
+    "Unit tests for both outcomes",
+    "Unknown and duplicate ids rejected before ordering"
    ]
   },
-  "codeSamples": 8,
+  "codeSamples": 9,
   "file": "l2-3-2.ts"
  },
  {
   "id": "2.3.3",
   "title": "Tries",
-  "minutes": 50,
+  "minutes": 65,
   "level": "Intermediate",
-  "summary": "Build a trie (prefix tree) for autocomplete and prefix search, rank suggestions, and know when a trie beats a hash map, a sorted list or a database index.",
+  "summary": "Build a trie (prefix tree) for autocomplete, prefix search and wildcard matching, rank suggestions, and know when a trie beats a hash map, a sorted list or a database index.",
   "terms": [
    {
     "term": "Trie",
-    "def": "A tree where each edge is a character and each path from the root spells a prefix. Pronounced 'try', from retrieval."
+    "def": "A prefix tree where each edge is a character and each path from the root spells a prefix. Pronounced 'try', from retrieval."
    },
    {
     "term": "Prefix",
-    "def": "The start of a word: 'doc' is a prefix of 'docker' and 'docs'."
+    "def": "The start of a string: 'doc' is a prefix of 'docker' and 'docs', and every string is a prefix of itself."
    },
    {
-    "term": "Terminal flag",
-    "def": "A marker on a node meaning a complete word ends there ('do' may be a word and also a prefix of 'docker')."
+    "term": "is_end flag",
+    "def": "A boolean (or payload) on a node saying a complete key ends there. Without it, 'doc' looks present whenever 'docker' is stored."
    },
    {
-    "term": "Autocomplete",
-    "def": "Suggesting completions for what a user has typed so far."
+    "term": "Root",
+    "def": "The node representing the empty prefix. It stores no character; its children are the first characters of every key."
    },
    {
     "term": "Radix tree",
-    "def": "A compressed trie where chains of single-child nodes are merged into one edge, saving memory."
+    "def": "A compressed trie that merges each chain of single-child nodes into one edge labelled with a string. Also called a Patricia trie in routing."
+   },
+   {
+    "term": "Autocomplete",
+    "def": "Suggesting completions for the characters typed so far, usually ranked by popularity rather than alphabetically."
+   },
+   {
+    "term": "Top-K",
+    "def": "The K best-scoring items under a prefix. A size-K heap keeps them while walking the subtree, using O(K) extra memory."
+   },
+   {
+    "term": "Lexicographic order",
+    "def": "Dictionary order: compare character by character, shorter string first when one is a prefix of the other. A depth-first walk with sorted children produces it."
+   },
+   {
+    "term": "Longest prefix match",
+    "def": "Find the longest stored key that is a prefix of the input, e.g. an IP route or a URL pattern. Walk while children exist and remember the last is_end node."
+   },
+   {
+    "term": "Hash set",
+    "def": "A hash table storing keys only. Exact membership is O(L) average, but finding all keys with a prefix requires scanning every key."
+   },
+   {
+    "term": "Wildcard search",
+    "def": "Pattern matching where '.' stands for one character and '*' for zero or more. A trie turns this into a guided depth-first search instead of a scan of every word."
+   },
+   {
+    "term": "Ternary search tree",
+    "def": "A memory-saving alternative: each node has left, equal and right children, so it behaves like a BST of characters. Slower in practice, smaller than a dictionary-per-node trie."
    }
   ],
   "interview": [
    {
-    "q": "What is a trie and what are its complexities?",
-    "a": "A tree keyed by characters where each root-to-node path is a prefix. Insert and search are O(L) for word length L, independent of how many words are stored. Prefix enumeration is O(L + number of results). The trade-off is memory: one node per distinct prefix."
+    "q": "What is a trie, and what are its time and space complexities?",
+    "a": "A tree keyed by characters: each root-to-node path is a prefix, and a flag or payload on a node marks a complete key. Insert and exact search are O(L) for key length L, independent of the number N of keys, because you follow one child per character. Prefix existence is O(L); listing M completions is O(L + M); top-K is O(L + M log K) unless you cache answers per node. Space is O(total distinct prefixes), one node per prefix, which is the trade-off: a dict-per-node trie can use hundreds of bytes per word, so radix compression or a ternary search tree is used when memory matters. Emphasise that the flag is what separates a word from a prefix."
    },
    {
-    "q": "Trie vs hash set for word lookup?",
-    "a": "A hash set gives O(L) average exact lookup (hashing the word) with less memory, but cannot answer prefix queries efficiently. A trie supports prefix search, autocomplete and longest-prefix matching."
+    "q": "Trie versus hash set versus sorted list: how do you choose?",
+    "a": "Start from the query. Exact membership: a hash set gives O(L) average with one entry per key and excellent constants, so it usually wins. Prefix queries: a hash set must scan all N keys, a sorted array finds the range with binary search in O(log N + M), and a trie walks O(L) then lists O(M). Ordered traversal: the sorted array is already ordered, a trie's DFS with sorted children is ordered for free, a hash set needs a full sort. Updates: a trie inserts in O(L), a sorted array shifts O(N), a hash set is O(L). Ranking, counts and longest-prefix matching are natural on a trie and awkward on the other two. In practice, static small data goes to a sorted array, exact-only data to a hash set, and dynamic prefix-heavy data to a trie or radix tree. Benchmarks matter because CPython's contiguous list scan can beat a Python trie at collecting matches even though the trie has the better asymptote."
    },
    {
-    "q": "How would you design autocomplete for millions of queries per day?",
-    "a": "Precompute top-K suggestions per prefix from query logs (offline job), store them in a key-value store or in-memory trie with cached top-K per node, serve via a low-latency service with client-side debouncing and caching, and refresh periodically. Add personalisation and filtering as separate layers."
+    "q": "Design autocomplete for millions of queries per day.",
+    "a": "Separate the read path from the write path. Offline, aggregate query logs into (query, count) pairs, build a trie or radix tree over them, and precompute the top K completions at every prefix node; publish an immutable snapshot. Online, serve from that snapshot in memory: a query is O(L) to reach the prefix node plus a small top-K read, with no DFS and no ranking at request time. Put a cache or CDN in front of popular prefixes, and debounce on the client (about 150 to 250 ms) so typing sends one or two requests, not one per key. Validate and cap the query length and K. Refresh on a schedule and swap snapshots atomically; if freshness matters, maintain a small recent-queries layer merged at query time. Add personalisation and filtering as later layers, and shard by prefix or hash if the snapshot no longer fits one machine. Measure p95 and p99, not the average, and track cache hit rate and index size."
    }
   ],
   "quickCheck": [
    {
     "kind": "mcq",
-    "prompt": "Time to check whether a word of length L exists in a trie of N words?",
+    "prompt": "How long does it take to check whether a word of length L exists in a trie of N words?",
     "options": [
      "O(N)",
      "O(L)",
@@ -2875,23 +3756,23 @@ export const lessonMeta: LessonMeta[] = [
      "O(log N)"
     ],
     "answer": 1,
-    "explanation": "You walk one node per character."
+    "explanation": "You walk one node per character. The number of stored words does not enter the walk."
    },
    {
     "kind": "bug",
-    "prompt": "contains('doc') returns True although only 'docker' was inserted. Why?",
+    "prompt": "`search('doc')` returns True although only 'docker' was inserted. Why?",
     "code": {
      "lang": "python",
-     "code": "def contains(self, word):\n    return self._find(word) is not None"
+     "code": "def search(self, word):\n    return self._walk(word) is not None"
     },
     "options": [
-     "_find is wrong",
+     "_walk is wrong",
      "It checks only that the path exists, not that a word ends there",
      "Tries cannot store 'doc'",
      "Case sensitivity"
     ],
     "answer": 1,
-    "explanation": "Check the terminal flag on the final node."
+    "explanation": "The node for 'doc' exists as an intermediate prefix. Check the terminal flag on the final node."
    },
    {
     "kind": "mcq",
@@ -2903,72 +3784,100 @@ export const lessonMeta: LessonMeta[] = [
      "A graph database"
     ],
     "answer": 1,
-    "explanation": "Static data: sort once, binary search the start, scan forward. Simple and fast."
+    "explanation": "Static data: sort once, binary search the start, scan forward. Simple, compact and fast; move to a trie only if ranking or updates demand it."
    }
   ],
   "cheatSheet": [
-   "Trie node: children map + end-of-word flag/score.",
-   "Insert / lookup O(L); prefix results O(L + results).",
-   "Autocomplete: DFS below prefix + top-K heap.",
-   "Static data: sorted list + bisect is often enough.",
-   "Normalise case/Unicode on insert and query.",
-   "Radix tree = compressed trie (routers)."
+   "Trie node: children map + is_end flag or payload. The root is the empty prefix.",
+   "search checks the final flag; startsWith only checks that the path exists.",
+   "Insert / exact search O(L); prefix listing O(L + M); top-K O(L + M log K) or O(L) with cached answers.",
+   "Ordered traversal is free if children are visited in sorted order; no separate sort.",
+   "Top-K with counts: frequency at terminal nodes, size-K min-heap during DFS, deterministic tie-break.",
+   "Memory is the tax: one node per distinct prefix. Compress unary chains into radix edges; measure with tracemalloc.",
+   "Wildcard: '.' one character, '*' zero or more; recurse only into viable children; bound pattern complexity.",
+   "Longest prefix match: walk while children exist and remember the last is_end node; routers use compressed tries.",
+   "Decide from the query: exact → hash; static small prefix → sorted list; dynamic prefix, ranking or longest-prefix → trie."
   ],
   "capstone": {
    "title": "DevAtlas: autocomplete endpoint",
    "criteria": [
     "Normalised, case-insensitive matching",
     "Top 5 ranked results",
-    "p95 latency measured with a quick load test"
+    "p95 latency measured with a quick load test",
+    "Query length and result count bounded"
    ]
   },
-  "codeSamples": 7,
+  "codeSamples": 9,
   "file": "l2-3-3.ts"
  },
  {
   "id": "2.4.1",
   "title": "Greedy and backtracking",
-  "minutes": 75,
+  "minutes": 85,
   "level": "Intermediate",
-  "summary": "Recognise when making the locally best choice is provably optimal (greedy), and when you must explore choices systematically with backtracking and pruning.",
+  "summary": "Make one locally best choice and prove it with an exchange argument, or explore a decision tree with choose / explore / un-choose and prune it. Includes interval scheduling and merging, coin-change counterexamples, jump game, N-Queens and Sudoku.",
   "terms": [
    {
     "term": "Greedy algorithm",
-    "def": "Builds a solution step by step, always taking the choice that looks best right now, never reconsidering."
+    "def": "Builds a solution step by step, always taking the choice that looks best right now, and never reconsiders an earlier choice."
+   },
+   {
+    "term": "Greedy-choice property",
+    "def": "There is an optimal solution that contains the first greedy choice. If this fails, no amount of clever implementation will make the greedy algorithm correct."
    },
    {
     "term": "Exchange argument",
-    "def": "A proof technique for greedy: show any optimal solution can be transformed into the greedy one without getting worse."
+    "def": "A correctness proof: take any optimal solution, swap its first differing choice for the greedy one, and show the result stays feasible and no worse. Repeat down the solution."
    },
    {
-    "term": "Backtracking",
-    "def": "Exploring choices recursively: choose, explore, un-choose. Abandons a path as soon as it cannot lead to a valid solution."
+    "term": "Optimal substructure",
+    "def": "After a choice is fixed, what remains is the same kind of problem on a smaller input, so an optimal solution is built from optimal sub-solutions."
    },
    {
-    "term": "Pruning",
-    "def": "Cutting off branches of the search early because they are invalid or cannot beat the best known answer."
-   },
-   {
-    "term": "Search space",
-    "def": "All candidate solutions, e.g. all 2ⁿ subsets or n! orderings."
+    "term": "Canonical coin system",
+    "def": "A coin set for which greedy change-making is optimal for every amount, such as 1, 2, 5, 10, 20, 50. Having a 1-unit coin guarantees solvability, not canonicity."
    },
    {
     "term": "Interval scheduling",
-    "def": "Choosing the most non-overlapping intervals (meetings, jobs). Classic greedy: always pick the one that ends earliest."
+    "def": "Select the maximum number of mutually non-overlapping intervals. Correct greedy: sort by end time and take every interval that starts at or after the last chosen end."
+   },
+   {
+    "term": "Interval merging",
+    "def": "Replace a set of intervals by their union. Sort by start time and extend the current merged interval while the next start is at or before its end."
+   },
+   {
+    "term": "Reachability frontier",
+    "def": "In the jump game, the farthest index reachable so far. Reachable indices form a contiguous prefix, which is what makes the one-pass greedy scan correct."
+   },
+   {
+    "term": "Backtracking",
+    "def": "Depth-first search over partial solutions: choose, explore recursively, then un-choose. It abandons a branch as soon as the branch cannot lead to a valid solution."
+   },
+   {
+    "term": "Decision tree",
+    "def": "Nodes are partial states and edges are choices; leaves are complete candidates. Backtracking visits this tree depth-first and uses O(depth) memory plus the output."
+   },
+   {
+    "term": "Pruning",
+    "def": "Cutting off a subtree because it is provably invalid or cannot beat the best answer found. Pruning must never discard a branch that could still contain a valid or better solution."
+   },
+   {
+    "term": "Constraint propagation",
+    "def": "Using constraints to remove choices before recursing, for example choosing the Sudoku cell with the fewest candidates (MRV) or removing a digit from its peers."
    }
   ],
   "interview": [
    {
-    "q": "How do you know a greedy algorithm is correct?",
-    "a": "Argue the greedy-choice property: some optimal solution includes the greedy choice (often via an exchange argument), and the remaining problem has the same structure. Then test against brute force on small random inputs. If you find a counterexample, consider DP."
+    "q": "How do you prove a greedy algorithm correct, and how do you show one is wrong?",
+    "a": "State the greedy-choice property and prove it by exchange. Take an optimal solution O that differs from greedy G at the first choice. Let g be greedy's choice and o be O's. Build O' by replacing o with g. Show g is feasible with the prefix, does not conflict with the rest (for interval scheduling this follows because g ends no later than o), and does not worsen the objective. Then O' is optimal and agrees with G one step longer; induct. Optimal substructure handles the remainder. To show greedy is wrong, give a concrete counterexample and explain which optimal solution it excludes: coins [1, 3, 4] and amount 6, where greedy takes 4 + 1 + 1 but 3 + 3 is optimal, so no optimal solution contains the 4. Also name a nearby problem where the greedy genuinely fails even though it looks similar: weighted interval scheduling needs DP, because one heavy interval can beat many light ones."
    },
    {
-    "q": "Explain backtracking with an example.",
-    "a": "It explores a decision tree depth-first: make a choice, recurse, undo the choice, and skip branches that violate constraints. Example: generating subsets that sum to a target; sorting values lets you stop the loop as soon as a value exceeds the remaining sum."
+    "q": "Explain backtracking for permutations and N-Queens. How do you prune, and what is the complexity?",
+    "a": "Use the same choose / explore / un-choose loop. For permutations, keep a path and a used array; at each depth try every unused item, mark it, recurse, then unmark and pop. For N-Queens, place one queen per row, and keep sets for occupied columns, row - col diagonals and row + col diagonals; a square is feasible exactly when none of the three contains it. Add the queen to all three, recurse to the next row, then remove it. Pruning happens before the recursive call, so an attacked square never becomes a node. Record path.copy() at a leaf. The worst case is n! permutations and at most n! column-distinct queen placements (nⁿ if you ignore column distinctness); memory is O(n) recursion plus the output. For n = 8 there are 92 solutions, and our pruned run made 2,057 recursive calls. N-Queens is a constraint problem: stronger propagation, such as choosing the most constrained row or maintaining domains, cuts the tree further."
    },
    {
-    "q": "Greedy vs dynamic programming?",
-    "a": "Greedy commits to one choice per step and never revisits; it is fast but only correct for special structures. DP considers all choices for each subproblem, storing results to avoid recomputation; it is correct whenever optimal substructure holds, at higher cost."
+    "q": "Greedy, dynamic programming or backtracking: how do you choose?",
+    "a": "First ask whether a local choice can be proved safe. If yes and one state dominates the alternatives, greedy is the cheapest: interval scheduling by earliest end, Huffman, Dijkstra, jump-game reach. If the greedy-choice property fails but subproblems overlap, use DP: coin change, weighted interval scheduling, subset sum. If states do not overlap, or the task is to enumerate every solution, or the constraints are irregular, use backtracking with pruning; N-Queens and Sudoku are the standard examples. The boundaries move: greedy is a DP with one surviving state per step, and backtracking plus memoisation becomes DP. Complexity is the tie-breaker: greedy is usually O(n log n), DP is polynomial in the state space (pseudo-polynomial for coin change), and backtracking is exponential or factorial in the worst case even when pruning makes typical inputs fast."
    }
   ],
   "quickCheck": [
@@ -2982,11 +3891,23 @@ export const lessonMeta: LessonMeta[] = [
      "Number of attendees"
     ],
     "answer": 2,
-    "explanation": "Earliest end leaves the most room for the remaining meetings."
+    "explanation": "Earliest end leaves the most room for the remaining meetings. Earliest start and shortest duration both have counterexamples."
+   },
+   {
+    "kind": "output",
+    "prompt": "`greedy_coins(6, [1, 3, 4])` returns `[4, 1, 1]`. What is the minimum number of coins?",
+    "options": [
+     "1",
+     "2",
+     "3",
+     "4"
+    ],
+    "answer": 1,
+    "explanation": "3 + 3 uses two coins. Greedy is not optimal for this coin system, so the DP answer is 2."
    },
    {
     "kind": "bug",
-    "prompt": "Every result printed is []. Why?",
+    "prompt": "Every recorded result is empty. What is the bug?",
     "code": {
      "lang": "python",
      "code": "def bt(i):\n    if i == len(items):\n        results.append(path)\n        return\n    path.append(items[i]); bt(i + 1); path.pop()\n    bt(i + 1)"
@@ -2995,32 +3916,23 @@ export const lessonMeta: LessonMeta[] = [
      "The base case is wrong",
      "results stores the same list object, which ends empty",
      "pop removes the wrong element",
-     "Recursion depth"
+     "Recursion depth is exceeded"
     ],
     "answer": 1,
-    "explanation": "Append path.copy() (or list(path))."
-   },
-   {
-    "kind": "output",
-    "prompt": "greedy_coins(6, [1, 3, 4]) returns [4, 1, 1]. What is the optimal answer?",
-    "options": [
-     "[4, 1, 1]",
-     "[3, 3]",
-     "[1]*6",
-     "[4, 2]"
-    ],
-    "answer": 1,
-    "explanation": "Two coins of 3. Greedy is not optimal for this coin system."
+    "explanation": "Append path.copy() (or list(path)) at the base case. The shared list is mutated after it is appended."
    }
   ],
   "cheatSheet": [
-   "Greedy: one best local choice per step; prove it or test it.",
-   "Intervals → sort by end time.",
-   "Counterexample found → think DP.",
-   "Backtracking: complete? record : for choice → valid? choose, recurse, un-choose.",
-   "Prune with constraints and bounds; sort to enable early breaks.",
-   "results.append(path.copy()).",
-   "Subsets 2ⁿ, permutations n!: keep n small or prune hard."
+   "Greedy: one best local choice, then prove it with an exchange argument or find a counterexample.",
+   "Activity selection sorts by END; interval merging sorts by START. Touching is compatible in scheduling and merges in merging.",
+   "Coin greedy is safe only for canonical systems; [1, 3, 4] with 6 gives [4, 1, 1] instead of [3, 3].",
+   "Jump game: reachable indices form a prefix; min jumps is BFS by layers, keeping the farthest reach per layer.",
+   "Greedy is a collapsed DP: when one state dominates the others, keep only that state; otherwise keep the table.",
+   "Backtracking: if complete record a copy; else for each candidate: valid? choose, explore, un-choose.",
+   "Subsets 2ⁿ, permutations n!, combinations C(n, k); N-Queens at most n! after one-per-row.",
+   "Prune only with constraints or proven bounds; `break` needs a sorted candidate list.",
+   "Undo exactly what you changed; pair every add with remove and every append with pop.",
+   "Worst case stays exponential: count nodes, set a budget, and use OR-Tools or a SAT solver for real CSPs."
   ],
   "capstone": {
    "title": "DevAtlas: balanced quiz builder",
@@ -3030,7 +3942,7 @@ export const lessonMeta: LessonMeta[] = [
     "Completes within 100 ms on 200 questions in tests"
    ]
   },
-  "codeSamples": 8,
+  "codeSamples": 9,
   "file": "l2-4-1.ts"
  },
  {
@@ -3038,7 +3950,7 @@ export const lessonMeta: LessonMeta[] = [
   "title": "Dynamic programming",
   "minutes": 85,
   "level": "Intermediate",
-  "summary": "Learn a repeatable method for dynamic programming: define the state, the transition and the base cases, then implement top-down with memoisation or bottom-up with a table.",
+  "summary": "Learn a repeatable method for dynamic programming: define the state, the transition and the base cases, then implement top-down with memoisation or bottom-up with a table, and know when each one wins.",
   "terms": [
    {
     "term": "Dynamic programming (DP)",
@@ -3046,41 +3958,61 @@ export const lessonMeta: LessonMeta[] = [
    },
    {
     "term": "Overlapping subproblems",
-    "def": "The same smaller problem appears many times in a naive recursion (e.g. fib(30) computes fib(10) tens of thousands of times)."
+    "def": "The same smaller problem appears many times in a naive recursion. fib(30) makes 2,692,537 calls but only 31 distinct values exist."
    },
    {
     "term": "Optimal substructure",
-    "def": "An optimal solution is built from optimal solutions to subproblems."
+    "def": "An optimal solution is built from optimal solutions to subproblems, so a sub-answer can be reused without knowing the rest of the solution."
    },
    {
     "term": "State",
-    "def": "The minimal information that identifies a subproblem, e.g. (index, remaining capacity)."
+    "def": "The minimal information that identifies a subproblem, e.g. (index, remaining capacity) or (prefix of a, prefix of b). The number of states drives the complexity."
    },
    {
     "term": "Transition",
-    "def": "The formula that computes a state from smaller states, e.g. dp[i] = dp[i-1] + dp[i-2]."
+    "def": "The recurrence that computes a state from smaller states, e.g. dp[i] = dp[i-1] + dp[i-2], or dp[i][w] = max(skip, take)."
+   },
+   {
+    "term": "Base case",
+    "def": "A state with no decision left, whose value is known directly: dp[0] = 0 for a sum, dp[0] = 1 for one way to make zero, dp[i][0] = i for edit distance."
+   },
+   {
+    "term": "Recurrence",
+    "def": "The equation plus base cases that defines every state. If you can write it, you can usually implement it either top-down or bottom-up."
    },
    {
     "term": "Memoisation (top-down)",
-    "def": "Recursion plus a cache of results."
+    "def": "Recursion plus a cache of results. It computes only the states the original problem actually reaches."
    },
    {
     "term": "Tabulation (bottom-up)",
-    "def": "Filling a table iteratively from base cases upward."
+    "def": "Filling a table iteratively from base cases upward, in an order where every dependency is already computed."
+   },
+   {
+    "term": "Rolling array",
+    "def": "Keeping only the rows or variables a transition still reads, e.g. two rows for edit distance or one row for knapsack, which cuts memory but discards history."
+   },
+   {
+    "term": "Reconstruction",
+    "def": "Recovering the actual choices, not just the optimal value, by walking back through the table or following parent pointers stored per state."
+   },
+   {
+    "term": "Pseudo-polynomial",
+    "def": "A runtime polynomial in the numeric value of the input, such as O(n·W) for knapsack, rather than in its bit length. A huge W makes it impractical."
    }
   ],
   "interview": [
    {
-    "q": "How do you approach a DP problem?",
-    "a": "Identify that choices create overlapping subproblems. Define the state in words, derive the transition from the last decision, set base cases, choose computation order, then optimise space. I often start with recursion plus memoisation and convert to a table if needed."
+    "q": "How do you approach a DP problem you have not seen before?",
+    "a": "First decide whether DP applies at all. Look for counting, minimum or maximum cost, feasibility, or a brute force that branches on a choice at every element; then check that the recursion repeats subproblems and that optimal sub-answers combine. Read the constraints as a hint: n ≤ 20 suggests bitmask or 2ⁿ, n ≤ 5000 suggests O(n²), n up to 10⁵ suggests O(n log n), and a moderate capacity suggests O(n·W) pseudo-polynomial DP. Define the state as a sentence - 'dp[i][w] is the best value using the first i items within capacity w' - and derive the transition from the last decision, not the first. Set base cases, choose a topological order, and state the complexity as states × transition cost. Start with the recursive definition plus memoisation because it is easiest to verify, then convert to a table and roll memory if needed. Finish by testing n = 0, n = 1, an impossible case and a tie. If you cannot write a polynomial-size state, say that DP is the wrong tool and suggest the alternative."
    },
    {
-    "q": "Top-down vs bottom-up?",
-    "a": "Top-down: recursive with a cache, natural to write, computes only reachable states, but limited by recursion depth and call overhead. Bottom-up: iterative over a table in dependency order, no recursion limits, easier to optimise memory."
+    "q": "Top-down memoisation versus bottom-up tabulation: what are the real trade-offs?",
+    "a": "Top-down is the recurrence plus a cache: the code mirrors the definition, it computes only states reachable from the start, and it is easy to change when the transition changes. The costs are call overhead and stack depth; Python's default limit is 1000 frames, and fib(5000) with memoisation raises RecursionError while a loop computes the same 1045-digit answer. Bottom-up fills every state in the range, including unreachable ones, but has no recursion limit, smaller constants and permits rolling arrays: two rows for edit distance, one row for knapsack, two variables for Fibonacci. Reconstruction changes the choice: a full table or parent pointers let you walk back, while rolling memory usually gives only the value. In practice I write top-down to get correctness quickly, then convert to bottom-up when the state space is dense, the input is large, or memory matters. I would mention memoisation's sparse advantage for problems where most states are unreachable."
    },
    {
-    "q": "Explain the knapsack DP.",
-    "a": "dp[i][w] is the best value using the first i items with capacity w. For item i, either skip it (dp[i-1][w]) or take it if it fits (dp[i-1][w-cost] + value). Take the max. O(n·W) time; with one row iterated downward, O(W) space."
+    "q": "Explain the knapsack DP, its complexity and its space optimisation.",
+    "a": "Define dp[i][w] as the best value using the first i items within capacity w. For item i there are two choices: skip it, giving dp[i-1][w], or take it if cost ≤ w, giving dp[i-1][w-cost] + value. Take the maximum. Base case dp[0][w] = 0 for all w. Fill rows in increasing i and w so every dependency is ready. The answer is dp[n][W], and walking back from (n, W) recovers the chosen items: if dp[i][w] differs from dp[i-1][w], item i was taken, then move to (i-1, w-cost). Complexity is O(n·W) time and O(n·W) space with the full table - pseudo-polynomial, because W is a numeric value, not the input's bit length. Because row i only reads row i-1, a single row of size W+1 suffices, iterated from W down to cost so each item is used at most once; that is O(W) space but it loses reconstruction. Variants: unbounded knapsack iterates w upward; counting subsets uses sum instead of max; and when W is huge, switch to meet-in-the-middle, branch and bound, or an approximation."
    }
   ],
   "quickCheck": [
@@ -3094,11 +4026,11 @@ export const lessonMeta: LessonMeta[] = [
      "Sort names alphabetically"
     ],
     "answer": 1,
-    "explanation": "Counting/optimising over choices with repeated subproblems is the DP signature."
+    "explanation": "Counting or optimising over choices with repeated subproblems is the DP signature. A sorted array suggests binary search; an unweighted shortest path suggests BFS."
    },
    {
     "kind": "output",
-    "prompt": "min_coins(7, [2, 4]) returns:",
+    "prompt": "What does `min_coins(7, [2, 4])` return?",
     "options": [
      "2",
      "3",
@@ -3106,29 +4038,32 @@ export const lessonMeta: LessonMeta[] = [
      "4"
     ],
     "answer": 2,
-    "explanation": "Only even amounts are reachable with 2 and 4."
+    "explanation": "Only even amounts are reachable with coins 2 and 4, so dp[7] stays at the sentinel and the function converts it to -1."
    },
    {
     "kind": "mcq",
-    "prompt": "Time complexity of edit distance for strings of length m and n?",
+    "prompt": "Time and space for edit distance on strings of length m and n, using two rows?",
     "options": [
-     "O(m + n)",
-     "O(m·n)",
-     "O(2^(m+n))",
-     "O(log m)"
+     "O(m + n) time, O(1) space",
+     "O(m·n) time, O(n) space",
+     "O(2^(m+n)) time, O(m·n) space",
+     "O(m·n) time, O(m·n) space"
     ],
     "answer": 1,
-    "explanation": "One cell per pair of prefixes, O(1) work each."
+    "explanation": "One cell per pair of prefixes, O(1) work each, for O(m·n) time. Keeping only the previous and current rows reduces space from O(m·n) to O(n)."
    }
   ],
   "cheatSheet": [
-   "DP = overlapping subproblems + optimal substructure.",
-   "Method: state → transition → base cases → order → answer → space.",
-   "@functools.cache for quick top-down memoisation.",
-   "Coin change: dp[a] = min(dp[a-c] + 1).",
-   "Knapsack: dp[i][w] = max(skip, take).",
-   "Edit distance: match → diagonal; else 1 + min(del, ins, sub).",
-   "Keep choices to reconstruct; keep one row to save memory."
+   "DP = overlapping subproblems + optimal substructure. Greedy needs the stronger greedy-choice property.",
+   "Method: state → transition (last decision) → base cases → dependency order → answer → space.",
+   "State in words: 'dp[i][w] = best value using the first i items within w'. Count the states to get the complexity.",
+   "Top-down = recurrence + `@functools.cache`; bottom-up = loop + table. Top-down visits only reachable states; bottom-up allows rolling arrays.",
+   "Recursion limit is about 1000 frames in Python: deep chains need bottom-up, not just a cache.",
+   "0/1 knapsack with one row iterates capacity downward; unbounded coin change iterates amount upward.",
+   "Coin change: dp[a] = min(dp[a-c] + 1), with a sentinel for unreachable amounts and -1 at the boundary.",
+   "LIS: O(n²) DP with a `prev` array reconstructs; patience + `bisect_left` gives O(n log n) for the length only.",
+   "Edit distance: matching characters take the diagonal; otherwise 1 + min(delete, insert, substitute). O(m·n) time, O(n) space with two rows.",
+   "Reconstruction needs the full table or parent pointers. Rolling memory gives the value and throws the choices away."
   ],
   "capstone": {
    "title": "DevAtlas: weekly plan and answer similarity",
@@ -3146,49 +4081,69 @@ export const lessonMeta: LessonMeta[] = [
   "title": "Semantic HTML and accessibility",
   "minutes": 60,
   "level": "Beginner",
-  "summary": "Write HTML that browsers, search engines and assistive technologies understand: landmarks, headings, forms, buttons vs links, images and keyboard access.",
+  "summary": "Write HTML that browsers, search engines and assistive technologies understand: landmarks and heading order, labelled forms, native controls before ARIA, keyboard and dialog focus, contrast, alt text, live regions, and how to verify the result with a screen reader and axe.",
   "terms": [
    {
     "term": "Semantic HTML",
-    "def": "Using elements for their meaning (`<nav>`, `<button>`, `<h2>`) rather than generic `<div>`s styled to look right."
+    "def": "Using elements for their meaning (`<nav>`, `<button>`, `<h2>`) rather than generic `<div>`s styled to look right. The meaning is what browsers, search engines and assistive technology act on."
    },
    {
     "term": "Accessibility (a11y)",
-    "def": "Making sites usable by everyone, including people using screen readers, keyboards, magnification or voice control."
+    "def": "Making sites usable by everyone, including people who use screen readers, keyboards, magnification, voice control or captions. The '11' counts the letters between the a and the y."
    },
    {
     "term": "Screen reader",
-    "def": "Software that reads the page aloud and lets users jump by headings, landmarks, links and form fields (NVDA, JAWS, VoiceOver, TalkBack)."
+    "def": "Software that reads the accessibility tree aloud and lets users jump by headings, landmarks, links and form fields (NVDA and JAWS on Windows, VoiceOver on macOS and iOS, TalkBack on Android)."
    },
    {
     "term": "Accessibility tree",
-    "def": "The browser's simplified view of the page (roles, names, states) that assistive technology reads."
+    "def": "The browser's simplified view of the page: for each meaningful node a role, an accessible name and states such as checked, expanded or invalid. Assistive technology reads this tree, not your HTML source."
+   },
+   {
+    "term": "Accessible name",
+    "def": "The text a control is announced by. It is computed from `aria-labelledby`, then `aria-label`, then a native `<label>` (or `alt`), then the element's content. An empty name makes a control anonymous."
+   },
+   {
+    "term": "Landmark",
+    "def": "A named page region screen-reader users can jump to: `<header>`, `<nav>`, `<main>`, `<aside>`, `<footer>`, `<form>` when named, and `<section>` when labelled. Landmarks replace the visual layout as a navigation map."
+   },
+   {
+    "term": "Heading order",
+    "def": "The sequence of heading levels (h1, h2, h3) that forms the page outline. Screen readers list headings as a table of contents, so levels describe structure, not visual size, and should not skip."
    },
    {
     "term": "ARIA",
-    "def": "Attributes like `aria-label` and `role` that add accessibility information when HTML alone cannot. First rule of ARIA: prefer native HTML."
+    "def": "Accessible Rich Internet Applications: attributes such as `role`, `aria-label`, `aria-expanded` and `aria-live` that add semantics HTML cannot express. First rule of ARIA: do not use ARIA if a native element already does the job."
    },
    {
     "term": "WCAG",
-    "def": "Web Content Accessibility Guidelines, the standard most accessibility laws and audits reference (levels A, AA, AAA)."
+    "def": "Web Content Accessibility Guidelines, the standard most accessibility laws and audits reference. Levels A, AA and AAA; AA is the usual target and requires 4.5:1 contrast for normal text, keyboard access and visible focus."
    },
    {
-    "term": "Focus",
-    "def": "Which element receives keyboard input. Tab moves focus; a visible focus indicator shows where you are."
+    "term": "Focus order",
+    "def": "The sequence in which Tab and Shift+Tab move through interactive elements. It follows DOM order by default; positive `tabindex` values override it and usually break the visual order."
+   },
+   {
+    "term": "Focus management",
+    "def": "Deliberately moving focus when the page changes: into a dialog when it opens, back to the opener when it closes, and to the first invalid field after a failed submit. Without it, keyboard and screen-reader users are left behind."
+   },
+   {
+    "term": "Live region",
+    "def": "A region (`role=\"status\"`, `role=\"alert\"` or `aria-live`) whose text changes are announced without moving focus. Use it for async results such as 'Saved' or '3 results'; overuse turns the page into noise."
    }
   ],
   "interview": [
    {
     "q": "Why use a <button> instead of a <div> with a click handler?",
-    "a": "The button is focusable, works with Enter and Space, exposes the button role and its name to assistive technology, supports disabled state and form submission. Replicating that on a div requires tabindex, role, keyboard handlers and ARIA, and is easy to get wrong."
+    "a": "The button is focusable, works with Enter and Space, exposes the button role and its accessible name to assistive technology, supports the disabled state and participates in form submission. Replicating that on a div requires `tabindex`, `role`, keyboard handlers, focus styles and state management, and any omission breaks a group of users. The same logic applies to links (`<a href>` for navigation), dialogs (`<dialog>` + `showModal()`), and disclosures (`<details>`/`<summary>`): the native element is the tested implementation of the behaviour."
    },
    {
     "q": "How do you make a form accessible?",
-    "a": "A visible label tied to each input (for/id), grouped controls in fieldset/legend, appropriate input types and autocomplete, error messages in text linked with aria-describedby and aria-invalid, focus moved to the first error on submit, and no reliance on colour alone."
+    "a": "A visible `<label>` tied to each input with `for`/`id` (or a wrapping label), grouped controls in `<fieldset>`/`<legend>`, appropriate `type` and `autocomplete` values, hints linked with `aria-describedby`, and error messages in text linked to the field with `aria-invalid=\"true\"`. On submit, keep the data, show a summary at the top, move focus to the summary or the first invalid field, and never rely on colour alone. Native validation helps, but do not remove the server-side checks: assistive technology and custom validation must agree on what went wrong."
    },
    {
-    "q": "When is ARIA appropriate?",
-    "a": "When native HTML cannot express the semantics, for example custom widgets like tabs, comboboxes or live regions announcing updates. Follow the ARIA Authoring Practices patterns, and never use ARIA to override correct native semantics."
+    "q": "When is ARIA appropriate, and how do you manage focus and announcements?",
+    "a": "Use ARIA when native HTML cannot express the widget: tabs, comboboxes, trees, live regions or custom sliders. Follow the ARIA Authoring Practices pattern, including its keyboard model and states, rather than inventing one. For dialogs, prefer `<dialog>` with `showModal()`: it gives the top layer, inert background, Escape and a focus trap; move focus inside on open and return it to the opener on close. For asynchronous updates, use a live region (`role=\"status\"` for polite, `role=\"alert\"` for urgent) instead of stealing focus. The first rule still governs everything: no ARIA is better than bad ARIA, and native semantics win whenever they exist."
    }
   ],
   "quickCheck": [
@@ -3206,42 +4161,40 @@ export const lessonMeta: LessonMeta[] = [
    },
    {
     "kind": "bug",
-    "prompt": "A screen reader announces just 'button' for this control. Why?",
-    "code": {
-     "lang": "html",
-     "code": "<button><svg width=\"16\" height=\"16\">…</svg></button>"
-    },
+    "prompt": "A page has an `<h1>`, then an `<h3>` for its first section. What is the problem?",
     "options": [
-     "SVG is not allowed in buttons",
-     "The button has no accessible name",
-     "type is missing",
-     "Buttons cannot contain images"
+     "`h3` may not follow `h1`",
+     "The heading level skips `h2`, so the outline has a gap",
+     "A page may have only one heading",
+     "`h3` must be inside a `<header>`"
     ],
     "answer": 1,
-    "explanation": "Add aria-label=\"Search\" (or visually hidden text) and aria-hidden on the decorative SVG."
+    "explanation": "Heading levels describe nesting. Go h1 → h2 → h3; use CSS for size, not a lower level."
    },
    {
-    "kind": "mcq",
-    "prompt": "What alt text should a purely decorative divider image have?",
+    "kind": "bug",
+    "prompt": "A modal opens, focus moves inside, and Escape closes it, but focus is now on `<body>`. What is the correct fix?",
     "options": [
-     "alt=\"divider\"",
-     "No alt attribute",
-     "alt=\"\"",
-     "alt=\"image\""
+     "Add `tabindex=\"-1\"` to `<body>`",
+     "Return focus to the element that opened the dialog",
+     "Set `aria-modal=\"false\"` after closing",
+     "Move focus to the page's `<h1>`"
     ],
-    "answer": 2,
-    "explanation": "An empty alt tells assistive technology to skip it. A missing alt may cause the filename to be read."
+    "answer": 1,
+    "explanation": "Focus must go back to the opener, so keyboard and screen-reader users resume where they left off. `<dialog>` still needs this in a `close` handler."
    }
   ],
   "cheatSheet": [
-   "Landmarks: header, nav, main, aside, footer. One h1; headings in order.",
-   "Link = navigation; button = action. Never clickable divs.",
-   "Every input has a <label>; errors in text + aria-describedby.",
-   "alt describes purpose; alt=\"\" for decoration.",
-   "Keep :focus-visible outlines; add a skip link.",
-   "Contrast ≥ 4.5:1 for body text (WCAG AA).",
-   "Native HTML first, ARIA second.",
-   "Test: keyboard only, screen reader, then axe/Lighthouse."
+   "Landmarks: header, nav, main, aside, footer. One main, one h1, headings in order.",
+   "Link = navigation (`<a href>`); button = action. Never clickable divs.",
+   "Every input has a `<label>`; group with fieldset/legend; errors in text + `aria-describedby` + `aria-invalid`.",
+   "Native HTML first; ARIA only for real gaps; no redundant roles and no ARIA that fakes behaviour.",
+   "Keyboard: DOM order, `tabindex` 0 or -1 only, no positive values, visible `:focus-visible`, no traps.",
+   "Dialog: `<dialog>` + `showModal()`, focus inside on open, Escape closes, focus returns to the opener.",
+   "Images: alt describes purpose; `alt=\"\"` for decoration; icon-only buttons need a name.",
+   "Contrast AA: 4.5:1 normal text, 3:1 large text and UI/focus indicators; never colour alone.",
+   "Live regions: `role=\"status\"` for polite updates, `role=\"alert\"` for urgent; do not move focus to announce.",
+   "Test in layers: html-validate → keyboard → zoom/contrast → screen reader → axe. Tools catch a subset."
   ],
   "capstone": {
    "title": "DevAtlas: accessible page shell",
@@ -3259,49 +4212,69 @@ export const lessonMeta: LessonMeta[] = [
   "title": "Box model, flexbox and grid",
   "minutes": 70,
   "level": "Beginner",
-  "summary": "Understand how CSS sizes and places boxes, use flexbox for one-dimensional layouts and grid for two-dimensional ones, and build responsive pages with modern CSS (custom properties, clamp, container queries).",
+  "summary": "Understand how CSS sizes and places boxes, use normal flow, flexbox and grid for the layout each is good at, and build responsive pages with media queries, container queries and a handful of habits that prevent overflow.",
   "terms": [
    {
     "term": "Box model",
-    "def": "Every element is a box: content, padding, border, margin. `box-sizing: border-box` makes width include padding and border."
+    "def": "Every element is a box with four layers: content, padding, border and margin. Width and height normally size the content only; `box-sizing: border-box` makes them include padding and border."
    },
    {
     "term": "Cascade and specificity",
-    "def": "Rules for which CSS declaration wins: importance, origin, specificity (id > class > element), then source order."
+    "def": "Rules for which declaration wins: importance and origin first, then specificity (inline > id > class > element), then source order. `@layer` adds explicit ordering between groups."
+   },
+   {
+    "term": "Normal flow",
+    "def": "The default layout: block boxes stack vertically, inline boxes run along a line and wrap at spaces, and margins can collapse between blocks. Every other layout starts from this."
+   },
+   {
+    "term": "Block and inline",
+    "def": "Block boxes take the full available width and start a new line (`div`, `p`, `section`). Inline boxes sit in a line and only take the width of their content (`span`, `a`, `strong`)."
    },
    {
     "term": "Flexbox",
-    "def": "Layout along one axis (a row or a column): distributing space, aligning items, wrapping."
+    "def": "Layout along one axis, a row or a column. The container distributes free space and aligns items; the layout is driven by the content and the space available."
+   },
+   {
+    "term": "Main axis and cross axis",
+    "def": "The main axis is the direction items flow (`flex-direction`); the cross axis is perpendicular. `justify-content` works on the main axis, `align-items` on the cross axis."
+   },
+   {
+    "term": "flex: grow shrink basis",
+    "def": "The shorthand that sets how an item grows into free space, shrinks when space is short, and what size it starts from, e.g. `flex: 1 1 200px`."
    },
    {
     "term": "Grid",
-    "def": "Layout in rows and columns at the same time, with explicit tracks and areas."
+    "def": "Layout in rows and columns at the same time. You define tracks and optionally named areas, then place items into cells; the layout is driven by the grid you declare."
+   },
+   {
+    "term": "fr and minmax()",
+    "def": "`fr` is a share of the free space in a grid container. `minmax(16rem, 1fr)` makes a track at least 16rem and then lets it take its share."
    },
    {
     "term": "Responsive design",
-    "def": "Layouts that adapt to screen size and user settings, typically mobile-first with media or container queries."
+    "def": "Layouts that adapt to viewport size, container size and user settings, typically mobile-first with media queries, container queries and fluid units."
    },
    {
-    "term": "Custom property",
-    "def": "A CSS variable like `--accent: #6553f5`, read with `var(--accent)`. Great for themes."
+    "term": "Stacking context",
+    "def": "A local layering scope. `z-index` only competes among siblings inside the same stacking context; `position` plus `z-index`, `transform`, `opacity` or `filter` can create one."
    },
    {
-    "term": "rem / em",
-    "def": "Units relative to the root font size (rem) or the element's font size (em). They respect user font settings."
+    "term": "Container query",
+    "def": "`@container` styles a component based on the size of its nearest container (`container-type: inline-size`), not the whole viewport."
    }
   ],
   "interview": [
    {
-    "q": "Flexbox vs grid?",
-    "a": "Flexbox lays out items along one axis and is content-driven: toolbars, button groups, centring. Grid controls rows and columns together and is layout-driven: page structures, card galleries, forms. They combine well: grid for the page, flex inside components."
+    "q": "Flexbox vs grid: how do you choose?",
+    "a": "Start with the shape of the structure, not with familiarity. Flexbox is one-dimensional: `flex-direction` defines a main axis, `justify-content` distributes space on it, `align-items` aligns on the cross axis, and `flex: grow shrink basis` lets items share whatever space is left. It is content-driven, so it is right for toolbars, button groups, rows of meta information and centring a single child. Grid is two-dimensional: you declare rows and columns, and items are placed into tracks or named areas. It is layout-driven, so it is right for page shells, card galleries, forms and any structure where you want the columns to line up across independent children. In real pages they combine: grid for the shell, flex inside the cells. A useful test is whether the layout should still make sense when one item is removed; if the remaining items should reflow along one axis, flex is natural, and if the grid should stay put, grid is natural. Also mention the cost of the wrong tool: flex used for 2D produces wrapper divs and percentage hacks; grid used for a simple toolbar is harmless but noisier."
    },
    {
-    "q": "Explain the box model and box-sizing.",
-    "a": "An element's box has content, padding, border and margin. With content-box, width applies to content only, so padding and border add to the rendered size. With border-box, width includes padding and border, which makes sizing predictable."
+    "q": "Explain the box model and box-sizing, including what normal flow does.",
+    "a": "An element's box has content, padding, border and margin. With `content-box`, `width` sizes the content, so `width: 300px; padding: 20px; border: 4px` occupies 348px and the content is 300px. With `border-box`, `width` is the outer content-plus-padding-plus-border size: 300px total and 252px of content. Margin is always outside. That is why almost every codebase starts with `*, *::before, *::after { box-sizing: border-box; }`: it makes a width a promise about the space the box reserves. Normal flow is the default placement: block boxes take the available inline size and stack vertically, inline boxes sit on a line and wrap at spaces, and adjacent vertical margins can collapse. Flex and grid replace flow inside their container, but the container itself still participates in normal flow. `position: absolute` takes a box out of flow and positions it against its containing block, which is useful for overlays and dangerous as a page-layout strategy because the page loses its intrinsic height."
    },
    {
-    "q": "How does CSS decide which rule applies?",
-    "a": "The cascade: origin and !important, then specificity (inline > id > class/attribute/pseudo-class > element), then source order. Cascade layers add explicit ordering between groups of rules."
+    "q": "A page scrolls horizontally on a phone. How do you find and fix it?",
+    "a": "Measure first: compare `document.documentElement.scrollWidth` with `clientWidth`, then walk the DOM for elements whose `getBoundingClientRect().right` exceeds the viewport, or use DevTools to inspect the widest box. The usual suspects are: a flex or grid child with the default `min-width: auto` that refuses to shrink below a long word or a `<pre>` line; an implicit grid column that grew to its content; a fixed pixel width plus padding under `content-box`; `100vw` including the scrollbar; an absolutely positioned decoration; and negative margins. Fix the cause rather than adding `overflow-x: hidden` to the body, which hides the symptom and often breaks `position: sticky`. Typical fixes: `min-width: 0` on the shrinking child, `minmax(0, 1fr)` for content columns, `min(100%, 30rem)` for widths, `overflow-wrap: anywhere` for long tokens, `overflow-x: auto` on the code block, and `width: 100%` instead of `100vw`. Then re-test at 320px, 375px, 200% zoom and with real long content. If you want this automated, the `check.mjs` pattern in this lesson's homework prints the boolean for each width."
    }
   ],
   "quickCheck": [
@@ -3331,7 +4304,7 @@ export const lessonMeta: LessonMeta[] = [
      "position: absolute"
     ],
     "answer": 1,
-    "explanation": "auto-fit with minmax creates as many columns as fit, each at least 16rem."
+    "explanation": "auto-fit with minmax creates as many columns as fit, each at least 16rem; auto-fill would create the same tracks but keep empty ones."
    },
    {
     "kind": "bug",
@@ -3347,14 +4320,16 @@ export const lessonMeta: LessonMeta[] = [
    }
   ],
   "cheatSheet": [
-   "*, *::before, *::after { box-sizing: border-box }",
-   "Flex: one axis; justify-content (main), align-items (cross), gap, flex: 1 1 auto.",
-   "Grid: rows + columns; repeat(auto-fit, minmax(…, 1fr)); grid-template-areas.",
-   "min-width: 0 on shrinking flex/grid children.",
-   "Mobile-first: base styles, then @media (min-width).",
-   "clamp(min, fluid, max) for type and spacing.",
-   "@container for component-level responsiveness.",
-   "Animate transform/opacity, not layout properties."
+   "`*, *::before, *::after { box-sizing: border-box; }` — width includes padding and border, margin never does.",
+   "Default content-box: 300px width + 20px padding + 4px border = 348px. Border-box: 300px total, 252px content.",
+   "Normal flow: blocks stack and take the inline size; inlines sit on a line and wrap; vertical block margins can collapse.",
+   "Flex: one axis. `justify-content` = main, `align-items` = cross, `gap` = spacing, `flex: 1 1 200px` = grow/shrink/basis.",
+   "Flex algorithm: subtract bases and gaps, then grow by factor or shrink by `shrink × basis`; clamp with min/max.",
+   "Grid: rows + columns. `repeat(auto-fit, minmax(min(16rem, 100%), 1fr))`, `grid-template-areas`, `minmax(0, 1fr)`.",
+   "`auto-fill` keeps empty tracks; `auto-fit` collapses them, so fewer items stretch. Same result when tracks are full.",
+   "`min-width: 0` on a shrinking flex child; `overflow-wrap: anywhere` on long tokens; `overflow-x: auto` on the scroller.",
+   "Mobile-first: base layout, then `@media (min-width: …)`; `clamp()` for fluid type/space; `@container` when the component should react to its slot.",
+   "`z-index` competes only within a stacking context (`position`, `transform`, `opacity`, `filter`, `isolation`); animate `transform`/`opacity`, not width/top/left."
   ],
   "capstone": {
    "title": "DevAtlas: design tokens and layout",
@@ -3372,11 +4347,15 @@ export const lessonMeta: LessonMeta[] = [
   "title": "DOM, events and fetch",
   "minutes": 65,
   "level": "Beginner",
-  "summary": "Make pages interactive with plain JavaScript: query and update the DOM safely, handle events with delegation, call APIs with fetch, and render loading and error states. The foundation React builds on.",
+  "summary": "Make pages interactive with plain JavaScript: understand the DOM as a live tree, query and mutate it safely, handle capture and bubble events, validate forms, and call APIs with fetch. Includes real Node fetch output, status versus network failures, AbortController, race conditions and XSS-safe rendering. The foundation React builds on.",
   "terms": [
    {
     "term": "DOM",
-    "def": "Document Object Model: the browser's live tree of objects representing the page. JavaScript reads and changes it."
+    "def": "Document Object Model: the browser's live tree of objects representing the page. JavaScript reads and changes it, and the rendered page follows."
+   },
+   {
+    "term": "DOM tree",
+    "def": "The document as nodes: `document -> html -> head/body -> elements`, with text nodes and comments between them. Elements are one node type, not the only one."
    },
    {
     "term": "Event",
@@ -3388,35 +4367,55 @@ export const lessonMeta: LessonMeta[] = [
    },
    {
     "term": "Event delegation",
-    "def": "One listener on a parent that handles events from many children by checking `event.target`."
+    "def": "One listener on a parent that handles events from many children by checking `event.target` and walking up with `closest()`."
    },
    {
     "term": "preventDefault",
-    "def": "Stops the browser's default action, e.g. a form submit reloading the page."
+    "def": "Stops the browser's default action, e.g. a form submit reloading the page or a link navigating. It does not stop the event from travelling."
+   },
+   {
+    "term": "stopPropagation",
+    "def": "Stops the event from reaching the next node in the capture or bubble path. It does not cancel the browser's default action."
+   },
+   {
+    "term": "Capture phase",
+    "def": "The first phase of dispatch, from window down to the target. Listeners registered with `{ capture: true }` run here, before bubble listeners."
    },
    {
     "term": "textContent vs innerHTML",
-    "def": "textContent sets plain text (safe). innerHTML parses HTML (dangerous with untrusted data: XSS)."
+    "def": "textContent sets plain text and creates a text node (safe). innerHTML parses HTML into elements and event-handler attributes (dangerous with untrusted data: XSS)."
+   },
+   {
+    "term": "FormData",
+    "def": "A browser API that reads a form's successful controls into key/value pairs. `new FormData(form)` is the shortest way to collect inputs, including files."
+   },
+   {
+    "term": "AbortController",
+    "def": "A standard way to cancel fetch and other async work. Call `controller.abort()`; the pending fetch rejects with an `AbortError`."
+   },
+   {
+    "term": "Response.ok",
+    "def": "True when the HTTP status is 200-299. fetch resolves for 404 and 500 too, so check `ok` (or `status`) before reading the body."
    }
   ],
   "interview": [
    {
-    "q": "What is event delegation and why use it?",
-    "a": "Attaching one listener to a common ancestor and using event.target (with closest) to find which child was interacted with. It works because events bubble. It handles dynamically added elements, uses less memory, and avoids attaching and removing many listeners."
+    "q": "Explain event capture, target and bubble. How does delegation work, and when do you reach for preventDefault versus stopPropagation?",
+    "a": "Dispatch runs capture from window down to the target, then the target listeners, then bubble back up to window. addEventListener listens in bubble by default; { capture: true } opts into capture. Delegation puts one listener on an ancestor and uses event.target plus closest() to find the child, which is why it also works for rows added later and costs one listener instead of hundreds. preventDefault cancels the browser's default action: form submit navigation, link navigation, checkbox toggle. stopPropagation stops the event travelling to the next node; it does not cancel the default action. A form submit handler that calls only stopPropagation still navigates away. Use stopPropagation sparingly, for a nested widget that must not trigger an ancestor; use preventDefault whenever you take over the browser's action in JavaScript."
    },
    {
-    "q": "How do you prevent XSS when rendering user content?",
-    "a": "Insert text with textContent or framework escaping, never innerHTML with untrusted strings; sanitise HTML with a vetted library if HTML is required; set a Content Security Policy; validate and encode on the server too."
+    "q": "What does fetch reject on, and how do you handle status, JSON, cancellation and timeouts?",
+    "a": "fetch returns a promise that resolves when the response headers arrive, even for 404 or 500. It rejects only when no HTTP response is produced: DNS failure, refused connection, TLS or CORS failure, offline, or an abort. So check res.ok or res.status before reading the body, and treat res.json() as a separate failure point because an HTML proxy page can return 200 with a non-JSON body. For cancellation create an AbortController, pass its signal, call abort() when the request is superseded or the component unmounts, and ignore AbortError rather than showing an error. There is no built-in timeout: combine AbortSignal.timeout(ms) with your own controller if you need one, or use Promise.race carefully. Always have loading, success, empty and error branches."
    },
    {
-    "q": "How do you handle a search box that fires many requests?",
-    "a": "Debounce input, cancel the previous request with AbortController, ignore AbortError, show loading and empty states, and cache recent results."
+    "q": "How do you prevent XSS and stale-response races when rendering API data?",
+    "a": "Treat every API string as untrusted. Build elements with createElement and assign textContent, or clone a template and fill its text nodes; never concatenate data into innerHTML. innerHTML invokes the HTML parser, so an img with an onerror attribute or an SVG payload becomes live DOM, and browsers run the handler when the resource fails. If you must accept HTML, sanitise it with a maintained library such as DOMPurify on the client and also on the server, and add a restrictive Content Security Policy as defence in depth. For races, debounce input, abort the previous request with AbortController, ignore AbortError, and verify that the response still matches the current query (a request sequence number) before rendering. Render from one state variable so a slow old response cannot overwrite a newer result, and announce the final state in an aria-live region."
    }
   ],
   "quickCheck": [
    {
     "kind": "mcq",
-    "prompt": "A click on a button inside <ul id=\"terms\"> triggers a listener on the ul. Why?",
+    "prompt": "A click on a button inside `<ul id=\"terms\">` triggers a listener on the ul. Why?",
     "options": [
      "Capturing only",
      "Event bubbling",
@@ -3440,7 +4439,7 @@ export const lessonMeta: LessonMeta[] = [
      "Add type=button to the form"
     ],
     "answer": 1,
-    "explanation": "The browser's default submit navigates away. Prevent it and handle submission in JavaScript."
+    "explanation": "The browser's default submit navigates away. Prevent it and handle submission in JavaScript. stopPropagation() would not stop the navigation."
    },
    {
     "kind": "mcq",
@@ -3456,14 +4455,16 @@ export const lessonMeta: LessonMeta[] = [
    }
   ],
   "cheatSheet": [
-   "querySelector / querySelectorAll; closest() to walk up.",
-   "createElement + textContent; replaceChildren for batch updates.",
-   "addEventListener; delegation on containers; data-* hooks.",
-   "Forms: submit event + preventDefault + FormData.",
-   "fetch: check res.ok; AbortController for stale requests.",
-   "States: idle, loading, success, empty, error.",
-   "Never innerHTML with untrusted data.",
-   "aria-live status region for dynamic messages."
+   "querySelector / querySelectorAll; closest() to walk up; matches() to test without walking.",
+   "createElement + textContent; DocumentFragment or replaceChildren for batch updates.",
+   "addEventListener; delegation on containers; data-* hooks for behaviour.",
+   "Events: capture down, target, bubble up. Default is bubble; use { capture: true } to opt in.",
+   "preventDefault stops the browser action; stopPropagation stops the event travelling. They are different.",
+   "Forms: submit event + preventDefault + FormData + validity. Validate again on the server.",
+   "fetch resolves on HTTP errors; check res.ok. Rejects on network failure and abort.",
+   "AbortController + debounce for rapid input; ignore AbortError and guard against stale responses.",
+   "res.json() can throw even on a 200; wrap it and check content-type when unsure.",
+   "Never innerHTML with untrusted data; use textContent, a sanitiser and a CSP."
   ],
   "capstone": {
    "title": "DevAtlas: vanilla prototype of the lesson list",
@@ -3473,63 +4474,83 @@ export const lessonMeta: LessonMeta[] = [
     "Search uses debounce and AbortController"
    ]
   },
-  "codeSamples": 8,
+  "codeSamples": 9,
   "file": "l3-3-1.ts"
  },
  {
   "id": "3.4.1",
   "title": "Components, props and state",
-  "minutes": 75,
+  "minutes": 90,
   "level": "Beginner",
-  "summary": "Think in React: split UI into components, pass data down with typed props, keep state minimal and in the right place, handle events and forms, and render lists with stable keys.",
+  "summary": "Think in React: components are pure functions from props and state to elements. Pass data down, lift shared state to one owner, control inputs, render lists with stable keys, and keep side effects out of render.",
   "terms": [
    {
     "term": "Component",
-    "def": "A function that returns UI (JSX) for given inputs. Components compose like LEGO bricks."
+    "def": "A function from props (and hook state) to React elements. It describes UI; it does not touch the DOM directly."
    },
    {
-    "term": "JSX",
-    "def": "HTML-like syntax in JavaScript/TypeScript that compiles to function calls creating React elements."
+    "term": "JSX / React element",
+    "def": "JSX is syntax that compiles to `jsx(type, props)` calls. The result is a plain object describing UI, not a DOM node."
    },
    {
     "term": "Props",
-    "def": "Inputs passed from a parent to a child component. Read-only inside the child."
+    "def": "Read-only inputs passed from a parent to a child. Data and callbacks travel this way."
    },
    {
     "term": "State",
-    "def": "Data a component remembers between renders (useState). Changing it re-renders the component."
+    "def": "Data a component instance remembers between renders (`useState`). Calling its setter schedules a re-render."
    },
    {
-    "term": "Render",
-    "def": "React calling your component function to compute what the UI should look like now."
+    "term": "Render and commit",
+    "def": "Render is React calling your component to compute the element tree. Commit is the separate phase where React applies the minimal DOM changes."
+   },
+   {
+    "term": "Reconciliation",
+    "def": "React comparing the new element tree with the previous one to decide which component instances and DOM nodes to reuse, update or replace."
    },
    {
     "term": "Key",
-    "def": "A stable identifier on list items so React can match items between renders."
+    "def": "A stable identity for an item among its siblings, used by reconciliation. Use data ids, not array indexes, when order can change."
    },
    {
     "term": "Lifting state up",
-    "def": "Moving shared state to the closest common parent and passing it down as props."
+    "def": "Moving shared state to the closest common parent and passing it down as props, so one component owns the fact."
+   },
+   {
+    "term": "Controlled input",
+    "def": "A form field whose value comes from React state and whose changes go back through `onChange`. React is the source of truth."
+   },
+   {
+    "term": "Pure render",
+    "def": "A render with no observable side effects: the same props and state produce the same output, and nothing outside the component changes."
+   },
+   {
+    "term": "Side effect",
+    "def": "Work outside rendering: network calls, timers, subscriptions, DOM measurement. It belongs in event handlers or effects after commit, not in render."
+   },
+   {
+    "term": "Composition",
+    "def": "Building components from other components by passing elements as `children` or props, instead of inheriting behaviour from a base class."
    }
   ],
   "interview": [
    {
-    "q": "Props vs state?",
-    "a": "Props are inputs from the parent, read-only in the child. State is data owned by a component that changes over time; updating it re-renders the component. Shared state lives in the closest common ancestor and flows down as props."
+    "q": "Props vs state? Where should a piece of state live?",
+    "a": "Props are inputs from a parent, read-only in the child; they are how data and callbacks flow down. State is data a component instance owns and remembers across renders; its setter schedules a re-render. The decision is about ownership: if only one component reads the value, keep it local; if several siblings need it, lift it to their closest common parent and pass it down, with callbacks for changes. If it can be computed from props or other state, it should not be state at all. Copying a prop into state is the classic mistake, because the copy stops following the source. In an interview, walk through a concrete example such as a search box plus a list: query and data live in the page, the input is controlled, the filtered list is derived, and the count is derived too."
    },
    {
-    "q": "Why do lists need keys?",
-    "a": "Keys let React match items between renders so it can move, insert or remove DOM nodes correctly and keep component state attached to the right item. Keys must be stable and unique among siblings; indexes break when items are reordered or removed."
+    "q": "Why do lists need keys, and what goes wrong with array indexes?",
+    "a": "Keys give React a stable identity for each item among its siblings, so reconciliation can match the new tree to the old one and move, insert or remove instances rather than guessing from position. With index keys, deleting the first item makes the old first instance the new first item, so its component state (an input draft, a checkbox, an open menu) travels to the wrong row. I can show the failure: typing into Alpha and deleting it leaves Beta displaying Alpha's draft with index keys, while `key={item.id}` leaves Beta's own state intact. Keys must be unique among siblings and stable across renders; they are not passed to the component. Use database ids, and if the data has no id, create one when the item is created, not during render."
    },
    {
-    "q": "Why must state updates be immutable?",
-    "a": "React decides whether to re-render and what changed by comparing references. Mutating an object keeps the same reference, so React may skip updates and memoised components show stale data. New objects make changes explicit and enable cheap comparisons."
+    "q": "What makes a render pure, and where do side effects belong?",
+    "a": "A pure render computes its output only from props and state and changes nothing outside the component: no mutation of shared values, no network, no `localStorage`, no DOM reads or writes. React may call it more than once, throw a result away, or run it twice in StrictMode, so an impure render produces duplicated effects and bugs that appear only in development. Derived values belong in the render; side effects belong in event handlers (for user actions) or in `useEffect` after commit (for subscriptions, timers and synchronisation with external systems). Data fetching is an effect concern, and often a framework or a query library handles it better. Keep the pure middle big and push effects to the edges - that is also what makes components easy to test and to compose instead of inheriting."
    }
   ],
   "quickCheck": [
    {
     "kind": "output",
-    "prompt": "count starts at 0. After one click, what is displayed?",
+    "prompt": "count starts at 0. After one click, what is displayed? (Verified in this lesson on React 19.3.1.)",
     "code": {
      "lang": "tsx",
      "code": "function Counter() {\n  const [count, setCount] = useState(0);\n  return <button onClick={() => { setCount(count + 1); setCount(count + 1); }}>{count}</button>;\n}"
@@ -3557,7 +4578,7 @@ export const lessonMeta: LessonMeta[] = [
      "Missing key"
     ],
     "answer": 1,
-    "explanation": "React sees the same array and may skip rendering. Return a new array with a new object for the changed item."
+    "explanation": "React sees the same array reference and may skip rendering. Return a new array with a new object for the changed item."
    },
    {
     "kind": "mcq",
@@ -3569,18 +4590,20 @@ export const lessonMeta: LessonMeta[] = [
      "In a global variable"
     ],
     "answer": 2,
-    "explanation": "Lift state up and pass it down as props."
+    "explanation": "Lift state up and pass it down as props, with an onChange callback going back up."
    }
   ],
   "cheatSheet": [
-   "UI = f(state). Change state, not the DOM.",
-   "Props down, callbacks up. Props are read-only.",
-   "Minimal state; compute derived values in render.",
-   "Immutable updates: map / filter / spread.",
+   "UI = f(props, state). Change state, not the DOM.",
+   "Render is pure and may run more than once; side effects belong in handlers or effects after commit.",
+   "Props down, callbacks up. Props are read-only in the child.",
+   "One owner per fact: lift shared state to the closest common parent.",
+   "Minimal state; compute derived values during render.",
+   "Immutable updates: map / filter / spread; new references make changes visible.",
    "setX(prev => …) when the new value depends on the old.",
-   "Stable keys from data ids, not indexes.",
-   "Controlled inputs: value + onChange.",
-   "Test with Testing Library by role and text."
+   "Controlled inputs: value + onChange; value without onChange is read-only.",
+   "Keys are identity: stable data ids, not array indexes, for dynamic lists.",
+   "Compose with children and focused props; split at state, reuse and responsibility boundaries."
   ],
   "capstone": {
    "title": "DevAtlas: React app with lesson list and quiz",
@@ -3596,51 +4619,71 @@ export const lessonMeta: LessonMeta[] = [
  {
   "id": "3.4.2",
   "title": "Hooks and effects done right",
-  "minutes": 70,
+  "minutes": 90,
   "level": "Intermediate",
-  "summary": "Use React hooks correctly: the rules of hooks, useEffect for synchronising with external systems (and when not to use it), cleanup, stale closures, refs, and extracting custom hooks.",
+  "summary": "Use React hooks correctly: why hooks replaced classes, the call-order rule, batching and functional updates, useEffect as synchronisation (and when not to use it), honest dependencies, cleanup, stale closures, refs, custom hooks, and StrictMode.",
   "terms": [
    {
     "term": "Hook",
-    "def": "A function starting with `use` that lets components use React features: useState, useEffect, useRef, useMemo, useContext, or your own custom hooks."
+    "def": "A function starting with `use` that lets a function component use React features: useState, useEffect, useRef, useMemo, useContext, useSyncExternalStore, or your own custom hook."
+   },
+   {
+    "term": "Rules of Hooks",
+    "def": "Call hooks only at the top level of a component or custom hook, never inside conditions, loops, nested functions or after an early return. React matches each hook to its stored state by call order."
+   },
+   {
+    "term": "Render",
+    "def": "React calling your component function to compute the next JSX. Render must be pure: no subscriptions, DOM writes, ref writes or state updates during render."
+   },
+   {
+    "term": "Batching",
+    "def": "React grouping several state updates from the same event, promise or timeout into one re-render instead of one render per setter."
+   },
+   {
+    "term": "Functional update",
+    "def": "Passing `setX(prev => next)` instead of `setX(next)`, so the update is computed from the latest queued state rather than a value captured by an earlier render."
    },
    {
     "term": "Effect",
-    "def": "Code that runs after React commits a render, to synchronise with something outside React (network, timers, subscriptions, DOM APIs)."
+    "def": "Code in useEffect that synchronises a component with something outside React: a network request, subscription, timer, browser API or third-party widget."
    },
    {
     "term": "Dependency array",
-    "def": "The list of values an effect (or memo) reads; React re-runs it when any of them changes."
+    "def": "The values an effect reads, listed after the effect. React compares them with `Object.is` after each render and re-runs setup when one changes."
    },
    {
     "term": "Cleanup",
-    "def": "A function returned from an effect that undoes it (unsubscribe, clear timer, abort request) before the next run or on unmount."
+    "def": "The function returned from an effect that undoes its setup: abort a request, clear a timer, remove a listener or unsubscribe. It runs before the next setup and on unmount."
    },
    {
     "term": "Stale closure",
-    "def": "A function that captured old state or props from an earlier render and keeps using them."
+    "def": "A callback or effect that captured props or state from an earlier render and keeps using those old values, such as an interval that always sees the initial count."
    },
    {
     "term": "Ref",
-    "def": "useRef: a mutable box that persists across renders without causing re-renders, often holding a DOM node."
+    "def": "`useRef` returns a mutable `{ current }` box that survives renders without causing one. It holds a DOM node or a non-render value, not data the UI displays."
    },
    {
     "term": "Custom hook",
-    "def": "Your own function using other hooks to package reusable stateful logic, e.g. useDebounce, useFetch."
+    "def": "A function starting with `use` that calls other hooks to package reusable stateful logic. Each call gets its own isolated state; it is composition, not a shared singleton."
+   },
+   {
+    "term": "StrictMode",
+    "def": "A development-only wrapper that mounts, unmounts and re-mounts components once to expose effects with missing cleanup or unsafe assumptions. Production behaviour is unchanged."
    }
   ],
   "interview": [
    {
-    "q": "When should you use useEffect?",
-    "a": "To synchronise a component with an external system: network requests, subscriptions, timers, browser APIs, third-party widgets. Not for computing values from props/state (do that in render) and not for responding to user actions (use event handlers)."
+    "q": "Why were hooks introduced, and why can't you call them conditionally?",
+    "a": "Hooks give function components state and a way to synchronise with external systems without classes. Classes split one feature across mount, update and unmount methods, need `this` binding, and reuse logic through higher-order components or render props that add wrappers and prop collisions. Hooks colocate setup with cleanup and let a custom hook share stateful logic without changing the tree. The cost is that React identifies each hook by call order: it stores a linked list of hook records on the fiber and walks it on every render. A hook inside an `if`, loop or early return shifts the later indices, so React reads the wrong record and state breaks. That is why the rules of hooks require top-level calls in components and custom hooks, and why the lint rule exists."
    },
    {
-    "q": "What is a stale closure in React and how do you fix it?",
-    "a": "A callback or effect captured values from an earlier render and keeps using them, such as an interval reading the initial state. Fix by listing correct dependencies, using functional updates (setX(prev => …)), or reading the latest value from a ref when appropriate."
+    "q": "Explain useEffect as synchronisation. What belongs in the dependency array, and what is a stale closure?",
+    "a": "An effect describes an external system the component must stay in sync with: a subscription, request, timer, DOM API or third-party widget. Setup runs after commit, and the returned cleanup runs before the next setup and on unmount, so the effect is always paired with its teardown. The dependency array lists every reactive value the effect reads. React compares entries with `Object.is` after each render; omitted array means every render, `[]` means mount only. A stale closure is a callback or effect that captured an earlier render's props or state and keeps using them, such as an interval created once that always sees the initial count. Fix it by listing the values it reads, using a functional update like `setSeconds(s => s + 1)`, or keeping the latest callback in a ref when re-subscribing is expensive. StrictMode's double mount is useful here: it exposes effects whose cleanup is incomplete."
    },
    {
-    "q": "Why does React StrictMode run effects twice in development?",
-    "a": "It mounts, unmounts and remounts components to reveal effects without proper cleanup or with hidden assumptions about running once. Effects that are correctly synchronised and cleaned up behave the same."
+    "q": "When should you not use an effect, and how do you choose between useMemo, useCallback, useRef and a custom hook?",
+    "a": "Do not use an effect for derived data (compute during render), for a reaction to a user action (do it in the event handler), or to copy a prop into state (use the prop, or remount with a `key`). That removes the extra render, the stale frame and most infinite loops. `useMemo` caches a computed value and `useCallback` caches a function identity; both are performance tools that trade memory and dependency comparison for skipped work, so use them when the Profiler shows an expensive calculation or a memoised child/effect needs a stable reference. `useRef` holds a DOM node or a mutable value that must survive renders without causing one; it is not a replacement for state the UI reads. A custom hook packages repeated state and effect logic behind a `use`-prefixed function, with isolated state per call and the same rules of hooks; it is the right abstraction when two components need the same subscription or derived state machine."
    }
   ],
   "quickCheck": [
@@ -3653,47 +4696,53 @@ export const lessonMeta: LessonMeta[] = [
     },
     "options": [
      "fetchLessons is async",
-     "filters is a new object every render, so the effect re-runs, sets state, re-renders, …",
+     "filters is a new object every render, so the effect re-runs, sets state, re-renders, and repeats",
      "setLessons is not stable",
-     "useEffect cannot fetch"
+     "useEffect cannot fetch data"
     ],
     "answer": 1,
-    "explanation": "Depend on props.level (a primitive) and build the object inside the effect."
+    "explanation": "Depend on the primitive `props.level` and build the object inside the effect. An object literal never compares equal to the previous render's object."
+   },
+   {
+    "kind": "output",
+    "prompt": "Inside one click handler, `setCount(count + 1)` runs three times. The measured result was `naive=1` after one click. Why not 3?",
+    "code": {
+     "lang": "tsx",
+     "code": "function run() {\n  setCount(count + 1);\n  setCount(count + 1);\n  setCount(count + 1);\n}"
+    },
+    "options": [
+     "React only allows one update per event",
+     "All three calls read the same count snapshot and queue the same value; batching renders once",
+     "setCount is asynchronous and drops duplicates",
+     "The third call throws"
+    ],
+    "answer": 1,
+    "explanation": "State is a snapshot. Use `setCount(c => c + 1)` three times to queue three updaters against the latest value, which produces 3."
    },
    {
     "kind": "mcq",
-    "prompt": "You need fullName from firstName and lastName state. Best approach?",
+    "prompt": "You need `fullName` from `firstName` and `lastName` state. What is the best approach?",
     "options": [
-     "useEffect that sets fullName state",
-     "const fullName = first + ' ' + last during render",
-     "useRef",
-     "A context provider"
+     "An effect that sets fullName state",
+     "Compute `firstName + ' ' + lastName` during render",
+     "Store it in useRef",
+     "Put it in a context provider"
     ],
     "answer": 1,
-    "explanation": "Derived values are computed during render; no state or effect needed."
-   },
-   {
-    "kind": "mcq",
-    "prompt": "What does the function returned from useEffect do?",
-    "options": [
-     "Runs before the first render",
-     "Cleans up before the next effect run and on unmount",
-     "Returns a value to the component",
-     "Nothing"
-    ],
-    "answer": 1,
-    "explanation": "It undoes the effect: unsubscribe, clear timers, abort requests."
+    "explanation": "It is derived data: one source of truth, no extra state, no extra render, and it cannot drift."
    }
   ],
   "cheatSheet": [
-   "Hooks at the top level only; names start with use.",
-   "Effects = sync with external systems. Not for derived data or event reactions.",
-   "List every reactive dependency; fix re-runs by restructuring.",
-   "Always clean up: removeEventListener, clearInterval, abort().",
-   "setX(prev => …) avoids stale closures.",
-   "useRef for DOM nodes and non-render values.",
-   "Custom hooks package reusable effect logic.",
-   "StrictMode double-run reveals missing cleanup."
+   "Hooks run top level only; React matches them by call order, so conditions and loops shift every later slot.",
+   "Why hooks: state and effects in function components, setup next to cleanup, reusable logic without wrapper components.",
+   "State is a snapshot. React batches updates; use `setX(prev => …)` when the next value depends on the previous one.",
+   "`useEffect` synchronises with an external system. It is not a lifecycle and not a place for derived data or event reactions.",
+   "Derive during render; react in event handlers; reset with `key`; effects are the last resort.",
+   "Dependencies: every reactive value, compared with `Object.is`. Objects/functions from render are new every time.",
+   "Cleanup before the next setup and on unmount: abort, clear, remove, unsubscribe. StrictMode double-mount tests it.",
+   "Stale closure: honest dependencies, functional updates, or a ref/useEffectEvent for the latest non-reactive value.",
+   "`useMemo` caches a value; `useCallback` caches a function identity; both are performance tools, not correctness tools.",
+   "`useRef` holds a DOM node or mutable non-render value; custom hooks package reusable state/effect logic with isolated state."
   ],
   "capstone": {
    "title": "DevAtlas: hooks layer",
@@ -3709,51 +4758,71 @@ export const lessonMeta: LessonMeta[] = [
  {
   "id": "3.4.3",
   "title": "Data fetching, routing and performance",
-  "minutes": 80,
+  "minutes": 110,
   "level": "Intermediate",
-  "summary": "Separate server state from UI state, fetch and cache data with TanStack Query, structure an app with React Router, share state with context sparingly, and fix real performance problems with measurement, memoisation, code splitting and virtualisation.",
+  "summary": "Separate server state from UI state, choose a fetching pattern, handle loading/error/empty, cancel races, structure routes, split bundles, memoise only what measurement justifies, virtualise long lists, and prove it with browser performance tools.",
   "terms": [
    {
     "term": "Server state",
-    "def": "Data that lives on the server (lessons, progress). Your UI holds a cached copy that can go stale."
+    "def": "Data owned by the backend (lessons, progress, news). Your UI holds a cached copy that can be stale and can change without you."
    },
    {
     "term": "UI state",
-    "def": "State that only exists in the browser: open menus, form drafts, selected tab."
+    "def": "State that only exists in the browser: an open menu, a hovered row, a selected tab, an input draft."
+   },
+   {
+    "term": "URL state",
+    "def": "State encoded in the address: path params (/lessons/3.4.3), search params (?q=docker&page=2) and the history entry. Shareable, reload-safe and Back-button aware."
    },
    {
     "term": "Query cache",
-    "def": "A client-side cache of server responses keyed by a query key, with rules for freshness and refetching."
+    "def": "A client-side store of responses keyed by a query key, with rules for freshness, deduplication, retries and garbage collection."
+   },
+   {
+    "term": "Fresh vs stale",
+    "def": "`staleTime` is how long cached data is trusted without a refetch. Fresh data renders instantly with no request; stale data renders instantly and refetches in the background."
+   },
+   {
+    "term": "Cache lifetime",
+    "def": "`gcTime` (v5; formerly cacheTime) is how long an unused cache entry stays in memory before it is collected. It is not the same clock as `staleTime`."
    },
    {
     "term": "Mutation",
-    "def": "A request that changes server data (POST/PUT/DELETE), usually followed by updating or invalidating cached queries."
+    "def": "A request that changes server data (POST/PUT/PATCH/DELETE). It must invalidate or update the queries it affects, and may update optimistically."
+   },
+   {
+    "term": "Request waterfall",
+    "def": "A chain where each request starts only after the previous one finishes (parent data, then child data). Three 150 ms hops cost ~450 ms even though nothing is slow."
    },
    {
     "term": "Client-side routing",
-    "def": "Changing the URL and rendering a different view without a full page reload."
+    "def": "Changing the URL and rendering another view without a full document load, so app state and scroll position survive navigation."
+   },
+   {
+    "term": "History API",
+    "def": "`pushState`/`replaceState` add or replace history entries and `popstate` fires on Back/Forward. Hash routing uses `location.hash` plus `hashchange` instead."
    },
    {
     "term": "Code splitting",
-    "def": "Loading parts of the JavaScript bundle on demand (React.lazy + dynamic import) instead of all up front."
+    "def": "Emitting separate JavaScript chunks and loading them on demand with dynamic `import()`, usually per route or per heavy component."
    },
    {
     "term": "Virtualisation",
-    "def": "Rendering only the visible rows of a long list."
+    "def": "Rendering only the rows near the viewport and positioning them in a tall scroll container, so 10,000 rows cost ~20 DOM nodes."
    }
   ],
   "interview": [
    {
-    "q": "Server state vs client state?",
-    "a": "Server state is owned by the backend and cached in the client; it can be stale, shared and changed by others, so it needs fetching, caching, invalidation and retry logic. Client (UI) state lives only in the browser. Treating them separately avoids stale copies; libraries like TanStack Query manage server state."
+    "q": "What is the difference between server state and client state, and how do you manage each?",
+    "a": "Server state is owned by the backend: it is shared, asynchronous, can be stale and can change without the client. It needs fetching, caching, deduplication, retries, invalidation and a freshness policy, which is why it belongs in a library such as TanStack Query rather than in useState. Client or UI state exists only in the browser (open menus, drafts, selection) and belongs in the nearest component. Navigation state belongs in the URL so reload and Back work. For mutations, update or invalidate the affected query keys; for optimistic updates, snapshot the cache in onMutate, write the expected value, roll back in onError and reconcile in onSettled. Copying server data into local state creates two sources of truth and is the most common source of stale UI."
    },
    {
-    "q": "How do optimistic updates work?",
-    "a": "Before the server responds, update the cached data to the expected result so the UI reacts instantly; keep the previous value; on error, restore it and show a message; finally refetch or invalidate to reconcile with the server."
+    "q": "A user types quickly and sees results for an old query. What happened, and how do you fix it?",
+    "a": "Responses are applied in arrival order, not request order. The earlier request was slower, landed last and overwrote the newer state. Fix it at both ends: cancel the superseded request with an AbortController, treating AbortError as expected rather than an error, and make the write conditional on the request still being current (a request id or sequence number) for APIs that cannot be aborted. TanStack Query helps because it passes a signal to queryFn, cancels when the last observer unmounts and never lets an older request for the same key overwrite a newer one; cancelQueries before an optimistic write prevents an in-flight refetch from undoing it. Also debounce or defer the value that triggers the request, but do not rely on debouncing alone: a slow response can still arrive out of order."
    },
    {
-    "q": "A React page is slow. How do you investigate?",
-    "a": "Reproduce with production builds, record with React DevTools Profiler to find components that render often or slowly, and with browser Performance tools for long tasks and layout. Then fix the biggest cause: move state down, memoise expensive pure components with stable props, virtualise lists, split code, or reduce work in render."
+    "q": "A React page is slow. How do you investigate before changing code?",
+    "a": "Reproduce on a production build with CPU throttling, then separate network, bundle and render cost. Network: DevTools Network and the Performance panel show waterfalls, slow requests and cache misses. Bundle: the build report and Coverage show chunk sizes and unused JavaScript; check whether a heavy route dependency is on the critical path. Render: React DevTools Profiler shows which components rendered, how long they took and why, and the Performance panel shows long tasks over 50 ms and layout or paint work. Then fix the largest measured cause: split or preload routes, move state down, virtualise long lists, defer non-urgent updates, and only then memoise stable-prop components. Finish by confirming with field Web Vitals, not just a lab score."
    }
   ],
   "quickCheck": [
@@ -3771,6 +4840,18 @@ export const lessonMeta: LessonMeta[] = [
    },
    {
     "kind": "bug",
+    "prompt": "A search box fires a request per keystroke. A user types `react`, then `re`; the screen ends up showing results for `react`. What is the most direct fix?",
+    "options": [
+     "Add more useMemo around the list",
+     "Abort the superseded request (or ignore stale responses)",
+     "Increase staleTime to Infinity",
+     "Render the list in a portal"
+    ],
+    "answer": 1,
+    "explanation": "The older, slower response arrived last. Cancel it with an AbortController (or guard with a request id) so only the current query can write."
+   },
+   {
+    "kind": "bug",
     "prompt": "memo(Chart) still re-renders on every parent render. Why?",
     "code": {
      "lang": "tsx",
@@ -3784,28 +4865,19 @@ export const lessonMeta: LessonMeta[] = [
     ],
     "answer": 1,
     "explanation": "Memoise the derived array with useMemo (or pass stable data) so the shallow comparison succeeds."
-   },
-   {
-    "kind": "mcq",
-    "prompt": "Where should the 'level' filter for the lessons list live so users can share the filtered view?",
-    "options": [
-     "useState in the list",
-     "A global context",
-     "The URL search params",
-     "localStorage"
-    ],
-    "answer": 2,
-    "explanation": "URL state survives reloads, works with back/forward and can be shared."
    }
   ],
   "cheatSheet": [
-   "Server state → query library; UI state → useState near its use.",
-   "useQuery({ queryKey, queryFn }) caches, dedupes, retries, refetches.",
-   "useMutation + invalidateQueries; optimistic onMutate/onError rollback.",
-   "Routes with React Router; params and search params as state.",
-   "lazy() + Suspense for route-level code splitting.",
-   "Context for slow-changing global values only.",
-   "Profile first; memo needs stable props; virtualise long lists."
+   "Server state → query cache; UI state → nearest useState; navigation state → URL.",
+   "staleTime = how long data is fresh. gcTime = how long unused data stays in memory.",
+   "useQuery caches, dedupes, retries, refetches; useMutation + invalidateQueries re-syncs.",
+   "Optimistic: cancelQueries → snapshot → setQueryData → rollback onError → invalidate onSettled.",
+   "Model four states: pending, error, empty, background refresh. Empty is not an error.",
+   "Abort superseded requests; AbortError is control flow, not a failure.",
+   "BrowserRouter needs SPA fallback; HashRouter works without rewrites; nested routes use Outlet.",
+   "lazy() per route moves bytes off the critical path; splitting does not shrink total bytes.",
+   "memo needs stable props; premature memoisation adds cost. Virtualise long lists.",
+   "Profile production builds; long tasks > 50 ms; confirm with LCP, INP and CLS."
   ],
   "capstone": {
    "title": "DevAtlas: routing and data layer",
@@ -3821,47 +4893,71 @@ export const lessonMeta: LessonMeta[] = [
  {
   "id": "3.5.1",
   "title": "XSS, CORS, CSP and Core Web Vitals",
-  "minutes": 75,
+  "minutes": 90,
   "level": "Intermediate",
-  "summary": "Protect users from cross-site scripting with escaping and a Content Security Policy, understand what CORS does and does not protect, store tokens safely, and measure and improve LCP, INP and CLS.",
+  "summary": "Stop cross-site scripting at the sink, understand what CORS does and does not protect, harden a page with CSP and security headers, block CSRF, and measure and improve LCP, INP and CLS with lab and field data.",
   "terms": [
    {
     "term": "XSS",
-    "def": "Cross-site scripting: an attacker gets their JavaScript to run in your users' browsers on your site, so it can steal data or act as the user."
+    "def": "Cross-site scripting: untrusted input becomes executable markup or script in your page, so attacker code runs with your origin's authority and can read tokens, act as the user or rewrite the UI."
+   },
+   {
+    "term": "Stored XSS",
+    "def": "The payload is saved (comment, profile, filename) and served to every viewer later. It is the most damaging form because no crafted link is needed."
+   },
+   {
+    "term": "Reflected XSS",
+    "def": "The payload arrives in the request (query string, form field, header) and is echoed into that same response. It needs a victim to open a crafted URL or submit a form."
+   },
+   {
+    "term": "DOM-based XSS",
+    "def": "The server response is unchanged; client-side code copies attacker-controlled data from a source (URL, referrer, postMessage, storage) into a dangerous sink (innerHTML, eval, location)."
+   },
+   {
+    "term": "Sanitiser",
+    "def": "A library such as DOMPurify that parses untrusted HTML and rebuilds it from an allow-list of tags, attributes and URL schemes, removing scripts, event handlers and javascript: URLs."
    },
    {
     "term": "Same-origin policy",
-    "def": "The browser rule that scripts from one origin (scheme + host + port) cannot read responses from another origin by default."
+    "def": "The browser rule that a page may read responses only from its own origin: same scheme, host and port. CORS is a controlled exception to it."
    },
    {
     "term": "CORS",
-    "def": "Cross-Origin Resource Sharing: response headers by which a server allows specific other origins to read its responses in the browser."
+    "def": "Cross-Origin Resource Sharing: response headers by which a server names the other origins a browser may let read its responses. It is enforced by browsers, not by the server."
    },
    {
-    "term": "CSP",
-    "def": "Content Security Policy: a response header telling the browser which sources of scripts, styles, images and connections are allowed."
+    "term": "Preflight",
+    "def": "An automatic OPTIONS request the browser sends before a non-simple cross-origin request, asking which method and headers the server will allow."
    },
    {
     "term": "CSRF",
-    "def": "Cross-site request forgery: another site makes the user's browser send an authenticated request (with cookies) to your site."
+    "def": "Cross-site request forgery: another site makes the user's browser send an authenticated request, relying on cookies being attached automatically, without needing to read the response."
    },
    {
-    "term": "LCP / INP / CLS",
-    "def": "Core Web Vitals: Largest Contentful Paint (loading), Interaction to Next Paint (responsiveness), Cumulative Layout Shift (visual stability)."
+    "term": "CSP",
+    "def": "Content Security Policy: a response header that allow-lists sources for scripts, styles, images, frames and connections, and can forbid inline script with nonces or hashes."
+   },
+   {
+    "term": "Nonce",
+    "def": "A random, unpredictable value generated per response and put on both the CSP header and each trusted inline script. Only scripts carrying the current nonce may execute."
+   },
+   {
+    "term": "Core Web Vitals",
+    "def": "Field metrics for user experience: Largest Contentful Paint (loading), Interaction to Next Paint (responsiveness) and Cumulative Layout Shift (visual stability), assessed at the 75th percentile."
    }
   ],
   "interview": [
    {
-    "q": "What is XSS and how do you prevent it?",
-    "a": "Untrusted input executed as script in your page. Prevent it with context-aware output encoding (frameworks escape by default), never inserting untrusted HTML without a sanitiser, validating URLs, avoiding eval and inline handlers, and adding a CSP that blocks inline and third-party scripts. HttpOnly cookies limit what a successful XSS can steal."
+    "q": "What are the types of XSS and how do you prevent them?",
+    "a": "Stored XSS is saved server-side and served to many users; reflected XSS is echoed from the current request; DOM-based XSS flows from a client-side source such as `location` or `postMessage` into a sink such as `innerHTML` or `eval` without a server round trip. The fix is context-aware output encoding: JSX text and `textContent` create text and never parse markup, attributes need attribute encoding, URLs need an http/https allow-list, and JavaScript contexts should receive JSON rather than generated code. If HTML must be rendered, parse and rebuild it with an allow-list sanitiser such as DOMPurify at render (and preferably at ingest), keep `eval` and inline handlers out, and add a nonce-based CSP as defence in depth. `HttpOnly` cookies limit what a successful XSS can steal, but they do not stop the XSS itself."
    },
    {
-    "q": "What does CORS protect against?",
-    "a": "It relaxes the browser's same-origin policy in a controlled way: a page from origin A can read responses from origin B only if B allows A. It protects users' data in their browsers from malicious sites. It does not protect the server from direct requests, so APIs still need authentication and authorisation."
+    "q": "Explain CORS, preflight and why `*` with credentials fails.",
+    "a": "The same-origin policy stops a page reading another origin's response; CORS lets the target server grant that read with `Access-Control-Allow-Origin`. A simple request (GET/HEAD/POST with safelisted headers and a form or text content type) is sent immediately and the browser only exposes the response if the header matches. Anything else triggers an automatic OPTIONS preflight carrying `Origin`, `Access-Control-Request-Method` and `Access-Control-Request-Headers`; the real request is sent only if the server allows the origin, method and headers, optionally cached by `Access-Control-Max-Age`. With credentials, the server must echo the exact origin and send `Access-Control-Allow-Credentials: true`; the Fetch spec forbids `*` for credentialed requests because that would let every site read authenticated responses, so the browser rejects the response even if the server sent it. Add `Vary: Origin`, expose any custom response headers explicitly, and remember CORS does not authenticate the caller: curl and other servers ignore it, and simple requests are still sent."
    },
    {
-    "q": "How would you improve a poor LCP?",
-    "a": "Find the LCP element (Lighthouse or DevTools Performance). Reduce server response time (caching, CDN), remove render-blocking resources, preload and prioritise the LCP image/font, serve modern image formats at the right size, and avoid client-side rendering delays for above-the-fold content."
+    "q": "How do you diagnose and improve poor Core Web Vitals?",
+    "a": "Start with field data at p75 (CrUX or your own RUM through `web-vitals`), segmented by route, device and connection, then reproduce in the lab with Lighthouse and the Performance panel. For LCP, find the LCP element and its phases: improve TTFB with caching and an edge, remove render-blocking CSS/JS, preload the hero and mark it `fetchpriority=\"high\"`, serve responsive modern images, stop lazy-loading above the fold, and render above-the-fold HTML on the server. For INP, find long tasks and heavy handlers: split work, yield with `scheduler.yield()`, defer third-party scripts, reduce hydration and move computation to a worker; avoid synchronous layout reads after writes. For CLS, reserve space with width/height or aspect-ratio, size font fallbacks, reserve slots for banners and ads, and animate only transform and opacity. Change one thing at a time and keep measuring, because lab and field disagree and correlation is not causation."
    }
   ],
   "quickCheck": [
@@ -3875,19 +4971,19 @@ export const lessonMeta: LessonMeta[] = [
      "console.log(bio)"
     ],
     "answer": 2,
-    "explanation": "It inserts raw HTML. The JSX text and textContent versions are escaped."
+    "explanation": "It inserts raw HTML into the parser. JSX text and textContent create text nodes and are safe by default."
    },
    {
-    "kind": "mcq",
-    "prompt": "Your API has no authentication but only allows CORS from your frontend's origin. Is it protected?",
+    "kind": "bug",
+    "prompt": "A browser fetch with `credentials: \"include\"` fails and the console mentions a wildcard. The API sends `Access-Control-Allow-Origin: *` and `Access-Control-Allow-Credentials: true`. What is wrong?",
     "options": [
-     "Yes, CORS blocks everyone else",
-     "No: CORS is enforced by browsers only; scripts and servers can call it directly",
-     "Yes, if HTTPS is used",
-     "Only for GET requests"
+     "The API needs HTTPS",
+     "A credentialed cross-origin response may not use `*`; echo the exact allowed origin and send Vary: Origin",
+     "The browser needs a preflight for every GET",
+     "`credentials` must be `same-origin`"
     ],
     "answer": 1,
-    "explanation": "CORS is not access control for the server. Add authentication and authorisation."
+    "explanation": "The Fetch spec rejects a wildcard allow-origin when credentials are included, precisely to stop every site reading authenticated responses."
    },
    {
     "kind": "bug",
@@ -3903,17 +4999,20 @@ export const lessonMeta: LessonMeta[] = [
      "alt text"
     ],
     "answer": 1,
-    "explanation": "Without reserved space, the button moves down when the image loads. Add width and height (or aspect-ratio)."
+    "explanation": "Without reserved space, the button moves down when the image loads. Add width/height or aspect-ratio."
    }
   ],
   "cheatSheet": [
-   "Escape by default; sanitise HTML (DOMPurify); validate URLs; no eval.",
-   "CSP: default-src 'self'; script-src 'self'; object-src 'none'. Report-only first.",
-   "CORS = browser read permission, not server security. Allow-list origins.",
-   "Preflight: OPTIONS before non-simple requests.",
-   "Tokens: HttpOnly Secure SameSite cookies; CSRF protection.",
-   "Good vitals: LCP ≤ 2.5 s, INP ≤ 200 ms, CLS ≤ 0.1 (p75).",
-   "Preload LCP image; width/height on images; split long tasks."
+   "XSS classes: stored (saved), reflected (echoed now), DOM (client source to client sink).",
+   "`textContent` and JSX text never parse; `innerHTML`, `dangerouslySetInnerHTML`, `eval` do.",
+   "Rich HTML: allow-list sanitiser (DOMPurify) at render; URLs: http/https only.",
+   "CSP: `default-src 'self'; script-src 'self' 'nonce-…'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'`.",
+   "Nonce must be random per response; `'unsafe-inline'` gives XSS exactly what it needs.",
+   "CORS simple request: sent, response withheld without ACAO. Non-simple: preflight OPTIONS first.",
+   "Credentials: exact origin echoed + `ACAC: true`; `*` is invalid for credentialed requests.",
+   "CSRF: SameSite + per-session token + Origin check; CORS is not CSRF protection.",
+   "Headers: HSTS, nosniff, frame-ancestors, Referrer-Policy, Permissions-Policy; HttpOnly/Secure/SameSite cookies.",
+   "Vitals at p75: LCP ≤ 2.5 s, INP ≤ 200 ms, CLS ≤ 0.1. Field data first, lab to explain."
   ],
   "capstone": {
    "title": "DevAtlas: security headers, CORS and vitals reporting",
@@ -3923,7 +5022,7 @@ export const lessonMeta: LessonMeta[] = [
     "Vitals visible in logs"
    ]
   },
-  "codeSamples": 10,
+  "codeSamples": 9,
   "file": "l3-5-1.ts"
  },
  {
@@ -4477,7 +5576,7 @@ export const lessonMeta: LessonMeta[] = [
     "Docker image under 50 MB (e.g. distroless or debian-slim runtime stage)"
    ]
   },
-  "codeSamples": 8,
+  "codeSamples": 9,
   "file": "l4-3-1.ts"
  },
  {
@@ -4585,7 +5684,7 @@ export const lessonMeta: LessonMeta[] = [
     "CI fails on breaking changes unless a version bump is made"
    ]
   },
-  "codeSamples": 7,
+  "codeSamples": 9,
   "file": "l4-4-1.ts"
  },
  {
@@ -4693,8 +5792,120 @@ export const lessonMeta: LessonMeta[] = [
     "429 with Retry-After on /ask abuse"
    ]
   },
-  "codeSamples": 6,
+  "codeSamples": 9,
   "file": "l4-4-2.ts"
+ },
+ {
+  "id": "4.5.1",
+  "title": "The OWASP Top 10, with hands-on exploits and fixes",
+  "minutes": 90,
+  "level": "Advanced",
+  "summary": "Use the OWASP Top 10 (2021) as a map, then exploit and fix the failures backend engineers actually ship: broken object-level access control, SQL injection, weak password storage, insecure defaults, outdated dependencies, authentication and logging gaps, and SSRF.",
+  "terms": [
+   {
+    "term": "Broken access control (A01)",
+    "def": "A missing or wrong server-side check that lets a user act on a record or function outside their permissions. It is the first risk in the 2021 list; OWASP reports 94% test coverage for this category and maps the object-id pattern to CWE-639."
+   },
+   {
+    "term": "IDOR",
+    "def": "Insecure direct object reference: the API accepts an object identifier from the client (an invoice number, a file id) and returns or changes that object without checking that the caller owns it. In the 2021 list it is one of the failure modes inside broken access control."
+   },
+   {
+    "term": "Injection (A03)",
+    "def": "Untrusted data is interpreted as part of a command or query. SQL injection is CWE-89; OWASP reports 94% of applications tested for some form of injection, with 274,228 occurrences in the contributed data."
+   },
+   {
+    "term": "Cryptographic failure (A02)",
+    "def": "Sensitive data is protected with no cryptography, weak cryptography or the wrong kind: plaintext, fast hashes, unsalted hashes, hardcoded keys, or passwords encrypted instead of hashed."
+   },
+   {
+    "term": "Security misconfiguration (A05)",
+    "def": "The software is secure in theory but deployed wrong: default accounts, debug mode, verbose errors, open storage, directory listing, missing security headers, unnecessary features exposed."
+   },
+   {
+    "term": "SSRF (A10)",
+    "def": "Server-side request forgery: the application fetches a user-supplied URL, so the attacker can make the server reach internal services, cloud metadata or files it could not reach directly. OWASP maps it to CWE-918 and recommends an allowlist, not a deny list."
+   },
+   {
+    "term": "Security logging and monitoring failure (A09)",
+    "def": "Logins, access-control failures and high-value actions are not logged, not monitored, or not alerted on, so a breach runs undetected. OWASP maps it to CWE-778, CWE-117, CWE-223 and CWE-532."
+   }
+  ],
+  "interview": [
+   {
+    "q": "A learner changes /api/invoices/1042 to /api/invoices/1043 and receives another learner's invoice. What is the flaw, and how do you fix it everywhere?",
+    "a": "It is broken object-level access control, an IDOR (CWE-639). Authentication established the caller but the handler never checked that the invoice belongs to them. I would load the invoice with a query scoped by owner, or load it and run a single authorization policy that compares the record's owner or tenant to the caller, including an admin override. Return 404 for both missing and forbidden so the endpoint does not confirm which ids exist. Then add an integration test with two users and the same id, audit every route that takes an object id, and log denials. UUIDs and hidden buttons are not fixes."
+   },
+   {
+    "q": "Why is hashlib.sha256(password) wrong, and what replaces it?",
+    "a": "SHA-256 is fast by design, so a GPU can try billions of guesses per second, and without a salt the same password produces the same hash everywhere, which makes rainbow tables and cross-account cracking trivial. Replace it with a slow, salted password hash: Argon2id first, then scrypt, then bcrypt for legacy systems, or PBKDF2-HMAC-SHA256 with at least 600,000 iterations when FIPS is required. Generate a random salt per password with secrets, store the algorithm and parameters beside the hash, compare with hmac.compare_digest, and rehash on the next successful login when parameters change. Never encrypt passwords; encryption is reversible."
+   },
+   {
+    "q": "A feature fetches an image from a user-supplied URL. How do you stop SSRF?",
+    "a": "Constrain the destination, not the payload. Allow only https, allowlist the hostnames and ports the feature legitimately needs, resolve the hostname, check every resolved address against private, loopback, link-local and metadata ranges, and connect to the checked IP so DNS cannot rebind between check and use. Disable redirects, set short timeouts and a size cap, return only the image bytes rather than the raw upstream response, and add an egress firewall that blocks the metadata service and internal networks. OWASP specifically warns against deny lists and regular expressions: attackers have encodings and payload lists that get around them."
+   }
+  ],
+  "quickCheck": [
+   {
+    "kind": "mcq",
+    "prompt": "A search endpoint builds `SELECT id, email FROM users WHERE email = '` + input + `'`. Which change actually removes the SQL injection?",
+    "options": [
+     "Escape single quotes in the input",
+     "Use a parameterised query and bind the input as a value",
+     "Hide database errors from the response",
+     "Put a WAF rule in front of the endpoint"
+    ],
+    "answer": 1,
+    "explanation": "Binding keeps the statement and the value on separate paths, so the database never parses the input as SQL. Escaping and WAF rules are bypassable, and hiding errors only hides the symptom."
+   },
+   {
+    "kind": "bug",
+    "prompt": "An authenticated learner changes /api/invoices/1042 to /api/invoices/1043 and gets another learner's invoice. The handler loads the invoice by id and returns it. What is the flaw?",
+    "options": [
+     "Missing CSRF token",
+     "Broken object-level access control (IDOR)",
+     "Weak password hashing",
+     "Server-side request forgery"
+    ],
+    "answer": 1,
+    "explanation": "The caller was authenticated but the record's owner was never checked: CWE-639, one of the failure modes in OWASP A01. The fix is a server-side ownership check, not a less guessable id."
+   },
+   {
+    "kind": "mcq",
+    "prompt": "Which password storage scheme follows OWASP's guidance?",
+    "options": [
+     "SHA-256 of the password",
+     "MD5 with one salt shared by the whole site",
+     "PBKDF2-HMAC-SHA256 with 600,000 iterations and a unique 16-byte salt",
+     "AES-256 encryption with the key stored in the repository"
+    ],
+    "answer": 2,
+    "explanation": "OWASP recommends a slow, salted password hash: Argon2id, scrypt or bcrypt, with PBKDF2-HMAC-SHA256 at 600,000 iterations for FIPS. Fast hashes, shared salts and reversible encryption are the failures A02 describes."
+   }
+  ],
+  "cheatSheet": [
+   "Map: A01 access control, A02 crypto, A03 injection, A04 design, A05 configuration, A06 components, A07 authentication, A08 integrity, A09 logging, A10 SSRF.",
+   "Authorization: check the object's owner or tenant on the server for every read and write; deny by default; 404 for both missing and forbidden; IDOR is CWE-639.",
+   "SQL: statement text and values travel separately; never concatenate; allowlist table, column and sort names; use a least-privilege database user.",
+   "Passwords: Argon2id, scrypt or bcrypt; PBKDF2-HMAC-SHA256 at 600,000 iterations; unique random salt; compare_digest; rehash on login; never encrypt or store plaintext.",
+   "Configuration: no default accounts, debug off, generic errors, security headers, no public buckets, no directory listing; verify it automatically.",
+   "Components: inventory direct and transitive dependencies, generate an SBOM, watch CVEs, remove unused packages, patch on a stated schedule.",
+   "Authentication: MFA, rate limits and delays, generic messages to prevent enumeration, rotate the session id after login, short-lived tokens, real logout.",
+   "Logging: record logins, failures and access-control denials with user context; redact secrets; encode log fields; alert on patterns and keep an incident runbook.",
+   "SSRF: allowlist scheme, host and port; resolve and pin the IP; block private, loopback, link-local and metadata ranges; disable redirects; cap time and size."
+  ],
+  "capstone": {
+   "title": "DevAtlas: security review",
+   "criteria": [
+    "Findings are mapped to A01-A10 with the affected route or file",
+    "Each finding has an exploit, an impact and a concrete fix",
+    "Each fix has a regression test that fails before and passes after",
+    "Dependencies, configuration, logs and outbound requests are all covered",
+    "Unfixed items have an owner, a deadline and a compensating control"
+   ]
+  },
+  "codeSamples": 8,
+  "file": "l4-5-1.ts"
  },
  {
   "id": "5.1.1",
@@ -5342,7 +6553,7 @@ export const lessonMeta: LessonMeta[] = [
     "Restore test running on a schedule"
    ]
   },
-  "codeSamples": 7,
+  "codeSamples": 8,
   "file": "l5-4-1.ts"
  },
  {
@@ -7130,6 +8341,567 @@ export const lessonMeta: LessonMeta[] = [
   },
   "codeSamples": 8,
   "file": "l6-4-2.ts"
+ },
+ {
+  "id": "6.4.3",
+  "title": "Design a web crawler",
+  "minutes": 90,
+  "level": "Advanced",
+  "summary": "Design the crawler behind a search engine end to end: a ranked URL frontier, per-host politeness and robots.txt, exact and near-duplicate detection at a billion links, a freshness schedule, and the reverse-index path that turns crawled pages into 40,000 searches per second.",
+  "terms": [
+   {
+    "term": "URL frontier",
+    "def": "The set of discovered but not-yet-crawled links, kept ranked so the crawler always takes the most valuable link next (Redis sorted sets in this design)."
+   },
+   {
+    "term": "Politeness",
+    "def": "A minimum delay between two requests to the same host so the crawler never overloads a site; polite crawlers are rarely banned."
+   },
+   {
+    "term": "Canonical URL",
+    "def": "The single, normalised URL chosen for a page when several spellings exist (trailing slashes, tracking params, http vs https), so duplicates collapse to one entry."
+   },
+   {
+    "term": "Fingerprint (page signature)",
+    "def": "A short hash of normalised page content, compared to detect exact and near-duplicate pages cheaply."
+   },
+   {
+    "term": "robots.txt",
+    "def": "A file at a site's root stating which paths a crawler may fetch, standardised as RFC 9309; respected by polite crawlers."
+   },
+   {
+    "term": "Duplicate detection",
+    "def": "Removing URLs or pages seen before - exact by fingerprint, near by Jaccard/cosine similarity - so the crawler neither loops forever nor stores the same content twice."
+   },
+   {
+    "term": "Reverse index",
+    "def": "A word -> list of pages mapping built from crawled content; the structure that answers search queries."
+   }
+  ],
+  "interview": [
+   {
+    "q": "Design a web crawler.",
+    "a": "Clarify scope: crawl a list of URLs, build a reverse index of words to pages and static titles/snippets; users search and see results; out of scope: search analytics, personalised results, page rank; anonymous users only; the crawler must not loop. Estimate: 1 billion links, refreshed about weekly -> 4 billion pages/month x 500 KB = 2 PB/month, 72 PB in 3 years; 1,600 writes/s; 100 billion searches/month = 40,000 searches/s. Design: links_to_crawl ranked in Redis sorted sets (seeded with hubs like Yahoo/DMOZ); the crawler service takes the top link, checks crawled_links (key-value NoSQL) for a similar signature - if similar, reduce priority and continue, which breaks cycles - else fetch, enqueue reverse-index and document jobs, store the signature. Search path: client -> web server reverse proxy -> Query API (parse, strip markup, tokenise, fix typos, normalise, booleans) -> Reverse Index Service ranks, Document Service returns titles/snippets; GET /api/v1/search?query=hello+world. Scale: shard/federate the index and document services, memory cache for hot queries (memory 1 MB read ~250 us, SSD 4x, disk 80x), own DNS cache, connection pooling, bandwidth."
+   },
+   {
+    "q": "How do you stop the crawler from looping forever, and how do you dedupe a billion links?",
+    "a": "Two layers. Exact URL duplicates: sort | uniq for small lists; with 1 billion links a MapReduce job - mapper yields (line, 1), reducer keeps entries whose frequency is 1. Cycles: before crawling a link, check crawled_links for a similar page signature; if one exists, reduce the link's priority instead of crawling it, so the loop degrades instead of spinning. Near-duplicate content: generate signatures from page contents and compare them with the Jaccard index or cosine similarity; canonicalise URLs (scheme, host, trailing slash, tracking params) so one page has one URL in the first place."
+   },
+   {
+    "q": "Pages change. How do you decide when to re-crawl?",
+    "a": "Give every crawl result a timestamp. Default refresh after about a week; frequently updated or popular sites get shorter intervals. Better: data-mine the mean time before a page updates and use that statistic per page, so crawl budget is spent where content actually changes. Honour robots.txt guidance on crawl frequency, and schedule re-crawls as background jobs so the frontier's priority queue still serves fresh fetches first."
+   }
+  ],
+  "quickCheck": [
+   {
+    "kind": "mcq",
+    "prompt": "A crawler follows links but keeps crawling the same pages forever and never finishes. Which missing piece causes the loop?",
+    "options": [
+     "A load balancer",
+     "A signature check against crawled_links",
+     "A bigger DNS cache",
+     "Connection pooling"
+    ],
+    "answer": 1,
+    "explanation": "Cycles happen because the crawler has no memory of what it saw: before crawling a link, compare its signature with crawled_links and reduce its priority or skip it, which breaks the loop."
+   },
+   {
+    "kind": "output",
+    "prompt": "Back-of-envelope: 4 billion pages crawled per month at an average of 500 KB per page. How much stored page content is that per month?",
+    "options": [
+     "2 TB",
+     "200 TB",
+     "2 PB",
+     "20 PB"
+    ],
+    "answer": 2,
+    "explanation": "4e9 x 500 KB = 2e12 KB = 2 PB per month, or 72 PB in three years. At 2.5M seconds per month that is about 1,600 writes per second."
+   },
+   {
+    "kind": "bug",
+    "prompt": "A crawler hits one news site at 50 requests per second with no delay between requests and gets HTTP 429s, then a permanent block. What is the root cause?",
+    "options": [
+     "Missing canonical URL handling",
+     "No robots.txt parser",
+     "No per-host politeness delay",
+     "Page fingerprints are too short"
+    ],
+    "answer": 2,
+    "explanation": "The host rate-limited the crawler: always leave a minimum delay between requests to the same host, read robots.txt first, and back off on 429s."
+   }
+  ],
+  "cheatSheet": [
+   "Numbers: 1B links; 4e9 pages/mo; 500 KB/page; 2 PB/mo; 72 PB/3y; 1,600 writes/s; 40,000 searches/s.",
+   "Loop: top link -> signature check -> crawl -> enqueue index/doc jobs -> store signature.",
+   "Frontier: Redis sorted sets ranked by popularity; seed with hub sites (Yahoo, DMOZ).",
+   "Politeness: minimum delay per host + robots.txt (RFC 9309) before any fetch; back off on 429/5xx.",
+   "Dedupe: sort | uniq for small lists; MapReduce freq == 1 for 1B links; Jaccard/cosine on signatures for content.",
+   "Freshness: crawl timestamp; default ~1 week, popular sooner; mine mean time between updates.",
+   "Search path: Query API -> reverse index (rank) + document service (title/snippet); cache hot queries; shard to scale."
+  ],
+  "capstone": {
+   "title": "DevAtlas: crawler design doc",
+   "criteria": [
+    "Requirements and out-of-scope list",
+    "Estimates with numbers",
+    "Mermaid diagram and politeness plan",
+    "Rollout or failure-mode section"
+   ]
+  },
+  "codeSamples": 9,
+  "file": "l6-4-3.ts"
+ },
+ {
+  "id": "6.4.4",
+  "title": "Design Mint.com: a personal finance app",
+  "minutes": 90,
+  "level": "Advanced",
+  "summary": "Design a write-heavy personal finance app: scheduled daily ingestion from 30 million bank accounts, categorise each of 5 billion transactions exactly once at write time, precompute monthly aggregates per user and category, and fire budget notifications as a side effect of the write path — the same pipeline shape as DevAtlas's daily progress rollups.",
+  "terms": [
+   {
+    "term": "Bank aggregation",
+    "def": "Fetching balances and transactions from many banks on a user's behalf — historically by logging in as the user and reading pages (screen-scraping), today mostly through provider APIs like Plaid's."
+   },
+   {
+    "term": "Scheduled ingestion",
+    "def": "A recurring pull of fresh data on a timetable (daily for users active in the past 30 days, on first link, and on manual refresh) instead of continuous or on-read fetching."
+   },
+   {
+    "term": "Seller-to-category mapping",
+    "def": "A lookup from a transaction's merchant to a budget category, seeded with ~50,000 sellers (~12 MB in memory) and improved by crowd-sourced user corrections."
+   },
+   {
+    "term": "Monthly aggregate table",
+    "def": "Precomputed rows of total spending per (user, month, category), updated as transactions are ingested, so dashboards read a few small rows instead of summing millions of transactions."
+   },
+   {
+    "term": "Budget notification",
+    "def": "A side effect of the write path: after a category's month-to-date total is updated, compare it with the user's budget and notify when it is nearing or exceeding."
+   },
+   {
+    "term": "Write-heavy workload",
+    "def": "A workload with many more writes than reads (Mint: 10:1). You optimise ingestion and precompute aggregates at write time, because reads cannot amortise the work."
+   }
+  ],
+  "interview": [
+   {
+    "q": "Design Mint.com.",
+    "a": "Clarify: connect a financial account, extract transactions daily (for users active in the past 30 days, on first link and on manual refresh), categorise them with manual override and no automatic re-categorisation, analyse monthly spending by category, recommend budgets with override, and notify near or over budget; extra analytics are out of scope. Estimate: 10M users, 30M accounts, 5B transactions a month at ~50 bytes = 250 GB/month, 9 TB in 3 years; 5e9 / 2.5e6 = 2,000 writes/s vs 500M / 2.5e6 = 200 reads/s, a 10:1 write-heavy workload. Design: Accounts API enqueues pull jobs (SQS/RabbitMQ); the extraction service pulls, stores raw logs in object storage, categorises via a ~50k seller map with crowd overrides, and the budget service aggregates monthly_spending and triggers notifications. Data: transactions and monthly_spending tables indexed on id, user_id, created_at; accounts with a char(64) password hash. Read path: Read API with cache-aside Redis/Memcached, static content from object store + CDN. A MapReduce job over the logs is the alternative aggregation. Scale writes with federation, sharding by user_id and a warehouse; keep ~1 month of transactions in SQL."
+   },
+   {
+    "q": "Mint is write-heavy, which is unusual. What in the design changes because of it?",
+    "a": "The usual tricks — cache everything, add read replicas — do not help writes, so the design spends its budget on the write path. First, batch and decouple: a queue absorbs 2,000 writes/s and workers drain it at a safe rate, so banks are never scraped from the request path. Second, categorise once at write time and precompute aggregates per (user, month, category), so the read side needs only a small cache — 200 reads/s — not heavy machinery. Third, idempotency by transaction id, because retries are guaranteed and duplicates corrupt money. Fourth, plan for sharding by user_id from the start (no cross-shard queries needed) and offload old rows to a warehouse so the primary stays small."
+   },
+   {
+    "q": "One bank changes its web layout and its users' pulls keep failing. What happens in your system and how do you handle it?",
+    "a": "The extraction worker for that bank's accounts starts failing; it retries with exponential backoff, then parks jobs in a dead-letter queue and alerts on the queue depth. Idempotency by transaction id means the failed pulls corrupt nothing — no duplicated rows, no doubled totals. The bank is marked degraded: new pulls for it are deprioritised or paused, its users see a 'last updated' status, and previously extracted data stays visible. Engineers fix the scraper or move that bank to an API-based connection; once fixed, the parked jobs are replayed. If the outage is long, aggregate updates just lag — dashboards stay fast because they read precomputed rows, not the bank."
+   }
+  ],
+  "quickCheck": [
+   {
+    "kind": "mcq",
+    "prompt": "Mint stores 5 billion transactions a month. When should each transaction be assigned its budget category?",
+    "options": [
+     "When the dashboard renders the user's month view",
+     "Once, when the transaction is ingested, from a seller-to-category map plus user overrides",
+     "On every read, in case the user changed a category",
+     "Never; categories are lazily computed by the bank"
+    ],
+    "answer": 1,
+    "explanation": "Categorise once at write time; user overrides win and nothing re-categorises automatically. On-read categorisation repeats the same work for every page view."
+   },
+   {
+    "kind": "output",
+    "prompt": "Back-of-envelope: 5 billion transactions a month at about 50 bytes each. Roughly how much new transaction data is that per month?",
+    "options": [
+     "25 GB",
+     "250 GB",
+     "2.5 TB",
+     "25 TB"
+    ],
+    "answer": 1,
+    "explanation": "5e9 x 50 B = 250 GB/month; times 36 months is about 9 TB in 3 years. 2,000 writes/s and only 200 reads/s follow from the same numbers."
+   },
+   {
+    "kind": "bug",
+    "prompt": "After a network timeout during a daily pull, the worker retries the same account. The user's Groceries total for the month doubled. What is the root cause?",
+    "options": [
+     "The category service returned null for the seller",
+     "The pull is not idempotent: the retry re-applies the same transactions because there is no dedupe on transaction id",
+     "The budget service notified twice",
+     "The queue delivered the job to two workers"
+    ],
+    "answer": 1,
+    "explanation": "A pull that timed out can still have committed. Dedupe by transaction id — a unique index with INSERT ... ON CONFLICT DO NOTHING — so retries are harmless."
+   }
+  ],
+  "cheatSheet": [
+   "Pull daily for users active in the past 30 days, on first link, and on manual refresh.",
+   "Categorise once at write time; user overrides win; never re-categorise automatically.",
+   "Aggregate per (user, month, category); the budget check is a side effect of the write.",
+   "5e9 tx/month x 50 B = 250 GB/month (~9 TB in 3 years); 2,000 writes/s vs 200 reads/s (10:1).",
+   "~50k sellers x 255 B ~= 12 MB in memory; top override via a heap peek, O(1).",
+   "Read path: cache-aside Redis/Memcached -> SQL; static content from object store + CDN.",
+   "Idempotency by transaction id; retries must never double-count.",
+   "Scale writes: federation, sharding by user_id, warehouse for old rows (~1 month hot in SQL)."
+  ],
+  "capstone": {
+   "title": "DevAtlas: progress analytics pipeline",
+   "criteria": [
+    "Requirements and out-of-scope list",
+    "Estimates with numbers",
+    "Mermaid diagram",
+    "Failure/rollout section"
+   ]
+  },
+  "codeSamples": 9,
+  "file": "l6-4-4.ts"
+ },
+ {
+  "id": "6.4.5",
+  "title": "Design a social graph and a search query cache",
+  "minutes": 90,
+  "level": "Advanced",
+  "summary": "Design DevAtlas's people search: show the shortest chain of people between a learner and any mentor, when the graph is far too big for one machine and a cache must sit in front of the search. BFS across sharded Person Servers with a lookup service, batched friend lookups, bidirectional search, and an LRU cache with eviction and staleness rules.",
+  "terms": [
+   {
+    "term": "BFS shortest path",
+    "def": "Breadth-first search visits nodes layer by layer, so the first time it reaches the target it has found the shortest path in an unweighted graph. A visited set and a hop limit keep the frontier from exploding."
+   },
+   {
+    "term": "Shard",
+    "def": "Splitting rows (here, users) across several independent servers by a shard key such as person_id, because the whole graph does not fit on one machine."
+   },
+   {
+    "term": "Lookup service",
+    "def": "A small service that maps person_id to the Person Server holding that user. A distributed BFS consults it on every hop."
+   },
+   {
+    "term": "Bidirectional search",
+    "def": "Running BFS from the source and from the target at once, expanding the smaller frontier, and merging where the two searches meet. Visits far fewer nodes than one-directional BFS."
+   },
+   {
+    "term": "LRU cache",
+    "def": "Least-recently-used eviction: when the cache is full, the entry touched longest ago is dropped. Keeps hot entries and bounds memory."
+   },
+   {
+    "term": "Cache hit ratio",
+    "def": "The share of requests answered from the cache. The number to measure before sizing a cache: how skewed popularity is decides how much a small cache absorbs."
+   },
+   {
+    "term": "Degrees of separation",
+    "def": "The number of hops between two people in a social graph. BFS computes the exact number for any pair."
+   }
+  ],
+  "interview": [
+   {
+    "q": "Design a feature that shows the degrees of separation between two users.",
+    "a": "Clarify scope first: just shortest-path display, no mutual friends, no full search. Numbers: 100M users, 50 friends average, so 5 billion edges; 1 billion searches a month = 400 searches/s average, higher at peak. Unweighted edges means BFS finds the shortest path. The graph won't fit on one machine, so shard Person records by person_id across Person Servers and add a Lookup Service mapping person_id to server. The User Graph Service runs BFS: fetch the source's friend_ids, then for each hop ask the lookup service where friends live, batching friend fetches per server per layer, with a visited set and a hop limit. Cache person data and saved traversals in Redis, cache-aside; paths get short TTLs because friendships change. For latency, add bidirectional BFS and start from the higher-degree endpoint."
+   },
+   {
+    "q": "The graph is too big for one machine. How do you run BFS across shards, and what breaks if you batch naively?",
+    "a": "Each Person Server holds Person records (id, name, friend_ids) sharded by person_id, and a Lookup Service routes person_id to server. BFS reads the source, then for each discovered friend consults the lookup service and fetches the record: every hop is a remote call, so naive code does one call per friend. Batching groups each layer's friend ids by server and does one call per server per layer — a 50x reduction in machine jumps at 50 friends per user. What breaks when batching naively: you lose which parent discovered which friend, so keep (parent, friend) pairs through the batch; and without a visited set the same friend is fetched twice from two parents."
+   },
+   {
+    "q": "How do you cache search results when friendships change all the time?",
+    "a": "Split by volatility. Person records (id, name, friend_ids) are stable: cache for an hour, invalidate on profile edits. Complete BFS paths are volatile: cache with a short TTL, a few minutes, and invalidate on friendship created/removed events for paths containing both parties. Eviction is LRU with a hard memory cap, so the long tail of one-off searches never displaces hot people; monitor the hit ratio and alert when it drops. The trade-off is explicit: a path can be up to one TTL stale, which is fine for recommendations and unacceptable for anything transactional, so the UI labels paths 'as of a few minutes ago'."
+   }
+  ],
+  "quickCheck": [
+   {
+    "kind": "mcq",
+    "prompt": "The friend graph has unweighted edges. Why BFS and not Dijkstra for shortest paths?",
+    "options": [
+     "Dijkstra only works on trees",
+     "BFS finds the shortest path in an unweighted graph in O(V+E), while Dijkstra's priority queue handles weights that do not exist here",
+     "BFS needs a graph database",
+     "Dijkstra is faster on unweighted graphs"
+    ],
+    "answer": 1,
+    "explanation": "All edges cost 1 hop, so expanding layer by layer reaches the target on the shortest path first. Dijkstra adds a priority queue for weighted edges; no weights, no need."
+   },
+   {
+    "kind": "output",
+    "prompt": "100 million users with 50 friends per user on average. How many friend relationships must the system store?",
+    "options": [
+     "500 million",
+     "5 billion",
+     "50 billion",
+     "2.5 million"
+    ],
+    "answer": 1,
+    "explanation": "100 million x 50 = 5 billion edges, which is why the graph is sharded across Person Servers rather than kept on one machine."
+   },
+   {
+    "kind": "bug",
+    "prompt": "The friend search endpoint hangs for pairs that are far apart: each layer multiplies the frontier by 50 and the server runs out of memory and times out. What is the root cause?",
+    "options": [
+     "The edges are unweighted",
+     "No visited set and no hop limit, so the frontier grows exponentially until the search dies",
+     "The cache hit ratio is too high",
+     "The lookup service returns the wrong shard"
+    ],
+    "answer": 1,
+    "explanation": "An unbounded BFS fans out 50^n: six hops is about 15.6 billion nodes. A visited set prevents rework, and a hop or time limit turns an infinite search into a bounded 'no path found' answer."
+   }
+  ],
+  "cheatSheet": [
+   "Unweighted edges means BFS finds the shortest path; Dijkstra adds nothing.",
+   "100M users x 50 friends = 5 billion edges; 1e9 searches / 2.5e6 seconds = 400 searches/s.",
+   "Graph too big for one machine: shard users across Person Servers, Lookup Service maps person_id to server.",
+   "Batch friend lookups per Person Server per layer to cut machine jumps.",
+   "Visited set + hop/time limit, or the frontier explodes (50^6 is about 15.6 billion).",
+   "Bidirectional BFS: expand the smaller frontier, merge where the searches meet.",
+   "Cache hot people and saved traversals; LRU eviction bounds memory, the hit ratio sizes it.",
+   "Cached paths go stale on friendship changes: short TTLs plus invalidation events."
+  ],
+  "capstone": {
+   "title": "DevAtlas: mentor graph design doc",
+   "criteria": [
+    "Requirements and out-of-scope list",
+    "Estimates with numbers",
+    "Mermaid diagram",
+    "Cache eviction + staleness section"
+   ]
+  },
+  "codeSamples": 9,
+  "file": "l6-4-5.ts"
+ },
+ {
+  "id": "6.4.6",
+  "title": "Design sales rank by category",
+  "minutes": 90,
+  "level": "Advanced",
+  "summary": "Design Amazon's sales rank by category: log transactions to object storage, aggregate weekly totals with a two-step MapReduce that gets a distributed sort for free, and serve the tiny precomputed table to 40,000 reads per second through a cache — the pattern behind every leaderboard DevAtlas ships.",
+  "terms": [
+   {
+    "term": "batch aggregation",
+    "def": "Summing raw events into a small result table on a schedule (hourly here), instead of computing the answer inside each request."
+   },
+   {
+    "term": "MapReduce",
+    "def": "A batch framework: map transforms each record into key-value pairs, the framework shuffles and sorts them, reduce combines the values per key. Every phase runs in parallel across machines."
+   },
+   {
+    "term": "precomputed ranking",
+    "def": "The ranking is calculated ahead of time and stored in a table; requests only read the finished answer, never the raw events."
+   },
+   {
+    "term": "hourly refresh",
+    "def": "Results are rebuilt every hour, so a ranking can be stale by up to about an hour. That is a product decision, not a technical limit."
+   },
+   {
+    "term": "sales rank table",
+    "def": "The small SQL table the batch job writes: id, category_id, total_sold, product_id. All reads hit this, never the raw log."
+   },
+   {
+    "term": "read-heavy workload",
+    "def": "100:1 read to write here: 40,000 reads/s vs 400 writes/s. The design spends its effort making reads cheap and leaves writes to a batch path."
+   },
+   {
+    "term": "distributed sort",
+    "def": "Ordering data too big for one machine by re-keying records so the framework's shuffle partitions and orders them across the cluster — the two-stage trick."
+   }
+  ],
+  "interview": [
+   {
+    "q": "Design Amazon's sales rank by category.",
+    "a": "Clarify first: past week's most popular products per category, users view them, high availability; the rest of the e-commerce site is out of scope. Constraints: 10M products, 1,000 categories, no subcategories, items can be in multiple categories but cannot change them, 1B transactions/month, 100B reads/month, 100:1 read:write, results refresh hourly. Estimates: ~40 B per transaction → 40 GB/month, 1.44 TB in 3 years; 400 writes/s and 40,000 reads/s average. Design: Sales API writes tab-delimited logs to S3; a two-step MapReduce runs hourly — stage 1 maps to ((category, product), qty) filtered to the week and the reducer sums; stage 2 re-keys to ((category, qty), product) so the framework's shuffle/sort does the distributed sort, with an identity reducer. Output lands in a sales_rank table (id, category_id, total_sold, product_id) indexed on id, category_id and product_id. Read path: client → web server → Read API → the table, exposed as GET /api/v1/popular?category_id=… returning [{id, category_id, total_sold, product_id}]. Scaling: memory cache for popular content at 40k reads/s; replicas then federation/sharding/denormalisation/SQL tuning for misses; a warehouse (Redshift/BigQuery) for analytics; keep only a limited window in the operational DB."
+   },
+   {
+    "q": "Why does the MapReduce pipeline have two stages instead of sorting inside stage 1?",
+    "a": "Stage 1's keys are (category, product), so the framework sorts by product id within a category — not the ranking order. Sorting by quantity inside stage 1 would mean one reducer (or one machine) holding all of a category's rows and a secondary sort on the values, which is exactly the single-machine bottleneck. Re-keying to ((category, qty), product) puts the quantity inside the key, so the framework's existing shuffle/sort — already distributed across reducers — produces the globally sorted ranking for free, and the identity reducer just passes rows through. It turns 'sort a giant dataset' into 'emit a different key'."
+   },
+   {
+    "q": "A viral product is selling fast but does not appear in the rankings. What is happening, and what would you change?",
+    "a": "First check whether the batch job is actually succeeding — check its last-success timestamp before touching the design, because a silent failure plus a warm cache looks exactly like this: fast reads, healthy DB, stale lists. If the job is fine, this is staleness by design: the rankings rebuild hourly and the cache TTL matches, so a new sale can be invisible for up to roughly two rebuild intervals. Options: refresh popular products' categories more often, as the primer suggests; invalidate the cache per category the moment the job commits instead of waiting for the TTL; or add a fast path that merges a small 'recent movers' list computed more frequently. The number to give product is the staleness bound — up to one rebuild interval plus one TTL — and let them decide what to pay for."
+   }
+  ],
+  "quickCheck": [
+   {
+    "kind": "output",
+    "prompt": "A sales log records 1 billion transactions per month. With 2.5 million seconds per month, roughly how many writes per second is that on average?",
+    "options": [
+     "40",
+     "400",
+     "4,000",
+     "40,000"
+    ],
+    "answer": 1,
+    "explanation": "1e9 / 2.5e6 = 400 writes/s on average (higher at peak). The same conversion turns 100 billion reads into 40,000 reads/s."
+   },
+   {
+    "kind": "mcq",
+    "prompt": "Why does stage 2 of the MapReduce re-key (category, product) → ((category, qty), product) instead of sorting in stage 1?",
+    "options": [
+     "To deduplicate product rows",
+     "So the framework's shuffle/sort performs the global sort for free",
+     "To compress the intermediate data",
+     "To let one reducer handle each category"
+    ],
+    "answer": 1,
+    "explanation": "The framework sorts by key; putting the quantity inside the key makes its existing distributed sort produce the ranking, with an identity reducer passing rows through. No custom sorting code anywhere."
+   },
+   {
+    "kind": "bug",
+    "prompt": "The Best Sellers lists stopped updating two days ago. Reads are fast, the cache hit ratio is 99%, and the API and database are healthy — but every list is two days old. What is the root cause?",
+    "options": [
+     "The read replicas are lagging",
+     "The MapReduce job is failing (or its alert is silenced) and the cache keeps serving the last good table",
+     "The sales_rank table lost an index",
+     "The load balancer routes to a stale server"
+    ],
+    "answer": 1,
+    "explanation": "The batch job is the only writer of the sales_rank table. A dead job plus a cache full of old lists looks exactly like this: fast, healthy, stale. Check the job's last-success timestamp first, then rebuild and invalidate."
+   }
+  ],
+  "cheatSheet": [
+   "Shape: 10M products, 1,000 categories, 1B tx/month, 100B reads/month → 400 writes/s, 40,000 reads/s, 100:1 read:write.",
+   "Pipeline: Sales API logs (tab-delimited) → S3 → two-step MapReduce hourly → sales_rank table.",
+   "Stages: 1) map ((category, product), qty) filtered to the past week, reducer sums; 2) re-key to ((category, qty), product) — the framework's shuffle/sort does the global sort.",
+   "Table: id, category_id, total_sold, product_id; indexes on id, category_id, product_id.",
+   "Read path: web server → Read API → memory cache → SQL; GET /api/v1/popular?category_id=…",
+   "Freshness: hourly rebuild is a product decision; staleness ≤ rebuild interval + cache TTL."
+  ],
+  "capstone": {
+   "title": "DevAtlas: leaderboards design doc",
+   "criteria": [
+    "Requirements and out-of-scope list",
+    "Estimates with numbers",
+    "Mermaid diagram",
+    "Failure/rollback section"
+   ]
+  },
+  "codeSamples": 9,
+  "file": "l6-4-6.ts"
+ },
+ {
+  "id": "6.5.1",
+  "title": "Writing design docs, RFCs and ADRs",
+  "minutes": 70,
+  "level": "Advanced",
+  "summary": "Turn a design into a document other people can review and a decision future engineers can trust: the design doc, the RFC, the ADR and the runbook, with a full worked example for DevAtlas bookmarks.",
+  "terms": [
+   {
+    "term": "Design doc",
+    "def": "A written proposal for a non-trivial change: context, goals and non-goals, requirements, options with trade-offs, the chosen design, failure modes and rollout. It is reviewed before code, and it is a proposal, not a specification."
+   },
+   {
+    "term": "RFC",
+    "def": "Request For Comments. A design document published to a wide audience for asynchronous comment, used when a change affects other teams or an open-source community. The name describes the process: circulate, collect objections, revise, decide."
+   },
+   {
+    "term": "ADR",
+    "def": "Architecture Decision Record. A short, numbered, immutable note capturing one significant decision: context, decision, status and consequences. The set of ADRs is the project's decision log."
+   },
+   {
+    "term": "Runbook",
+    "def": "An operational procedure for a specific situation: deploy, roll back, fail over, rotate a credential, restore a backup. It is written to be followed under pressure, not to explain why the system is shaped this way."
+   },
+   {
+    "term": "Decision log",
+    "def": "The ordered collection of ADRs in a repository. Reading it top to bottom reconstructs why the architecture looks the way it does, including decisions later reversed."
+   },
+   {
+    "term": "Context",
+    "def": "The facts and forces around a decision: constraints, traffic, deadlines, team size, existing systems, regulatory rules. In an ADR it is value-neutral; the argument belongs in the decision and consequences."
+   },
+   {
+    "term": "Non-goals",
+    "def": "Things that could reasonably have been goals but are explicitly excluded, such as 'no real-time sync in v1' or 'ACID is not a goal'. They prevent scope creep and make the trade-off honest."
+   },
+   {
+    "term": "Trade-off",
+    "def": "What you give up to get something. A design document is useful only if it names the cost of the chosen option: latency, money, operational burden, migration risk, team cognitive load."
+   },
+   {
+    "term": "Design review",
+    "def": "A timed meeting or comment window with one question: should we accept, revise or reject this proposal? The author presents, a named decision owner decides, and objections are recorded."
+   },
+   {
+    "term": "Superseded",
+    "def": "An ADR status meaning a later ADR replaced this decision. The old record stays in the log, because knowing what was decided and why is still useful; it is never edited into the new decision."
+   },
+   {
+    "term": "3 a.m. reader",
+    "def": "The exhausted on-call engineer who opens your document during an incident. They need the decision, the exact command, the dashboard and the rollback in the first screen, not a history of the project."
+   }
+  ],
+  "interview": [
+   {
+    "q": "How do you decide whether to write a design doc, and what goes in it?",
+    "a": "I write one when the design is ambiguous or contentious, when other teams are affected, or when the choice is expensive to reverse; a local, obvious change belongs in the pull request instead. The doc has a fixed skeleton: context and scope, goals and non-goals, functional and non-functional requirements with labelled numbers, at least two real options with trade-offs, the chosen design with data model, API and cross-cutting concerns, failure modes, rollout and open questions. I keep it to two pages for a feature and link to detail rather than pasting schemas. The review asks one question, accept/revise/reject, with a named decider and a deadline. The document is a proposal, not a specification, so it lives while the choice is open and is archived once the decision is recorded as an ADR."
+   },
+   {
+    "q": "Walk me through an ADR. What is its lifecycle, and what happens when the decision changes?",
+    "a": "An ADR is a short record of one architecturally significant decision: title, status, date, owner, context, the decision in active voice, and consequences including the negative ones. Statuses are proposed, accepted, rejected, deprecated and superseded. It is stored in the repo with a sequential number, and once accepted it is immutable. If the context changes, we do not edit it: we write a new ADR that says it supersedes the old one, mark the old one with the replacement's number, and keep both. The log becomes an append-only history, which is exactly what a new engineer needs: not just the current rule, but the reasoning and the path that led there. I also link the design doc and the runbook from the ADR so the three artifacts stay connected."
+   },
+   {
+    "q": "How do you run a design review that actually reaches a decision?",
+    "a": "Before the meeting: circulate the doc with a named owner, a named decider and a deadline, and ask reviewers to comment in writing first so the discussion is about substance, not who speaks first. In the meeting, the author states the recommendation and the two strongest objections in five minutes; the rest is structured objection handling, with someone recording decisions and dissent. The output must be one of accept, revise with a named owner and date, or reject with a reason. If the doc is missing alternatives, numbers or failure modes, the right outcome is revise, not verbal patching in the room. After the meeting, publish the outcome, write the ADR the same day, and link it from the design doc. The test of a good review is not that everyone agreed, but that a future engineer can read the record and understand what was decided and what was traded away."
+   }
+  ],
+  "quickCheck": [
+   {
+    "kind": "mcq",
+    "prompt": "A team is choosing between two databases and the decision will be hard to reverse. They have already met and agreed. Which artifact should they write now?",
+    "options": [
+     "A runbook",
+     "A design doc that compares the options",
+     "An ADR recording the decision",
+     "A pull request description"
+    ],
+    "answer": 2,
+    "explanation": "The choice is closed, so the right artifact is a short, immutable ADR: context, decision, status and consequences. A design doc would also have been useful before the meeting, but it is not the record of a decision already made."
+   },
+   {
+    "kind": "output",
+    "prompt": "ADR-0007 is accepted. A year later the team moves bookmarks to a separate service. What status should ADR-0007 have, and what happens to its text?",
+    "options": [
+     "Deleted; the new ADR replaces it",
+     "Edited to describe the new service",
+     "Marked superseded by the new ADR; its text stays unchanged",
+     "Marked rejected; the old decision was wrong"
+    ],
+    "answer": 2,
+    "explanation": "Accepted ADRs are immutable. The new ADR supersedes it, and the old file remains with a pointer to its replacement, so the decision history is preserved."
+   },
+   {
+    "kind": "bug",
+    "prompt": "A design review finds a five-page document with a detailed chosen design, no alternatives section, no numbers and no named owner. What is the most useful review outcome?",
+    "options": [
+     "Accept, because the design is detailed",
+     "Revise: add real alternatives, labelled numbers and an owner before deciding",
+     "Reject the feature permanently",
+     "Ask the author to add more code-level detail"
+    ],
+    "answer": 1,
+    "explanation": "Detail is not the missing ingredient. Without alternatives, numbers and an owner there is nothing to decide and nobody empowered to decide it, so the document goes back for revision rather than being argued line by line."
+   }
+  ],
+  "cheatSheet": [
+   "Design doc = choice still open. RFC = design doc with a wide audience and a comment deadline. ADR = decision made. Runbook = how to operate it.",
+   "Design doc skeleton: context, goals/non-goals, requirements, options, chosen design, data model/API, failure modes, rollout, open questions.",
+   "Every number is measured, derived or assumed. Say which; never present an assumption as analytics.",
+   "Options: at least two real ones plus do-nothing, compared on build cost, operating cost, failure behaviour and fit with the goals.",
+   "ADR parts: title, status, date, owner, context, decision, consequences. One page, one decision, immutable after acceptance.",
+   "ADR lifecycle: proposed -> accepted | rejected; accepted -> superseded | deprecated. A new ADR supersedes the old one; never edit history.",
+   "A decision log is append-only. Read it top to bottom to reconstruct why the architecture looks like this.",
+   "Design review: written comments first, named decider, deadline, output is accept / revise / reject, dissent recorded.",
+   "Write for the 3 a.m. reader: symptom, check, command, expected output, rollback, escalation, last tested date.",
+   "Common failures: solution-first, strawman alternatives, no numbers, no owner, no non-goals, implementation manual, edited ADR."
+  ],
+  "capstone": {
+   "title": "DevAtlas: design doc and ADR set",
+   "criteria": [
+    "Design doc with context, goals/non-goals, labelled numbers, options, failure modes and rollout",
+    "ADR with status, date, owner, context, decision and consequences",
+    "ADR index with at least three entries and correct statuses",
+    "Cross-links between design doc, ADR and runbook"
+   ]
+  },
+  "codeSamples": 9,
+  "file": "l6-5-1.ts"
  },
  {
   "id": "7.1.1",

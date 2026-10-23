@@ -4,7 +4,7 @@ import { Home } from "./pages/Home";
 import { LessonPage } from "./pages/LessonPage";
 import { News } from "./pages/News";
 import { Onboarding } from "./pages/Onboarding";
-import { Cheatsheets, Debug, Glossary, Help, Interview, Progress, Project, Quiz, Revise, Roadmap, Settings } from "./pages/Pages";
+import { Cheatsheets, Debug, Glossary, Help, Interview, ModulePage, Progress, Project, Quiz, Revise, Roadmap, Settings } from "./pages/Pages";
 import { match, query, useRoute } from "./lib/router";
 
 // The Resources page carries hundreds of links, so it is its own chunk.
@@ -17,7 +17,9 @@ export function App() {
 
   let page;
   const lesson = match(route, "/lesson/:id");
+  const moduleMatch = match(route, "/module/:id");
   if (lesson) page = <LessonPage id={lesson.id} section={q.get("s")} />;
+  else if (moduleMatch) page = <ModulePage id={moduleMatch.id} />;
   else if (path === "/start") page = <Onboarding />;
   else if (path === "/roadmap") page = <Roadmap />;
   else if (path === "/revise") page = <Revise />;
