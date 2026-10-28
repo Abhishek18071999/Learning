@@ -1,0 +1,83 @@
+$kind: http-request
+name: Search
+method: POST
+url: '{{baseUrl}}/Air/Search'
+order: 2000
+headers:
+  - key: Content-Type
+    value: application/json
+  - key: Token
+    value: 'Bearer {{token}}'
+  - key: X-Correlation-ID
+    value: '{{$guid}}'
+body:
+  type: json
+  content: |-
+    {
+      "departureDateTime": "{{departureDate}}",
+      "returnDateTime": "{{returnDate}}",
+      "origin": "{{origin}}",
+      "destination": "{{destination}}",
+      "AirTravelType": "OneWay",
+      "adultCount": {{adultCount}},
+      "childCount": {{childCount}},
+      "infantCount": {{infantCount}},
+      "cabinClass": "{{cabinClass}}",
+      "isMultiDestination": false
+    }
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      let body = {};
+      try { body = pm.response.json(); } catch (e) {}
+
+      pm.test('search HTTP 200', () => pm.response.to.have.status(200));
+      pm.test('search envelope status is 200', () => pm.expect(body.statusCode).to.eql(200));
+
+      const results = Array.isArray(body.result) ? body.result : [];
+      pm.test('search returns at least one itinerary', () => pm.expect(results).to.have.length.greaterThan(0));
+
+      const chosen = results.find(r => r.searchIdentifier && r.flightOptionId != null);
+      pm.test('itineraries carry searchIdentifier and flightOptionId', () => pm.expect(chosen).to.be.an('object'));
+      if (chosen) {
+        pm.collectionVariables.set('searchIdentifier', chosen.searchIdentifier);
+        pm.collectionVariables.set('flightOptionId', String(chosen.flightOptionId));
+        pm.collectionVariables.set('searchedFareTotal', String(chosen.totalFare ?? ''));
+      }
+
+      const priced = results.filter(r => r.totalFare != null && Array.isArray(r.airCalculatedFlightFares) && r.airCalculatedFlightFares.length);
+      const tol = Number(pm.environment.get('moneyTolerance') || 5);
+      const totalMismatch = [];
+      const baseMismatch = [];
+      const roundingDeltas = [];
+      for (const r of priced) {
+        const fare = r.airCalculatedFlightFares[0];
+        const total = Number(r.totalFare);
+        const base = Number(fare.totalBaseFare);
+        const tax = Number(fare.totalTax);
+        const perPaxBase =
+          Number(fare.singleAdtBaseFare || 0) * Number(fare.adtCount || 0) +
+          Number(fare.singleChdBaseFare || 0) * Number(fare.chdCount || 0) +
+          Number(fare.singleInfBaseFare || 0) * Number(fare.infCount || 0);
+        if (Math.abs(total - (base + tax)) > 0.001) {
+          roundingDeltas.push({ flightOptionId: r.flightOptionId, delta: total - (base + tax) });
+        }
+        if (Math.abs(total - (base + tax)) > tol) {
+          totalMismatch.push({ flightOptionId: r.flightOptionId, total, basePlusTax: base + tax, delta: total - (base + tax) });
+        }
+        if (Math.abs(base - perPaxBase) > tol) {
+          baseMismatch.push({ flightOptionId: r.flightOptionId, totalBaseFare: base, perPaxBase, delta: base - perPaxBase });
+        }
+      }
+
+      if (roundingDeltas.length) {
+        console.log(`Search money rounding: ${roundingDeltas.length}/${priced.length} fares differ by up to ${Math.max(...roundingDeltas.map(d => Math.abs(d.delta)))} (tolerance ${tol})`);
+      }
+
+      pm.test(`all ${priced.length} fares: totalFare reconciles with totalBaseFare + totalTax (tolerance ${tol})`, () => {
+        pm.expect(totalMismatch, JSON.stringify(totalMismatch.slice(0, 5))).to.have.length(0);
+      });
+      pm.test(`all ${priced.length} fares: totalBaseFare reconciles with per-passenger base sum (tolerance ${tol})`, () => {
+        pm.expect(baseMismatch, JSON.stringify(baseMismatch.slice(0, 5))).to.have.length(0);
+      });

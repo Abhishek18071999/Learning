@@ -1,0 +1,27 @@
+$kind: http-request
+name: Cancel
+method: GET
+url: '{{baseUrl}}/Air/Cancel/{{bookingId}}'
+order: 8000
+headers:
+  - key: Token
+    value: 'Bearer {{token}}'
+  - key: X-Correlation-ID
+    value: '{{$guid}}'
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      let body = {};
+      try { body = pm.response.json(); } catch (e) {}
+
+      pm.test('cancel HTTP 200', () => pm.response.to.have.status(200));
+      pm.test('cancel envelope status is 200', () => pm.expect(body.statusCode).to.eql(200));
+
+      const result = body.result || {};
+      pm.test('cancel returns a result', () => pm.expect(result).to.be.an('object'));
+
+      const refund = result.refundAmount ?? result.cancelRefundAmount ?? result.refund;
+      if (refund != null) {
+        pm.test('cancel refund is not negative', () => pm.expect(Number(refund)).to.be.at.least(0));
+      }

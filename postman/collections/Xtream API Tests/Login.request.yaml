@@ -1,0 +1,41 @@
+$kind: http-request
+name: Login
+method: POST
+url: '{{baseUrl}}/api/Auth/login'
+order: 1000
+headers:
+  - key: Content-Type
+    value: application/json
+body:
+  type: json
+  content: |-
+    {
+      "username": "{{username}}",
+      "password": "{{password}}"
+    }
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      let body = {};
+      try { body = pm.response.json(); } catch (e) {}
+
+      pm.test('login HTTP 200', () => pm.response.to.have.status(200));
+      pm.test('login envelope status is 200', () => {
+        pm.expect(body.statusCode, JSON.stringify(body).slice(0, 300)).to.eql(200);
+      });
+
+      const rawToken = body.result?.token || body.result?.accessToken || body.token;
+      pm.test('login returns a token', () => {
+        pm.expect(rawToken, 'No token in result.token/accessToken/token').to.be.a('string').and.not.empty;
+      });
+
+      ['searchIdentifier', 'flightOptionId', 'brandId', 'validatedFareTotal', 'validatedCurrency',
+       'bookingId', 'bookedAmount', 'seatAmount', 'refundedSeatAmount', 'ticketNumber']
+        .forEach(key => pm.collectionVariables.set(key, ''));
+
+      if (rawToken) {
+        const token = String(rawToken).replace(/^Bearer\s+/i, '');
+        pm.environment.set('token', token);
+        pm.collectionVariables.set('token', token);
+      }

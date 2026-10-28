@@ -9739,6 +9739,448 @@ export const lessonMeta: LessonMeta[] = [
   "file": "l7-3-2.ts"
  },
  {
+  "id": "7.4.1",
+  "title": "Agentic patterns: ReAct, plan-and-execute and multi-agent orchestration",
+  "minutes": 90,
+  "level": "Advanced",
+  "summary": "Move from a single 'agent = loop' to the concrete patterns production teams actually use: ReAct (reason, act, observe), plan-and-execute (plan once, replan on failure), reflection and evaluator-optimizer (generate, critique, revise), and multi-agent orchestration where sub-agents work in clean contexts and return condensed results.",
+  "terms": [
+   {
+    "term": "ReAct",
+    "def": "An agent loop that interleaves reasoning and acting: the model states a thought, chooses a tool call, and observes the result before the next thought."
+   },
+   {
+    "term": "Plan-and-execute",
+    "def": "The model first writes a plan of steps, then each step runs (usually in code); on failure the plan is revised rather than re-asked from scratch."
+   },
+   {
+    "term": "Reflection",
+    "def": "A generate → critique → revise loop where the model reviews its own output and improves it before returning."
+   },
+   {
+    "term": "Evaluator-optimizer",
+    "def": "A loop that scores each generation against a bar and keeps revising until it passes or a budget runs out."
+   },
+   {
+    "term": "Sub-agent",
+    "def": "A separate model invocation with its own small, clean context, used for one focused task and returning a condensed result."
+   },
+   {
+    "term": "Orchestrator",
+    "def": "The top-level agent (or code) that plans, dispatches to sub-agents and synthesises their condensed results."
+   },
+   {
+    "term": "Step budget",
+    "def": "A hard cap on the number of model or tool calls an agent may make, to bound cost and runaway loops."
+   }
+  ],
+  "interview": [
+   {
+    "q": "What is the difference between ReAct and plan-and-execute, and when would you choose each?",
+    "a": "ReAct interleaves reasoning and acting, re-deciding after every tool result; it fits short, interactive tasks where each step depends on what the last revealed. Plan-and-execute makes one plan, runs steps in code, and re-plans only on failure, so it is cheaper and more deterministic and fits tasks with a clear sequence such as a code migration."
+   },
+   {
+    "q": "Why would you split one agent into multiple sub-agents?",
+    "a": "To keep contexts clean. A single long context accumulates raw tool output and suffers context rot; sub-agents each do one focused deep task in their own window and return a condensed summary, so the orchestrator reasons over a small, high-signal set of results. It also parallelises naturally."
+   },
+   {
+    "q": "How do you stop an agent from looping forever?",
+    "a": "Budgets: a maximum number of steps (tool calls), a token budget, and a wall-clock timeout. When a cap is hit, return a partial result with a note rather than crashing. A trace of every step lets you see whether the loop is converging or repeating."
+   }
+  ],
+  "quickCheck": [
+   {
+    "kind": "mcq",
+    "prompt": "A one-off migration needs to rename an API across 40 files, run tests, and fix any breakage. Which pattern fits best?",
+    "options": [
+     "ReAct",
+     "Plan-and-execute",
+     "A single prompt with no tools",
+     "Multi-agent only"
+    ],
+    "answer": 1,
+    "explanation": "The sequence is known; plan once, run in code, and re-plan only the failures. ReAct would re-decide after every file."
+   },
+   {
+    "kind": "output",
+    "prompt": "What does this loop print?",
+    "code": {
+     "lang": "python",
+     "code": "calls = 0\n\ndef step():\n    global calls\n    calls += 1\n    return \"done\" if calls < 3 else \"stop\"\n\nout = []\nfor _ in range(10):\n    r = step()\n    out.append(r)\n    if r == \"stop\":\n        break\nprint(out)"
+    },
+    "options": [
+     "['done', 'done', 'stop']",
+     "['done', 'done']",
+     "['stop']",
+     "['done', 'done', 'stop', 'stop']"
+    ],
+    "answer": 0,
+    "explanation": "calls becomes 1, 2, then 3; the third step returns 'stop' and the loop breaks, printing three entries."
+   },
+   {
+    "kind": "bug",
+    "prompt": "A plan-and-execute agent re-runs the entire plan every time one step fails. What is the flaw?",
+    "options": [
+     "Steps already completed are repeated, wasting work and possibly double-applying side effects",
+     "Plans should never change",
+     "Executors must be written in Rust",
+     "There is no flaw"
+    ],
+    "answer": 0,
+    "explanation": "Re-running completed steps wastes resources and can double-apply effects (e.g. charging twice). Re-plan only the failed remainder and record what succeeded."
+   }
+  ],
+  "cheatSheet": [
+   "Workflow when steps are known; agent only when steps must be discovered (7.3.1).",
+   "ReAct = reason → act → observe, re-deciding each turn; most expensive, most flexible.",
+   "Plan-and-execute = plan once, run in code, re-plan only on failure.",
+   "Reflection = generate → critique → revise; evaluator-optimizer adds a score bar.",
+   "Multi-agent = sub-agents with clean contexts returning condensed summaries to an orchestrator.",
+   "Always wrap every loop in a step budget, a token budget and a wall-clock timeout.",
+   "Trace every step (thought, tool, args, result, duration) for audit and debugging.",
+   "Return partial results gracefully when a budget is hit.",
+   "Choose the cheapest loop that meets the quality bar."
+  ],
+  "capstone": {
+   "title": "DevAtlas: a bounded study-assistant orchestrator",
+   "criteria": [
+    "Step and tool-call budgets are enforced",
+    "Budget exhaustion raises a clear error with a message",
+    "Trace records tool, arguments and result for every call",
+    "Runs offline with stub tools"
+   ]
+  },
+  "codeSamples": 7,
+  "file": "l7-4-1.ts"
+ },
+ {
+  "id": "7.4.2",
+  "title": "Context engineering: long context, prompt caching and attention budgets",
+  "minutes": 80,
+  "level": "Advanced",
+  "summary": "Treat the context window as a finite resource: measure what you put into it, budget the tokens that matter, cut cost and latency with prompt caching, and keep long-horizon agents coherent with compaction and note-taking.",
+  "terms": [
+   {
+    "term": "Context window",
+    "def": "The maximum number of tokens a model can consider at once, covering input, tools, history and output."
+   },
+   {
+    "term": "Context engineering",
+    "def": "Curating the smallest set of high-signal tokens that maximises the chance of the desired output, each turn."
+   },
+   {
+    "term": "Attention budget / context rot",
+    "def": "The observation that a model's recall of details degrades as context grows, so every extra token has a cost in focus, not just money."
+   },
+   {
+    "term": "Prompt caching",
+    "def": "Storing a stable prompt prefix on the provider side so later requests reuse it instead of reprocessing it."
+   },
+   {
+    "term": "Cache breakpoint",
+    "def": "The marker that says where the reusable prefix ends; everything before it can be cached, everything after is fresh."
+   },
+   {
+    "term": "Compaction",
+    "def": "Summarising a near-full context window and continuing in a fresh window from the summary."
+   },
+   {
+    "term": "Note-taking (agentic memory)",
+    "def": "An agent writing durable notes outside the context window and reading them back later, so state survives context resets."
+   }
+  ],
+  "interview": [
+   {
+    "q": "What is context engineering and how does it differ from prompt engineering?",
+    "a": "Prompt engineering is about how instructions are worded. Context engineering is about which tokens are present in the window at all — system prompt, tools, examples, retrieved text and history — and curating the smallest high-signal set each turn. As agents loop over many turns, deciding what to include and prune becomes more important than phrasing."
+   },
+   {
+    "q": "How does prompt caching work and why does breakpoint placement matter?",
+    "a": "The provider caches the prompt prefix up to a breakpoint (in the order tools, system, messages) and reuses it on later matching requests, charging much less for reads than writes. The breakpoint must sit at the end of the stable prefix; if it lands on content that changes every request, the hash never matches and you get no hits."
+   },
+   {
+    "q": "Why is a larger context window not a substitute for good retrieval?",
+    "a": "Attention degrades as context grows (context rot; models use the middle of a long context poorly), and long context costs more and adds latency. Retrieval keeps the window focused on high-signal text, which beats 'stuff everything' for most large corpora."
+   }
+  ],
+  "quickCheck": [
+   {
+    "kind": "mcq",
+    "prompt": "Where should you place the cache breakpoint in a request with a long stable system prompt, tool definitions, and a per-request user message?",
+    "options": [
+     "On the user message",
+     "At the end of the tool definitions / system prompt",
+     "On the assistant's previous reply",
+     "Nowhere — caching is automatic"
+    ],
+    "answer": 1,
+    "explanation": "Everything before the breakpoint is cached, so it must end at the last stable block. Marking the changing user message means the prefix hash never matches."
+   },
+   {
+    "kind": "output",
+    "prompt": "What does this token-budget check print?",
+    "code": {
+     "lang": "python",
+     "code": "def guard(tokens, limit):\n    if tokens > limit:\n        return f\"rejected: {tokens} > {limit}\"\n    return f\"ok: {tokens} <= {limit}\"\n\nfor t in (400, 512, 513):\n    print(guard(t, 512))"
+    },
+    "options": [
+     "ok, ok, ok",
+     "ok, ok, rejected: 513 > 512",
+     "rejected three times",
+     "ok, rejected, ok"
+    ],
+    "answer": 1,
+    "explanation": "400 and 512 pass; 513 exceeds the limit and is rejected."
+   },
+   {
+    "kind": "bug",
+    "prompt": "An agent keeps re-sending the entire conversation plus every tool result on each turn. What is the underlying problem?",
+    "options": [
+     "No cache breakpoint is set",
+     "Context grows without pruning, causing context rot and runaway cost",
+     "The tokenizer is wrong",
+     "There is no problem"
+    ],
+    "answer": 1,
+    "explanation": "Unbounded history and raw tool output fill the window and hurt recall; compact old turns, trim tool results, and persist only what matters."
+   }
+  ],
+  "cheatSheet": [
+   "The window is a budget: system + tools + examples + retrieved + history + output.",
+   "Context rot: recall degrades as context grows, so curate, don't dump.",
+   "Count tokens with the tokenizer matching your model.",
+   "Prompt caching: cache the stable prefix; breakpoint at its end.",
+   "Cache ratios: 5-minute write ~1.25×, 1-hour write ~2×, read ~0.1× of input.",
+   "Put tools → system → messages in that order; keep tools minimal and non-overlapping.",
+   "Long tasks: compact, take notes, or spawn sub-agents — don't grow the window forever.",
+   "Retrieve just in time instead of stuffing everything up front.",
+   "Gate prompts before the model: reject over-budget requests in code."
+  ],
+  "capstone": {
+   "title": "DevAtlas: context budget guard",
+   "criteria": [
+    "Tokenizes with the correct encoding",
+    "Rejects over-limit prompts with the token count in the error",
+    "Accepts under-limit prompts"
+   ]
+  },
+  "codeSamples": 7,
+  "file": "l7-4-2.ts"
+ },
+ {
+  "id": "7.4.3",
+  "title": "Evaluating LLM systems: golden datasets and LLM-as-judge",
+  "minutes": 80,
+  "level": "Advanced",
+  "summary": "Replace 'it looks better now' with evidence: build a golden dataset of inputs and expected outputs, score every change against it with rule assertions plus an LLM judge, and gate shipping on the measured result.",
+  "terms": [
+   {
+    "term": "Golden dataset",
+    "def": "A fixed set of inputs with expected outputs or human labels, drawn from real traffic or synthesized to cover your failure modes."
+   },
+   {
+    "term": "LLM-as-judge",
+    "def": "Using a strong model to score or critique another system's output, aligned against human labels."
+   },
+   {
+    "term": "Rule assertion",
+    "def": "A fast, deterministic check (contains a required term, no forbidden term, valid JSON) run on every change — the 'unit test' layer."
+   },
+   {
+    "term": "Precision / recall",
+    "def": "Precision = of the outputs you flagged bad, how many really were; recall = of the truly bad outputs, how many you flagged."
+   },
+   {
+    "term": "Regression gate",
+    "def": "A check that blocks a change when the eval score drops below a threshold versus the current version."
+   },
+   {
+    "term": "Level 1 / 2 / 3 evals",
+    "def": "Rule assertions on every change (1), model/human eval on a cadence (2), and A/B tests for mature products (3)."
+   }
+  ],
+  "interview": [
+   {
+    "q": "What is a golden dataset and why is it better than hand-picked examples?",
+    "a": "A golden dataset is a fixed set of inputs with expected outputs or human labels, drawn from real traffic and synthetic cases covering failure modes. It gives a repeatable, comparable score across changes, whereas hand-picked examples overfit and let you convince yourself of anything."
+   },
+   {
+    "q": "How do you know your LLM judge is trustworthy?",
+    "a": "Validate it like a classifier against human labels: measure precision and recall per class, not raw agreement. Use the strongest judge you can afford, and keep a small labelled set to re-check judge-human alignment as the judge prompt or model changes."
+   },
+   {
+    "q": "How do you structure evals for a RAG app?",
+    "a": "Evaluate retrieval and generation separately. Retrieval uses classic IR metrics (precision, recall, MRR, NDCG) on the retrieved chunks; generation uses faithfulness and answer relevance (rules or a judge). End-to-end scores are useful as a summary but hide which stage regressed."
+   }
+  ],
+  "quickCheck": [
+   {
+    "kind": "mcq",
+    "prompt": "You tweak the system prompt and it looks better on three examples you picked yourself. What should decide whether to ship?",
+    "options": [
+     "Ship it — three examples is enough",
+     "Run a fixed, scored golden dataset before and after and compare",
+     "Ask the model whether it is better",
+     "Raise the temperature"
+    ],
+    "answer": 1,
+    "explanation": "Hand-picked examples overfit; a fixed scored dataset gives a repeatable before/after number."
+   },
+   {
+    "kind": "output",
+    "prompt": "A judge flags 4 outputs bad, of which 3 were truly bad. There were 6 truly bad outputs total. What are precision and recall?",
+    "options": [
+     "precision 0.75, recall 0.50",
+     "precision 0.50, recall 0.75",
+     "precision 1.00, recall 0.50",
+     "precision 0.75, recall 0.75"
+    ],
+    "answer": 0,
+    "explanation": "Precision = 3/4 = 0.75 of the flagged-bad that were bad. Recall = 3/6 = 0.50 of the truly-bad that were caught."
+   },
+   {
+    "kind": "bug",
+    "prompt": "A judge returns 'good' for every output. On a dataset that is 90% good, why does 90% 'agreement' hide a real problem?",
+    "options": [
+     "It has zero recall on the bad cases, which are the ones that matter",
+     "Agreement and precision are the same thing",
+     "Bad outputs do not exist",
+     "There is no problem"
+    ],
+    "answer": 0,
+    "explanation": "Raw agreement is inflated by the majority class. The judge never catches a bad output, so recall on failures is zero — the exact failures evals exist to find."
+   }
+  ],
+  "cheatSheet": [
+   "Layer evals: rules every change (L1), model/human on a cadence (L2), A/B when mature (L3).",
+   "Golden dataset = fixed inputs + expected outputs/labels, grown from real failures.",
+   "Rules first: contains/forbidden/valid-JSON assertions are free and run on every change.",
+   "LLM-as-judge = a strong model scores outputs; align it against human labels.",
+   "Measure precision and recall per class, not raw agreement.",
+   "Evaluate retrieval and generation separately.",
+   "Gate shipping on before/after scores with a pre-set tolerance.",
+   "Reuse the eval corpus for fine-tuning and debugging.",
+   "Add a case for every failure you fix."
+  ],
+  "capstone": {
+   "title": "DevAtlas: a minimal eval suite",
+   "criteria": [
+    "Rubric of at least three rule assertions",
+    "Scored cases produce a normalised 0–1 score",
+    "Gate blocks a drop beyond tolerance",
+    "Runs offline"
+   ]
+  },
+  "codeSamples": 7,
+  "file": "l7-4-3.ts"
+ },
+ {
+  "id": "7.4.4",
+  "title": "Model selection, routing and fine-tuning vs RAG",
+  "minutes": 70,
+  "level": "Advanced",
+  "summary": "Stop paying one big model for every request: route simple work to small, cheap models and escalate only hard or failed requests, and choose deliberately among prompt engineering, RAG and fine-tuning for each job.",
+  "terms": [
+   {
+    "term": "Model routing",
+    "def": "Sending each request to a different model based on its complexity, so cheap work never pays expensive-model prices."
+   },
+   {
+    "term": "Cascade / escalation",
+    "def": "Trying a small, fast model first and retrying a stronger one only when it fails or is uncertain."
+   },
+   {
+    "term": "Fine-tuning",
+    "def": "Continuing training a base model on task-specific examples to change its behaviour, style or format (not to add facts)."
+   },
+   {
+    "term": "RAG",
+    "def": "Adding external knowledge at query time so the model answers from retrieved, citable text without retraining."
+   },
+   {
+    "term": "Distillation",
+    "def": "Training a smaller model to imitate a larger one, keeping most of the quality at a fraction of the cost."
+   },
+   {
+    "term": "Cost-latency-quality triangle",
+    "def": "The three numbers you must measure together — routing and technique choices move all three, never one in isolation."
+   }
+  ],
+  "interview": [
+   {
+    "q": "How do you decide between prompt engineering, RAG and fine-tuning?",
+    "a": "Ask three questions. Does the knowledge change over time? If yes, use RAG — fine-tuning memorises a stale snapshot. Is the target a stable behaviour (style, format, syntax) rather than facts? If yes, fine-tuning may help once you have hundreds of labelled examples. Otherwise, prompt engineering with a few good examples is the cheapest thing that works."
+   },
+   {
+    "q": "What is model routing and when is it worth the complexity?",
+    "a": "Routing sends each request to a tier of model by complexity: a tiny classifier or rules pick small/medium/large. It is worth it when traffic is heterogeneous — mostly simple requests with a hard tail — because the small model is often ~20× cheaper and much faster. Keep the large model as a fallback and validate quality with evals."
+   },
+   {
+    "q": "What is distillation and why is it useful?",
+    "a": "Distillation trains a smaller 'student' model on the outputs of a larger 'teacher', transferring much of its quality at a fraction of the cost and latency. It is useful for on-device or very high-volume endpoints where the frontier model's price or latency is not viable."
+   }
+  ],
+  "quickCheck": [
+   {
+    "kind": "mcq",
+    "prompt": "A feature must answer questions about this week's changing news, with sources. Which technique fits?",
+    "options": [
+     "Fine-tuning on last week's news",
+     "RAG",
+     "Only a system prompt",
+     "Distillation"
+    ],
+    "answer": 1,
+    "explanation": "The knowledge changes weekly, so fetch it at query time with RAG. Fine-tuning would memorise a stale snapshot."
+   },
+   {
+    "kind": "mcq",
+    "prompt": "A high-volume feature classifies support tickets into five fixed labels. You have 30 labelled examples. What is the pragmatic first step?",
+    "options": [
+     "Fine-tune immediately",
+     "Few-shot prompt a small, cheap model; collect examples, fine-tune later if needed",
+     "Use the largest model for everything",
+     "Skip the model, hand-write rules for every ticket"
+    ],
+    "answer": 1,
+    "explanation": "Start cheap with a few-shot small model; fine-tune only once you have enough labelled examples (roughly 100+)."
+   },
+   {
+    "kind": "bug",
+    "prompt": "A cascade routes most traffic to the small model but retries the big model whenever it is 'not sure'. Total latency rose above always-big. What went wrong?",
+    "options": [
+     "The small model is too expensive",
+     "Too many fallbacks: every uncertain request pays for two calls, so the cascade is slower than a single big call",
+     "Fine-tuning would fix latency",
+     "Nothing is wrong"
+    ],
+    "answer": 1,
+    "explanation": "A cascade is only faster when the cheap tier answers most requests. If the fallback fires constantly, you pay for both calls — measure latency per tier, not just cost."
+   }
+  ],
+  "cheatSheet": [
+   "Route by complexity: small models for the easy majority, big for the hard tail.",
+   "Cascade: try small first, escalate on failure or low confidence.",
+   "Prompt = instructions (cheap); RAG = fresh/private facts; fine-tune = stable behaviour.",
+   "Fine-tuning does not memorise changing facts — use RAG for those.",
+   "Fine-tune only past ~100+ labelled examples; start with few-shot prompting.",
+   "Distillation shrinks a big model's quality into a small, cheap one.",
+   "Measure cost, latency and quality together; gate routing on the eval suite.",
+   "Keep the routing policy in code, reviewable and testable."
+  ],
+  "capstone": {
+   "title": "DevAtlas: model router with fallback",
+   "criteria": [
+    "Classifier picks a tier per request",
+    "Failure triggers an escalation to the large model",
+    "Running cost and latency are accumulated",
+    "Runs offline"
+   ]
+  },
+  "codeSamples": 8,
+  "file": "l7-4-4.ts"
+ },
+ {
   "id": "8.1.1",
   "title": "VMs, functions and containers on AWS and Azure",
   "minutes": 80,
@@ -11190,6 +11632,1000 @@ export const lessonMeta: LessonMeta[] = [
   },
   "codeSamples": 9,
   "file": "l9-6-1.ts"
+ },
+ {
+  "id": "9.7.1",
+  "title": "OSI, TCP/IP, DNS and TLS: the network one layer at a time",
+  "minutes": 80,
+  "level": "Intermediate",
+  "summary": "Stop guessing which layer is broken. Learn the OSI stack as a debugging map, the TCP and TLS handshakes that every request performs, how DNS turns a name into an address, and how to read CIDR ranges so you can plan and divide networks.",
+  "terms": [
+   {
+    "term": "OSI model",
+    "def": "Seven layers (physical → application) used to reason about where a networking problem lives: is it a wire, a packet, a port or an app issue?"
+   },
+   {
+    "term": "TCP",
+    "def": "Reliable, ordered, connection-oriented transport. Opens with a three-way handshake (SYN, SYN-ACK, ACK) and acknowledges every byte."
+   },
+   {
+    "term": "UDP",
+    "def": "Fast, connectionless transport with no handshake or retries — used by DNS and real-time traffic where a lost packet beats a delayed one."
+   },
+   {
+    "term": "DNS",
+    "def": "The directory that resolves a hostname to an IP address, cached at several layers so a bad record can linger after the change."
+   },
+   {
+    "term": "TLS",
+    "def": "The protocol that encrypts and authenticates a TCP connection; TLS 1.3 completes in one round trip before any application data."
+   },
+   {
+    "term": "CIDR",
+    "def": "Compact IP-range notation such as 10.0.0.0/24, where the /N counts the fixed (network) bits."
+   },
+   {
+    "term": "Subnet",
+    "def": "A subdivision of a larger network — a VPC split into public and private blocks across availability zones."
+   },
+   {
+    "term": "Handshake",
+    "def": "The opening exchange that sets up a session before data flows (TCP's three-way, TLS's ClientHello/ServerHello)."
+   }
+  ],
+  "interview": [
+   {
+    "q": "Walk me through what happens, layer by layer, when a browser loads an HTTPS page.",
+    "a": "Layer 7: the app builds an HTTP GET. Layer 6: TLS wraps it — first a handshake (ClientHello → ServerHello + certificate → Finished). Layer 5/4: TCP opens with SYN → SYN-ACK → ACK, then sends the bytes in acknowledged segments to port 443. Layer 3: IP packets route to the server address. Layer 2/1: frames and bits on the wire. The server unwraps in reverse and returns the response."
+   },
+   {
+    "q": "Why does DNS sometimes return a stale address after you change a record?",
+    "a": "DNS is cached at multiple layers with a TTL: the client OS, the resolver, and downstream resolvers. Until the old record's TTL expires, caches keep returning the old address. That is why you lower the TTL well before a migration."
+   },
+   {
+    "q": "What is the difference between TCP and UDP, and where would you use each in a backend?",
+    "a": "TCP is reliable and ordered with a handshake and acknowledgements — used for HTTP, databases, gRPC, anything that must not lose data. UDP is connectionless with no guarantees — used for DNS and real-time streaming where a retransmitted packet arrives too late to matter."
+   }
+  ],
+  "quickCheck": [
+   {
+    "kind": "mcq",
+    "prompt": "A service cannot connect and the SYN never gets a SYN-ACK back. Which layer should you investigate first?",
+    "options": [
+     "Application (7)",
+     "Transport / firewall (3–4)",
+     "The JSON payload format",
+     "The database schema"
+    ],
+    "answer": 1,
+    "explanation": "A missing SYN-ACK points at the network/firewall/transport layer — the packet is not reaching a listening service."
+   },
+   {
+    "kind": "output",
+    "prompt": "How many usable host addresses are in a /28?",
+    "options": [
+     "14",
+     "16",
+     "28",
+     "256"
+    ],
+    "answer": 0,
+    "explanation": "2^(32-28) = 16 total, minus the network and broadcast addresses = 14 usable."
+   },
+   {
+    "kind": "bug",
+    "prompt": "You changed an A record and most users see the new IP instantly, but one office still gets the old one. What is the most likely cause?",
+    "options": [
+     "The office's resolver cache still holds the old record until its TTL expires",
+     "TLS is broken",
+     "The server is down",
+     "UDP does not retry"
+    ],
+    "answer": 0,
+    "explanation": "DNS is cached per resolver with a TTL; that office's cache has not expired yet, so it still returns the old address."
+   }
+  ],
+  "cheatSheet": [
+   "OSI = a debugging map: name the layer before you act.",
+   "TCP handshake: SYN → SYN-ACK → ACK; then every byte is acknowledged.",
+   "TLS 1.3 handshake is one round trip; it adds encryption + authentication.",
+   "UDP: no handshake, no retries — DNS and real-time traffic.",
+   "DNS is cached with a TTL; lower the TTL before a migration.",
+   "CIDR: /N counts network bits; hosts = 2^(32-N) minus 2.",
+   "Reuse connections (pooling, keep-alive) so the handshake is paid once.",
+   "Walk bottom-up: wire → link → IP → port → TLS → app."
+  ],
+  "capstone": {
+   "title": "DevAtlas: symptom-to-command cheat sheet",
+   "criteria": [
+    "Five symptoms with a real, runnable command each",
+    "Each command maps to a specific OSI layer",
+    "Windows-friendly commands (PowerShell / cmd)"
+   ]
+  },
+  "codeSamples": 7,
+  "file": "l9-7-1.ts"
+ },
+ {
+  "id": "9.7.2",
+  "title": "Subnets, CIDR and IP addressing",
+  "minutes": 70,
+  "level": "Intermediate",
+  "summary": "Plan networks without bit-flipping in your head: read a CIDR prefix, compute the netmask and host count, split a range into subnets, and merge them back — the exact arithmetic behind every VPC, subnet and route table.",
+  "terms": [
+   {
+    "term": "CIDR",
+    "def": "Classless Inter-Domain Routing — compact range notation like 10.0.0.0/24, where /N counts the fixed network bits."
+   },
+   {
+    "term": "Subnet",
+    "def": "A subdivision of a larger network, created by borrowing host bits for the network part."
+   },
+   {
+    "term": "Netmask",
+    "def": "A 32-bit value with N ones then zeros, used to AND against an IP to find the network address."
+   },
+   {
+    "term": "Supernet",
+    "def": "The inverse of subnetting — aggregating several adjacent subnets into one larger range."
+   },
+   {
+    "term": "Network / broadcast",
+    "def": "The first address (all host bits 0) and last address (all host bits 1) of a range; both are reserved."
+   },
+   {
+    "term": "Usable hosts",
+    "def": "2^(32-N) minus 2 — the addresses available to devices after removing network and broadcast."
+   }
+  ],
+  "interview": [
+   {
+    "q": "How many usable hosts are in a /26, and why not 64?",
+    "a": "A /26 has 2^(32-26) = 64 addresses, but the network and broadcast addresses are reserved, so 62 usable. The network address is host-bits-all-zero and the broadcast is host-bits-all-one."
+   },
+   {
+    "q": "What is the difference between a subnet and a supernet?",
+    "a": "Subnetting splits a larger network into smaller ones by borrowing host bits for the network part. Supernetting is the reverse: aggregating several adjacent subnets into one larger range, usually to reduce routing-table size or simplify a rule."
+   },
+   {
+    "q": "How do you choose the CIDR for a three-tier app?",
+    "a": "Start from a block big enough for growth (say a /22), split a /24 for the web tier, and split the remainder into /25s for app and database so the database can live in a private subnet. Reserve room for future tiers rather than using every address."
+   }
+  ],
+  "quickCheck": [
+   {
+    "kind": "mcq",
+    "prompt": "A /28 holds how many usable host addresses?",
+    "options": [
+     "14",
+     "16",
+     "28",
+     "256"
+    ],
+    "answer": 0,
+    "explanation": "2^(32-28) = 16 total, minus network and broadcast = 14 usable."
+   },
+   {
+    "kind": "output",
+    "prompt": "What does this print?",
+    "code": {
+     "lang": "python",
+     "code": "print(2 ** (32 - 26) - 2)"
+    },
+    "options": [
+     "62",
+     "64",
+     "26",
+     "30"
+    ],
+    "answer": 0,
+    "explanation": "2^6 = 64 total, minus 2 reserved = 62."
+   },
+   {
+    "kind": "bug",
+    "prompt": "Two teams both use 10.0.0.0/16 for their VPC and then peer them. What is wrong?",
+    "options": [
+     "The ranges overlap, so routes collide and traffic is misrouted",
+     "Peering always works",
+     "Private ranges cannot peer",
+     "Nothing is wrong"
+    ],
+    "answer": 0,
+    "explanation": "Overlapping CIDRs make routing ambiguous. Address plans must be non-overlapping before any peering or VPN."
+   }
+  ],
+  "cheatSheet": [
+   "The /N counts network bits; hosts = 2^(32-N) minus 2.",
+   "Netmask = N ones then zeros; AND with an IP gives the network.",
+   "Network + broadcast are always reserved.",
+   "Subnetting borrows host bits; supernetting merges adjacent subnets.",
+   "A /30 has exactly 2 usable addresses — point-to-point links.",
+   "Right-size per tier; leave headroom; keep DB in private subnets.",
+   "Check CIDR overlap before any VPC peer or VPN."
+  ],
+  "capstone": {
+   "title": "DevAtlas: subnet reference table",
+   "criteria": [
+    "Covers /24 through /30",
+    "Shows total and usable counts",
+    "Runs offline"
+   ]
+  },
+  "codeSamples": 7,
+  "file": "l9-7-2.ts"
+ },
+ {
+  "id": "9.7.3",
+  "title": "Reverse proxies, load balancing and NAT",
+  "minutes": 70,
+  "level": "Intermediate",
+  "summary": "Route traffic like a production system: pick layer-4 or layer-7 balancing, understand the balancing algorithms, map host and path to upstreams with a reverse proxy, and see how NAT lets private networks reach the internet.",
+  "terms": [
+   {
+    "term": "Reverse proxy",
+    "def": "A server that receives client requests and forwards them to upstream backends, hiding the topology and often terminating TLS."
+   },
+   {
+    "term": "Load balancer",
+    "def": "A proxy that distributes requests across multiple backends for scale and availability."
+   },
+   {
+    "term": "Layer 4 vs layer 7",
+    "def": "L4 balances on transport info (IP/port, no payload); L7 balances on application content (host, path, headers)."
+   },
+   {
+    "term": "Round-robin",
+    "def": "The simplest balancing: each backend in turn, regardless of load."
+   },
+   {
+    "term": "Least-connections",
+    "def": "Send each request to the backend with the fewest active connections, to balance uneven work."
+   },
+   {
+    "term": "NAT",
+    "def": "Network Address Translation — rewriting addresses (and ports) so many private hosts share one public IP."
+   },
+   {
+    "term": "Sticky session",
+    "def": "Pinning a user to a specific backend (by cookie or consistent hash) so state on that backend stays consistent."
+   }
+  ],
+  "interview": [
+   {
+    "q": "What is the difference between L4 and L7 load balancing?",
+    "a": "L4 balances on transport info — IP and port — without looking at the payload, so it is fast and protocol-agnostic. L7 terminates TLS and reads the HTTP host, path and headers, so it can route different paths to different pools and apply HTTP-level rules, at higher cost per connection."
+   },
+   {
+    "q": "When would you choose least-connections over round-robin?",
+    "a": "When requests have uneven duration. Round-robin can send a new request to a backend still chewing a slow one, while least-connections follows actual busyness. Round-robin is fine when all requests are roughly uniform and cheap."
+   },
+   {
+    "q": "Why do you need NAT for a private subnet?",
+    "a": "Private hosts have RFC 1918 addresses that cannot be routed on the public internet. NAT translates them to a public address, mapping each outbound connection to a unique port so replies can be routed back — giving outbound internet without exposing the hosts inbound."
+   }
+  ],
+  "quickCheck": [
+   {
+    "kind": "mcq",
+    "prompt": "You must route /api and /ask to different backend pools. Which balancer do you need?",
+    "options": [
+     "L4",
+     "L7",
+     "Either",
+     "Neither"
+    ],
+    "answer": 1,
+    "explanation": "Routing by URL path requires reading the HTTP payload, which only an L7 proxy can do."
+   },
+   {
+    "kind": "output",
+    "prompt": "Which backend does least-connections pick?",
+    "code": {
+     "lang": "python",
+     "code": "conns = {\"a\": 4, \"b\": 1, \"c\": 2}\nprint(min(conns, key=conns.get))"
+    },
+    "options": [
+     "a",
+     "b",
+     "c"
+    ],
+    "answer": 1,
+    "explanation": "b has the fewest connections (1)."
+   },
+   {
+    "kind": "bug",
+    "prompt": "A backend stores login state locally, so sticky sessions pin users to one instance. That instance dies. What is the root problem?",
+    "options": [
+     "The backend is stateful; state should live in a shared store (Redis), not on the instance",
+     "Sticky sessions are always wrong",
+     "The proxy should round-robin",
+     "Nothing is wrong"
+    ],
+    "answer": 0,
+    "explanation": "Sticky sessions are the symptom; local state is the disease. Externalise session state so any instance can serve any user."
+   }
+  ],
+  "cheatSheet": [
+   "L4 = IP/port only, fast; L7 = host/path/headers, TLS termination.",
+   "Round-robin is cheap; least-connections follows load.",
+   "Sticky sessions trade balance for correctness — prefer stateless backends.",
+   "A reverse proxy hides topology, terminates TLS, and adds forwarded headers.",
+   "NAT maps many private hosts to one public IP via a port table.",
+   "Health checks stop the proxy from sending to dead backends.",
+   "Keep backends stateless; externalise session state to Redis."
+  ],
+  "capstone": {
+   "title": "DevAtlas: reverse-proxy routing table",
+   "criteria": [
+    "Host-and-path matching",
+    "Wildcard path prefix support",
+    "Fallback for no match"
+   ]
+  },
+  "codeSamples": 7,
+  "file": "l9-7-3.ts"
+ },
+ {
+  "id": "9.8.1",
+  "title": "SAST, DAST, dependency, container and secret scanning in CI",
+  "minutes": 85,
+  "level": "Advanced",
+  "summary": "Shift security left into the pipeline: run SAST on your code, SCA on dependencies, secret scanning on every commit, container scanning on images, and DAST on running apps — then triage the findings and fail the build on the ones that actually matter.",
+  "terms": [
+   {
+    "term": "Shift left",
+    "def": "Moving security checks earlier — into the IDE, the commit and the pipeline — so problems are caught before they reach production."
+   },
+   {
+    "term": "SAST",
+    "def": "Static Application Security Testing: scanning source code for risky patterns (injection, hardcoded secrets, unsafe deserialisation)."
+   },
+   {
+    "term": "SCA",
+    "def": "Software Composition Analysis: scanning dependencies (including transitive ones) for known CVEs."
+   },
+   {
+    "term": "DAST",
+    "def": "Dynamic Application Security Testing: probing a running app for vulnerabilities, like a scanner that attacks the deployed endpoint."
+   },
+   {
+    "term": "Secret scanning",
+    "def": "Detecting leaked credentials (API keys, tokens, private keys) in code and history."
+   },
+   {
+    "term": "Container scanning",
+    "def": "Scanning an image's layers and packages for known vulnerabilities before it runs."
+   },
+   {
+    "term": "SBOM",
+    "def": "Software Bill of Materials — a machine-readable list of every component in an artifact, used to answer 'are we affected?' fast."
+   }
+  ],
+  "interview": [
+   {
+    "q": "What is the difference between SAST, SCA and DAST?",
+    "a": "SAST scans source code for risky patterns; SCA scans dependencies (including transitive) for known CVEs; DAST attacks a running application to find runtime flaws like broken auth or injection. They are complementary: SAST and SCA are static and fast, DAST is dynamic and finds only what a running app exposes."
+   },
+   {
+    "q": "A critical CVE appears in a transitive dependency you never heard of. What do you do?",
+    "a": "SCA surfaces it because it walks the full tree. Find the top-level dependency that pulls it in, check whether an upgraded version fixes it, bump that version (and verify tests), or apply a temporary mitigation if no fix exists. The SBOM tells you everywhere the vulnerable package is used."
+   },
+   {
+    "q": "Why must a leaked secret be rotated and not just removed?",
+    "a": "Removing the line fixes the file but not the leak: the value still exists in git history and is still a valid credential. An attacker who already scraped it can keep using it. Rotation invalidates the old value everywhere, which is the only real fix."
+   }
+  ],
+  "quickCheck": [
+   {
+    "kind": "mcq",
+    "prompt": "Which scanner would find a SQL injection in your source code?",
+    "options": [
+     "SCA",
+     "SAST",
+     "DAST",
+     "Container scanning"
+    ],
+    "answer": 1,
+    "explanation": "SAST analyses source for risky patterns like injection. DAST would also find it, but by attacking the running app, not reading the code."
+   },
+   {
+    "kind": "output",
+    "prompt": "This gate blocks severity 'high' and above. How many findings block?",
+    "code": {
+     "lang": "python",
+     "code": "findings = [\"low\", \"medium\", \"high\", \"critical\", \"critical\", \"low\"]\nblocking = [f for f in findings if f in (\"high\", \"critical\")]\nprint(len(blocking))"
+    },
+    "options": [
+     "2",
+     "3",
+     "4",
+     "6"
+    ],
+    "answer": 1,
+    "explanation": "high + critical + critical = 3 blocking findings."
+   },
+   {
+    "kind": "bug",
+    "prompt": "A team deletes an accidentally committed AWS key from the repo and re-runs the pipeline. It passes. What is wrong?",
+    "options": [
+     "The key is still in git history and still valid — it must be rotated",
+     "The pipeline should be deleted",
+     "Nothing is wrong",
+     "SAST would have caught it"
+    ],
+    "answer": 0,
+    "explanation": "Deleting the line does not undo the leak or invalidate the key. Rotation is the only fix; history should then be purged where feasible."
+   }
+  ],
+  "cheatSheet": [
+   "Shift left: catch security at commit, not at the customer.",
+   "SAST = source patterns; SCA = dependency CVEs; DAST = attack the running app.",
+   "Secret scanning on every push; rotate, never just delete, a leaked key.",
+   "Container scanning (Trivy/Grype) audits the image's packages.",
+   "Triage is policy: critical/high blocks, medium tickets, low noted.",
+   "SCA must include transitive dependencies — the CVE you didn't add.",
+   "Pin exact dependency versions; upgrade deliberately.",
+   "Emit an SBOM per release so 'are we affected?' is a lookup, not a dig."
+  ],
+  "capstone": {
+   "title": "DevAtlas: CI security gate",
+   "criteria": [
+    "Three scanners run and merge their findings",
+    "Critical findings fail the build",
+    "A clean image passes"
+   ]
+  },
+  "codeSamples": 7,
+  "file": "l9-8-1.ts"
+ },
+ {
+  "id": "9.8.2",
+  "title": "Software supply-chain security: SBOMs, SLSA and dependency attacks",
+  "minutes": 70,
+  "level": "Advanced",
+  "summary": "Secure the path between source and artifact: query an SBOM to answer 'are we affected?', understand why a single unpinned dependency can break the world (left-pad), and use SLSA levels and provenance to trust your builds.",
+  "terms": [
+   {
+    "term": "Supply chain",
+    "def": "Everything between source code and a running artifact — dependencies, build tools, registries and the release process."
+   },
+   {
+    "term": "SBOM",
+    "def": "Software Bill of Materials: a machine-readable list of every component in an artifact, used to answer 'are we affected?' fast."
+   },
+   {
+    "term": "Dependency confusion",
+    "def": "An attack where an attacker publishes your internal package name to a public registry, and a misconfigured resolver downloads it instead of yours."
+   },
+   {
+    "term": "Provenance",
+    "def": "A signed record of how an artifact was built (repo, commit, builder), so you can verify what you are running."
+   },
+   {
+    "term": "SLSA",
+    "def": "Supply-chain Levels for Software Artifacts — a ladder (L0–L4) of hardening from 'no guarantees' to tamper-proof, hermetic builds."
+   },
+   {
+    "term": "left-pad",
+    "def": "The 2016 incident where an 11-line, unpinned npm package was unpublished and broke thousands of builds overnight."
+   }
+  ],
+  "interview": [
+   {
+    "q": "What is an SBOM and why does it matter?",
+    "a": "A Software Bill of Materials is a machine-readable list of every component in an artifact, generated at build time. When a vulnerability is disclosed, you query the SBOM to find every affected service in minutes, instead of auditing lockfiles by hand. It is also increasingly a compliance requirement."
+   },
+   {
+    "q": "What is a dependency-confusion attack and how do you prevent it?",
+    "a": "An attacker publishes a package under your internal package name to the public registry, and a misconfigured resolver downloads it instead of yours. Prevent it by namespacing internal packages and configuring the private feed to resolve before the public one."
+   },
+   {
+    "q": "What did left-pad teach the industry?",
+    "a": "An 11-line package, loosely pinned, was unpublished and broke thousands of builds overnight. The lesson is to pin exact versions, vendor critical dependencies, and use a registry that does not let a package vanish — not to avoid small dependencies entirely."
+   }
+  ],
+  "quickCheck": [
+   {
+    "kind": "mcq",
+    "prompt": "A CVE is disclosed for libxml2 < 2.12.1. How do you find every affected service fast?",
+    "options": [
+     "Read every lockfile by hand",
+     "Query each service's SBOM for libxml2 below the fixed version",
+     "Grep the source",
+     "Wait for an alert"
+    ],
+    "answer": 1,
+    "explanation": "The SBOM records the actual resolved dependency graph, so a filter over its components answers 'are we affected?' instantly."
+   },
+   {
+    "kind": "output",
+    "prompt": "Which packages does this SBOM query return?",
+    "code": {
+     "lang": "python",
+     "code": "sbom = [\"libxml2@2.11.0\", \"Serilog@4.1.0\", \"Npgsql@8.0.4\"]\nprint([p for p in sbom if p.split(\"@\")[1] < \"5.0.0\"])"
+    },
+    "options": [
+     "['libxml2@2.11.0', 'Serilog@4.1.0']",
+     "['Npgsql@8.0.4']",
+     "all three",
+     "none"
+    ],
+    "answer": 0,
+    "explanation": "2.11.0 and 4.1.0 are below 5.0.0; Npgsql 8.0.4 is not."
+   },
+   {
+    "kind": "bug",
+    "prompt": "An internal package named 'internal-common' resolves to a public package with a higher version. What is the flaw?",
+    "options": [
+     "The resolver checks the public registry before the private feed, enabling dependency confusion",
+     "The package name is too long",
+     "Higher versions are always safe",
+     "Nothing is wrong"
+    ],
+    "answer": 0,
+    "explanation": "Un-namespaced internal names plus public-first resolution is the dependency-confusion pattern. Scope the name and put the private feed first."
+   }
+  ],
+  "cheatSheet": [
+   "SBOM = ingredients list; generate at build, query on CVE.",
+   "Dependency confusion: scope internal names + private feed first.",
+   "left-pad: pin exact versions, vendor critical deps.",
+   "SLSA L0–L4: provenance → isolated build → hermetic reproducibility.",
+   "Provenance answers 'was this built from my commit by my builder?'.",
+   "Floating versions = non-reproducible, surprise-breakable builds.",
+   "SolarWinds/Codecov = compromised build tooling; sign and verify."
+  ],
+  "capstone": {
+   "title": "DevAtlas: attach build provenance",
+   "criteria": [
+    "Records repository, commit and builder",
+    "Includes a build type",
+    "Runs offline"
+   ]
+  },
+  "codeSamples": 7,
+  "file": "l9-8-2.ts"
+ },
+ {
+  "id": "9.9.1",
+  "title": "The incident method: triage, diagnose, mitigate, postmortem",
+  "minutes": 80,
+  "level": "Advanced",
+  "summary": "Turn chaos into a repeatable loop: triage from the symptoms, isolate the failing layer, mitigate before you root-cause, then write a blameless postmortem. Practice reading signals and diagnosing a real failure mode, the way an on-call engineer does.",
+  "terms": [
+   {
+    "term": "Incident",
+    "def": "An unexpected event that degrades service — a spike in errors, latency or downtime worth a coordinated response."
+   },
+   {
+    "term": "Triage",
+    "def": "Assessing severity and blast radius first, so the response matches the damage instead of the alarm volume."
+   },
+   {
+    "term": "MTTD / MTTR",
+    "def": "Mean time to detect and mean time to recover — the two numbers that measure how good your response is."
+   },
+   {
+    "term": "Blast radius",
+    "def": "Who and what is affected — one customer, one region, or everything — determines severity and who gets paged."
+   },
+   {
+    "term": "Mitigate",
+    "def": "Stop the bleeding first (rollback, scale out, feature flag off) before finding the root cause."
+   },
+   {
+    "term": "Blameless postmortem",
+    "def": "A written record of the incident that focuses on systems and process, not individuals, and produces action items."
+   },
+   {
+    "term": "Runbook",
+    "def": "A short, executable list of steps per symptom, so the on-call engineer does not start from zero at 3 am."
+   }
+  ],
+  "interview": [
+   {
+    "q": "Walk me through how you handle a production incident.",
+    "a": "Triage first: severity, blast radius, who is on the bridge. Then mitigate — roll back the last deploy, scale out, or disable a feature flag — to stop the bleeding. Then diagnose from logs, metrics and traces, confirm the hypothesis, apply the fix with a regression test, and finish with a blameless postmortem that produces action items."
+   },
+   {
+    "q": "Latency is climbing but CPU and memory look fine. What do you suspect and how do you confirm it?",
+    "a": "A connection-pool leak or a slow dependency. A pool leak shows growing wait time with low CPU and errors like 'connection pool timeout'; a slow dependency shows one span dominating the trace. Confirm with a trace and by checking pool metrics or the dependency's own latency."
+   },
+   {
+    "q": "Why is a blameless postmortem important?",
+    "a": "Blame makes people hide information and slows future incidents; the goal is to fix the system, not punish a person. A blameless postmortem captures the timeline, root cause and action items, so each incident makes the next one shorter and less likely."
+   }
+  ],
+  "quickCheck": [
+   {
+    "kind": "mcq",
+    "prompt": "A deploy raises error rate to 15%. What do you do first?",
+    "options": [
+     "Read the code to find the bug",
+     "Roll back the deploy, then diagnose",
+     "Write a postmortem",
+     "Wait to see if it recovers"
+    ],
+    "answer": 1,
+    "explanation": "Mitigate first — roll back stops the bleeding immediately. Diagnosis happens after the system is healthy."
+   },
+   {
+    "kind": "output",
+    "prompt": "Which incident does this triage classify as 'memory'?",
+    "code": {
+     "lang": "python",
+     "code": "def triage(cpu, mem):\n    return \"memory\" if mem > 90 else \"cpu\" if cpu > 90 else \"ok\"\n\nprint(triage(cpu=40, mem=97), triage(cpu=99, mem=30), triage(cpu=20, mem=20))"
+    },
+    "options": [
+     "memory cpu ok",
+     "ok memory cpu",
+     "memory ok cpu",
+     "cpu memory ok"
+    ],
+    "answer": 0,
+    "explanation": "(40, 97) → memory; (99, 30) → cpu; (20, 20) → ok."
+   },
+   {
+    "kind": "bug",
+    "prompt": "The on-call engineer spends two hours reading code before rolling back a clearly bad deploy. What is wrong?",
+    "options": [
+     "Diagnosis should come after mitigation; the outage lasted longer than necessary",
+     "Code should never be read",
+     "Rolling back is optional",
+     "Nothing is wrong"
+    ],
+    "answer": 0,
+    "explanation": "The fastest recovery is the rollback, not understanding the bug. Mitigate first, then diagnose at leisure."
+   }
+  ],
+  "cheatSheet": [
+   "Incident loop: triage → mitigate → diagnose → fix (+test) → postmortem.",
+   "Mitigate first: rollback, scale out, feature flag off.",
+   "Triage = severity + blast radius + who is on the bridge.",
+   "Each failure has a signature: CPU, memory, disk, pool, slow dependency.",
+   "The trace finds the bottleneck; profile the slow span, not the whole request.",
+   "Every fix ships with a regression test.",
+   "Blameless postmortem: timeline + what we will change + action items.",
+   "Keep a runbook per symptom; rehearse with drills."
+  ],
+  "capstone": {
+   "title": "DevAtlas: incident command",
+   "criteria": [
+    "Takes severity and summary as inputs",
+    "Prints all five steps in order",
+    "Mitigate precedes diagnose"
+   ]
+  },
+  "codeSamples": 7,
+  "file": "l9-9-1.ts"
+ },
+ {
+  "id": "9.9.2",
+  "title": "Incident drills: CPU, memory, disk, network, DB, Redis and K8s",
+  "minutes": 70,
+  "level": "Advanced",
+  "summary": "Recognise the failure signature of each resource before a real incident: CPU pinned, memory creeping to OOM, disk full, network timeouts, a slow query, Redis saturation and a crash-looping pod — each with its symptom, signal and fix.",
+  "terms": [
+   {
+    "term": "CPU saturation",
+    "def": "Utilisation pinned near 100% with a growing run queue — a hot loop, GC pressure or too many threads."
+   },
+   {
+    "term": "Memory leak",
+    "def": "Resident set grows monotonically until an OOM kill restarts the process, then the cycle repeats."
+   },
+   {
+    "term": "Disk full",
+    "def": "The volume reaches 100% and writes fail — usually logs, caches or an unchecked dataset growth."
+   },
+   {
+    "term": "Connection pool exhaustion",
+    "def": "Latency climbs while CPU stays low and errors say 'pool timeout' — a leaked or under-sized pool."
+   },
+   {
+    "term": "Redis saturation",
+    "def": "Latency spikes as the command queue grows past what a single thread can serve."
+   },
+   {
+    "term": "CrashLoopBackOff / OOMKilled",
+    "def": "Kubernetes pod states: OOMKilled means the memory limit was hit; CrashLoopBackOff means the process keeps exiting on start."
+   }
+  ],
+  "interview": [
+   {
+    "q": "Latency is climbing but CPU is low. What do you suspect?",
+    "a": "A connection-pool leak or a slow dependency. Low CPU with rising latency points at waiting, not work. Confirm with a trace (which span dominates) and by checking pool or dependency metrics."
+   },
+   {
+    "q": "A pod keeps restarting. How do you diagnose it?",
+    "a": "Describe the pod: `kubectl describe pod` shows the last state and reason. OOMKilled means the memory limit was hit; CrashLoopBackOff means the process exits on start — then read the logs. ImagePullBackOff is a different root cause entirely."
+   },
+   {
+    "q": "Memory keeps climbing and the process restarts every few hours. What is the real fix?",
+    "a": "A leak. Restarting masks it. Take a heap dump, find the unbounded cache or retained reference, fix it, and keep the restart only as a stopgap. Raising the limit just delays the same kill."
+   }
+  ],
+  "quickCheck": [
+   {
+    "kind": "mcq",
+    "prompt": "High CPU, normal memory, slow-but-correct responses. What is the likely cause?",
+    "options": [
+     "A hot loop or GC pressure",
+     "A disk that is full",
+     "A network partition",
+     "A bad certificate"
+    ],
+    "answer": 0,
+    "explanation": "Pinned CPU with correct output points at a hot loop or GC, not I/O or networking."
+   },
+   {
+    "kind": "output",
+    "prompt": "Which pod state does this print for a pod with 4 restarts?",
+    "code": {
+     "lang": "python",
+     "code": "def status(restarts):\n    return \"CrashLoopBackOff\" if restarts >= 3 else \"Running\"\n\nprint(status(4))"
+    },
+    "options": [
+     "Running",
+     "CrashLoopBackOff",
+     "OOMKilled"
+    ],
+    "answer": 1,
+    "explanation": "4 ≥ 3, so it reports CrashLoopBackOff."
+   },
+   {
+    "kind": "bug",
+    "prompt": "A team raises the Redis instance size every time latency spikes, but spikes return. What is the likely root cause?",
+    "options": [
+     "A hot key or a few slow commands saturating Redis's single thread",
+     "Redis is too small to ever work",
+     "The network is broken",
+     "Nothing is wrong"
+    ],
+    "answer": 0,
+    "explanation": "Redis is single-threaded; one hot key or slow command queues everyone. Fix the hot key, don't just resize."
+   }
+  ],
+  "cheatSheet": [
+   "CPU pinned → profile a hot loop; scaling masks it.",
+   "Memory creep + restart cycle → leak; heap dump, fix it.",
+   "Disk 100% → rotate logs, clean caches, alert at 80%.",
+   "Low CPU + rising latency → pool leak or slow dependency; trace it.",
+   "One dominant span → the slow query; fix the index/plan.",
+   "Redis saturated → hot key / slow command; single-threaded.",
+   "OOMKilled → limit or leak; CrashLoopBackOff → read the crash logs."
+  ],
+  "capstone": {
+   "title": "DevAtlas: Kubernetes pod-state drill",
+   "criteria": [
+    "OOMKilled is detected by reason",
+    "CrashLoopBackOff by restart count",
+    "Healthy pods pass"
+   ]
+  },
+  "codeSamples": 7,
+  "file": "l9-9-2.ts"
+ },
+ {
+  "id": "9.10.1",
+  "title": "LLM-assisted DevOps: code review, pipeline debugging, infra and K8s",
+  "minutes": 80,
+  "level": "Advanced",
+  "summary": "Use AI as a force multiplier across the DevOps loop — a pair reviewer, a pipeline doctor, an infra reviewer and a monitoring triager — while knowing exactly where it fails: hallucinations, stale configs, insecure drafts, and the human review gate that never disappears.",
+  "terms": [
+   {
+    "term": "LLM-assisted engineering",
+    "def": "Using a language model to accelerate a step — code, review, diagnosis, config — while a human and CI remain responsible for correctness."
+   },
+   {
+    "term": "Pipeline doctor",
+    "def": "An AI that reads a CI failure log and proposes a likely root cause and fix."
+   },
+   {
+    "term": "AIOps",
+    "def": "Applying ML to operations data — anomaly detection, alert noise reduction, incident summarisation."
+   },
+   {
+    "term": "On-call copilot",
+    "def": "An assistant that summarises an incident, suggests runbooks and correlates signals during an outage."
+   },
+   {
+    "term": "Hallucination",
+    "def": "Plausible but wrong output — an invented flag, API or diagnosis that the model states with confidence."
+   },
+   {
+    "term": "Review gate",
+    "def": "The rule that AI produces a draft, a human reviews it, and tests/CI verify it — AI never skips verification."
+   },
+   {
+    "term": "Copilot atrophy",
+    "def": "Skill loss from over-reliance on AI, where the engineer stops reasoning and just trusts the suggestion."
+   }
+  ],
+  "interview": [
+   {
+    "q": "Where does AI actually help in DevOps, and where must it not be trusted?",
+    "a": "It helps as a pair reviewer, pipeline doctor, infra reviewer, K8s assistant and monitoring triager — drafting reviews, diagnoses and configs fast. It must not be trusted to verify, to know current APIs (it hallucinates and goes stale), or to act on production. The rule is AI draft → human review → CI verify → deploy."
+   },
+   {
+    "q": "How would you use an LLM to debug a failing CI pipeline?",
+    "a": "Paste the redacted failure log with the workflow and job name, and ask for the likely root cause, the fix, and how to prevent it — then treat the answer as a hypothesis and confirm it by fixing and re-running the pipeline. I would also start with deterministic rules for the common failures before involving a model."
+   },
+   {
+    "q": "What is the risk of pasting production logs into a public LLM, and what do you do instead?",
+    "a": "Logs can contain PII, secrets and proprietary data, which then leak to a third party — a privacy and IP breach. I redact or use a local model (Ollama) or a self-hosted endpoint, and never send raw production data to a public service."
+   }
+  ],
+  "quickCheck": [
+   {
+    "kind": "mcq",
+    "prompt": "AI generates a Terraform module. What is the correct next step before it affects production?",
+    "options": [
+     "Run `terraform apply` immediately",
+     "`terraform plan`, then human review, then apply",
+     "Commit it and let CI apply it",
+     "Ask the AI if it is correct"
+    ],
+    "answer": 1,
+    "explanation": "The AI output is a draft. Plan it, review it for least privilege, then apply — verification is never skipped."
+   },
+   {
+    "kind": "output",
+    "prompt": "What does this anomaly detector flag?",
+    "code": {
+     "lang": "python",
+     "code": "values = [10, 11, 10, 12, 100, 11]\nmean = sum(values) / len(values)\nfor i, x in enumerate(values):\n    if x > mean * 3:\n        print(\"flag\", i)"
+    },
+    "options": [
+     "flag 4",
+     "flag 3",
+     "flag 0",
+     "nothing"
+    ],
+    "answer": 0,
+    "explanation": "mean ≈ 25.7; only 100 (index 4) exceeds 3× the mean."
+   },
+   {
+    "kind": "bug",
+    "prompt": "The on-call engineer trusts an AI's diagnosis, spends two hours, and it was wrong. What is the actual flaw?",
+    "options": [
+     "The AI is fine — the engineer treated a hypothesis as fact and did not confirm it in logs",
+     "AI should never be used",
+     "The pipeline was not long enough",
+     "There is no flaw"
+    ],
+    "answer": 0,
+    "explanation": "The model produces a plausible hypothesis, not a verified answer. The flaw is skipping confirmation against actual logs and metrics."
+   }
+  ],
+  "cheatSheet": [
+   "AI fits: pair reviewer, pipeline doctor, infra reviewer, K8s assistant, monitoring triager.",
+   "The loop: AI draft → human review → CI/tests verify → deploy.",
+   "Hallucination and stale data are the default failure modes — cross-check against docs.",
+   "Never paste secrets/PII into a public LLM; use local models or redact.",
+   "AI-generated IAM/network config always gets a least-privilege review.",
+   "Deterministic rules first; AI only for messy judgement calls.",
+   "The diagnosis is a hypothesis — confirm it in logs, metrics and traces.",
+   "A small local model (Ollama) does triage drafts for free and keeps data on your machine."
+  ],
+  "capstone": {
+   "title": "DevAtlas: on-call copilot skeleton",
+   "criteria": [
+    "Deterministic rules handle the known symptoms",
+    "Unknown alerts are routed to a model",
+    "Runs offline"
+   ]
+  },
+  "codeSamples": 7,
+  "file": "l9-10-1.ts"
+ },
+ {
+  "id": "9.10.2",
+  "title": "AIOps: anomaly detection, incident copilots and where AI fails",
+  "minutes": 70,
+  "level": "Advanced",
+  "summary": "Apply AI to operations the right way: a robust anomaly detector (median absolute deviation), alert-storm correlation, incident summarisation, and an on-call copilot — while knowing exactly where the models fail, from seasonality to cold starts.",
+  "terms": [
+   {
+    "term": "AIOps",
+    "def": "Applying machine learning to operations data — anomaly detection, alert correlation, incident summarisation and root-cause suggestions."
+   },
+   {
+    "term": "Anomaly detection",
+    "def": "Flagging metric values that deviate from the learned baseline, rather than a fixed threshold."
+   },
+   {
+    "term": "Median absolute deviation (MAD)",
+    "def": "A robust dispersion measure that, unlike the standard deviation, is not inflated by the very outlier you are trying to catch."
+   },
+   {
+    "term": "Alert correlation",
+    "def": "Grouping many related alerts (a 5xx spike plus latency plus pool exhaustion) into one incident."
+   },
+   {
+    "term": "On-call copilot",
+    "def": "An assistant that summarises an incident and suggests runbooks, with deterministic rules first and a model for the long tail."
+   },
+   {
+    "term": "Cold start / seasonality",
+    "def": "The two classic AIOps failures: no history to learn from, and a predictable daily/weekly pattern the model mistakes for an anomaly."
+   }
+  ],
+  "interview": [
+   {
+    "q": "Why is median absolute deviation more robust than z-score for anomaly detection?",
+    "a": "z-score uses the mean and standard deviation, both of which a single large outlier inflates — so the outlier can hide itself by widening the 'normal' range. MAD uses the median, which the outlier barely moves, so the spike stands far out. It is the standard robust alternative for noisy metrics."
+   },
+   {
+    "q": "How does AIOps reduce alert noise?",
+    "a": "It correlates related alerts into one incident — a 5xx spike, latency and pool exhaustion are grouped by source and time — and learns dynamic baselines so predictable daily peaks do not page. The engineer gets one incident with context instead of twenty alerts."
+   },
+   {
+    "q": "Where does AIOps fail?",
+    "a": "Cold starts (a new service has no history to learn from) and seasonality (a daily or weekly pattern the model mistakes for an anomaly). That is why the engineer stays in the loop: the model flags, the engineer confirms against logs and traces."
+   }
+  ],
+  "quickCheck": [
+   {
+    "kind": "mcq",
+    "prompt": "A service peaks every weekday at 9 am. A static 'CPU > 80%' alert pages daily. What is the right fix?",
+    "options": [
+     "A dynamic baseline that learns the daily rhythm",
+     "Raise the threshold to 99%",
+     "Delete the alert",
+     "Scale up every morning"
+    ],
+    "answer": 0,
+    "explanation": "The daily peak is normal. A dynamic baseline learns it and only pages on a genuine deviation."
+   },
+   {
+    "kind": "output",
+    "prompt": "Which value does this MAD detector flag?",
+    "code": {
+     "lang": "python",
+     "code": "values = [100, 101, 100, 102, 300, 100]\nm = sorted(values)[len(values) // 2]\nfor i, x in enumerate(values):\n    if abs(x - m) > 100:\n        print(\"flag\", i)"
+    },
+    "options": [
+     "flag 4",
+     "flag 0",
+     "flag 1",
+     "nothing"
+    ],
+    "answer": 0,
+    "explanation": "median is 101; only 300 (index 4) is more than 100 away."
+   },
+   {
+    "kind": "bug",
+    "prompt": "AIOps is enabled on a brand-new service and immediately floods the team with anomalies. What is wrong?",
+    "options": [
+     "There is no historical baseline yet, so every point looks unusual",
+     "The service is broken",
+     "Anomaly detection cannot work",
+     "Nothing is wrong"
+    ],
+    "answer": 0,
+    "explanation": "Cold start: the model has no baseline to compare against. Collect history and use simple thresholds until then."
+   }
+  ],
+  "cheatSheet": [
+   "AIOps = anomaly detection + correlation + summarisation + suggestions.",
+   "MAD uses the median, so one spike does not hide itself (unlike z-score).",
+   "Dynamic baselines beat static thresholds on seasonal metrics.",
+   "Correlate alerts by source/time so one incident pages once.",
+   "The summary is a draft — the engineer confirms and decides.",
+   "AIOps fails on cold starts and seasonality.",
+   "Rules for known symptoms; model for the long tail."
+  ],
+  "capstone": {
+   "title": "DevAtlas: on-call copilot",
+   "criteria": [
+    "Known symptoms hit rules",
+    "Unknown alerts escalate",
+    "Runs offline"
+   ]
+  },
+  "codeSamples": 7,
+  "file": "l9-10-2.ts"
  },
  {
   "id": "10.1.1",

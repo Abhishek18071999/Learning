@@ -803,5 +803,5 @@ def test_budget_blocks_before_calling_the_model():
       url: "https://docs.claude.com/en/docs/test-and-evaluate/strengthen-guardrails/reduce-prompt-leak",
     },
   ],
-  nextPreview: "Next: Phase 8, the cloud. You will compare VMs, functions and containers on AWS and Azure and deploy DevAtlas services to the right one.",
+  nextPreview: "Next: agentic patterns — ReAct, plan-and-execute and multi-agent orchestration: choosing the right loop for each task and bounding it with budgets and traces.",
 };

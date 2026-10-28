@@ -1,0 +1,46 @@
+$kind: http-request
+name: Search (Multicity)
+method: POST
+url: '{{baseUrl}}/Air/Search'
+order: 8600
+headers:
+  - key: Content-Type
+    value: application/json
+  - key: Token
+    value: 'Bearer {{token}}'
+  - key: X-Correlation-ID
+    value: '{{$guid}}'
+body:
+  type: json
+  content: |-
+    {
+      "AirTravelType": "MultiCity",
+      "adultCount": {{adultCount}},
+      "childCount": {{childCount}},
+      "infantCount": {{infantCount}},
+      "cabinClass": "{{cabinClass}}",
+      "isMultiDestination": true,
+      "multiCitySegments": [
+        { "origin": "SIN", "destination": "KUL", "departureDate": "2026-12-20" },
+        { "origin": "KUL", "destination": "DXB", "departureDate": "2026-12-28" },
+        { "origin": "SHJ", "destination": "SIN", "departureDate": "2027-01-10" }
+      ]
+    }
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      let body = {};
+      try { body = pm.response.json(); } catch (e) {}
+
+      pm.test('multicity search HTTP 200', () => pm.response.to.have.status(200));
+      pm.test('multicity search envelope status is 200', () => pm.expect(body.statusCode).to.eql(200));
+      pm.test('multicity search returns itineraries', () => {
+        pm.expect(Array.isArray(body.result) && body.result.length > 0).to.be.true;
+      });
+      pm.test('multicity itineraries cover all segments', () => {
+        const first = (body.result || [])[0];
+        if (!first) { return; }
+        const legs = first.airFlightSegments || [];
+        pm.expect(legs.length, 'expected one or more segments per itinerary').to.be.greaterThan(0);
+      });

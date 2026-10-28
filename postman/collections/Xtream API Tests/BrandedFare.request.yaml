@@ -1,0 +1,43 @@
+$kind: http-request
+name: BrandedFare
+method: POST
+url: '{{baseUrl}}/Air/BrandedFare'
+order: 2500
+headers:
+  - key: Content-Type
+    value: application/json
+  - key: Token
+    value: 'Bearer {{token}}'
+  - key: X-Correlation-ID
+    value: '{{$guid}}'
+body:
+  type: json
+  content: |-
+    {
+      "searchIdentifier": "{{searchIdentifier}}",
+      "flightOptionId": {{flightOptionId}}
+    }
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      let body = {};
+      try { body = pm.response.json(); } catch (e) {}
+
+      pm.test('branded fare HTTP 200 or no brand for this fare', () => {
+        pm.expect(pm.response.code, JSON.stringify(body).slice(0, 300)).to.be.oneOf([200, 400, 404, 422]);
+      });
+
+      if (pm.response.code === 200) {
+        const brands = Array.isArray(body.result) ? body.result : [];
+        pm.test('branded fare returns brands', () => pm.expect(brands.length).to.be.greaterThan(0));
+        const first = brands.find(b => b && (b.brandId != null || b.brand?.brandId != null));
+        if (first) {
+          const brandId = first.brandId ?? first.brand?.brandId;
+          pm.collectionVariables.set('brandId', String(brandId));
+          pm.test('brand carries a price', () => {
+            const price = first.totalFare ?? first.fare ?? first.price;
+            pm.expect(Number(price), 'brand total/fare/price missing').to.be.greaterThan(0);
+          });
+        }
+      }

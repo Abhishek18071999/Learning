@@ -279,9 +279,9 @@ export const phases: Phase[] = [
   {
     id: 7,
     title: "AI engineering",
-    tagline: "LLMs, RAG, agents and AI automation in production",
+    tagline: "LLMs, RAG, agents, evaluation and context engineering in production",
     icon: "🤖",
-    weeks: 8,
+    weeks: 10,
     areas: ["ai"],
     modules: [
       {
@@ -309,6 +309,16 @@ export const phases: Phase[] = [
           { id: "7.3.2", title: "Guardrails, evals, cost and observability", objectives: ["Prompt injection defence", "Eval suites"] },
         ],
       },
+      {
+        id: "7.4",
+        title: "Agents, evaluation and context engineering",
+        lessons: [
+          { id: "7.4.1", title: "Agentic patterns: ReAct, plan-and-execute and multi-agent orchestration", objectives: ["Choose an agent loop for each task", "Split work across sub-agents safely", "Know when a workflow beats an agent"] },
+          { id: "7.4.2", title: "Context engineering: long context, prompt caching and attention budgets", objectives: ["Fit instructions, tools and memory into the context budget", "Cut cost and latency with prompt caching", "Decide between long context and chunked RAG"] },
+          { id: "7.4.3", title: "Evaluating LLM systems: golden datasets and LLM-as-judge", objectives: ["Build a golden dataset from real traffic", "Score outputs with rules plus LLM-as-judge", "Gate every prompt or model change on evals"] },
+          { id: "7.4.4", title: "Model selection, routing and fine-tuning vs RAG", objectives: ["Route simple requests to small, cheap models", "Decide among prompt engineering, RAG and fine-tuning", "Measure cost, latency and quality together"] },
+        ],
+      },
     ],
   },
   {
@@ -328,9 +338,9 @@ export const phases: Phase[] = [
   {
     id: 9,
     title: "DevOps and SRE",
-    tagline: "Ship safely, run reliably, sleep at night",
+    tagline: "Ship safely, run reliably, automate with AI",
     icon: "🚀",
-    weeks: 8,
+    weeks: 12,
     areas: ["devops"],
     modules: [
       {
@@ -353,6 +363,39 @@ export const phases: Phase[] = [
       },
       { id: "9.5", title: "Observability and security", lessons: [{ id: "9.5.1", title: "Logs, metrics, traces and DevSecOps", objectives: ["OpenTelemetry", "Image and dependency scanning"] }] },
       { id: "9.6", title: "Releases and SRE", lessons: [{ id: "9.6.1", title: "Blue-green, canary, SLOs and postmortems", objectives: ["Safe rollouts", "Error budgets"] }] },
+      {
+        id: "9.7",
+        title: "Networking for DevOps",
+        lessons: [
+          { id: "9.7.1", title: "OSI, TCP/IP, DNS and TLS: the network one layer at a time", objectives: ["Follow a packet through the stack", "Debug with netstat, DNS and TLS tools", "Explain TCP and TLS handshakes"] },
+          { id: "9.7.2", title: "Subnets, CIDR and IP addressing", objectives: ["Read and plan CIDR blocks", "Divide a VPC into subnets", "Spot addressing mistakes"] },
+          { id: "9.7.3", title: "Reverse proxies, load balancing and NAT", objectives: ["Pick L4 vs L7 balancing", "Configure reverse proxies", "Understand NAT and outbound traffic"] },
+        ],
+      },
+      {
+        id: "9.8",
+        title: "DevSecOps: shift left",
+        lessons: [
+          { id: "9.8.1", title: "SAST, DAST, dependency, container and secret scanning in CI", objectives: ["Wire every scanner into CI", "Read and triage a scan report", "Fail builds on critical findings"] },
+          { id: "9.8.2", title: "Software supply-chain security: SBOMs, SLSA and dependency attacks", objectives: ["Produce and read an SBOM", "Reason about xz/left-pad style attacks", "Pin and verify dependencies"] },
+        ],
+      },
+      {
+        id: "9.9",
+        title: "Production troubleshooting",
+        lessons: [
+          { id: "9.9.1", title: "The incident method: triage, diagnose, mitigate, postmortem", objectives: ["Follow a repeatable incident loop", "Isolate the failing layer fast", "Write a blameless postmortem"] },
+          { id: "9.9.2", title: "Incident drills: CPU, memory, disk, network, DB, Redis and K8s", objectives: ["Recognise each resource's failure signature", "Run one drill end to end", "Map symptoms to the fix"] },
+        ],
+      },
+      {
+        id: "9.10",
+        title: "AI + DevOps",
+        lessons: [
+          { id: "9.10.1", title: "LLM-assisted DevOps: code review, pipeline debugging, infra and K8s", objectives: ["Use AI as a pipeline doctor and pair reviewer", "Write prompts that produce correct configs", "Keep the human review gate"] },
+          { id: "9.10.2", title: "AIOps: anomaly detection, incident copilots and where AI fails", objectives: ["Separate real anomalies from noise", "Use an on-call copilot safely", "Know AI's failure modes in production"] },
+        ],
+      },
     ],
   },
   {

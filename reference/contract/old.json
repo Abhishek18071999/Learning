@@ -1,0 +1,32 @@
+﻿{
+  "paths": {
+    "/v1/lessons": {
+      "get": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "required": ["q"],
+                "properties": { "q": { "type": "string" } }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "items": { "type": "array" },
+                    "nextCursor": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

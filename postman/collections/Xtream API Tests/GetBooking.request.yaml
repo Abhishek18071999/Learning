@@ -1,0 +1,38 @@
+$kind: http-request
+name: GetBooking
+method: GET
+url: '{{baseUrl}}/Air/GetBooking/{{bookingId}}'
+order: 7000
+headers:
+  - key: Token
+    value: 'Bearer {{token}}'
+  - key: X-Correlation-ID
+    value: '{{$guid}}'
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      let body = {};
+      try { body = pm.response.json(); } catch (e) {}
+
+      pm.test('get booking HTTP 200', () => pm.response.to.have.status(200));
+      pm.test('get booking envelope status is 200', () => pm.expect(body.statusCode).to.eql(200));
+
+      const result = body.result || {};
+      pm.test('get booking returns the requested booking', () => {
+        pm.expect(String(result.bookingId ?? result.bookingID ?? '')).to.eql(String(pm.collectionVariables.get('bookingId')));
+      });
+
+      const amount = result.orderAmount ?? result.totalFare ?? result.amount ?? result.totalAmount;
+      const bookedAmount = pm.collectionVariables.get('bookedAmount');
+      if (amount != null && bookedAmount) {
+        pm.test('get booking amount equals the booked amount', () => {
+          pm.expect(Number(amount)).to.be.closeTo(Number(bookedAmount), 0.01);
+        });
+      }
+
+      pm.test('get booking returns passengers', () => {
+        const pax = result.flightPassengerList || result.passengers || result.passengerList;
+        pm.expect(Array.isArray(pax), 'passenger list missing').to.be.true;
+        pm.expect(pax.length).to.be.greaterThan(0);
+      });

@@ -1,0 +1,1488 @@
+=== GIT ===
+## claude/vibrant-mendel-tttjb2...origin/claude/vibrant-mendel-tttjb2
+ M src/data/lessonMeta.generated.ts
+* claude/vibrant-mendel-tttjb2
+  remotes/origin/HEAD -> origin/claude/vibrant-mendel-tttjb2
+  remotes/origin/claude/project-thread-r8cz24
+  remotes/origin/claude/project-thread-tjwapp
+  remotes/origin/claude/vibrant-mendel-tttjb2
+
+=== DATA ===
+capstone.ts, curriculum.ts, diagnostic.ts, lessonMeta.generated.ts, lessons, newsTopics.ts, resources
+=== LESSONS ===
+index.ts, l0-1-1.ts, l0-1-2.ts, l0-2-1.ts, l0-2-2.ts, l0-3-1.ts, l0-3-2.ts, l0-4-1.ts, l1-1-1.ts, l1-1-2.ts, l1-1-3.ts, l1-1-4.ts, l1-2-1.ts, l1-2-2.ts, l1-2-3.ts, l1-3-1.ts, l1-3-2.ts, l1-3-3.ts, l1-4-1.ts, l1-4-2.ts, l10-1-1.ts, l10-2-1.ts, l2-1-1.ts, l2-1-2.ts, l2-2-1.ts, l2-2-2.ts, l2-3-1.ts, l2-3-2.ts, l2-3-3.ts, l2-4-1.ts, l2-4-2.ts, l3-1-1.ts, l3-2-1.ts, l3-3-1.ts, l3-4-1.ts, l3-4-2.ts, l3-4-3.ts, l3-5-1.ts, l4-1-1.ts, l4-1-2.ts, l4-1-3.ts, l4-2-1.ts, l4-3-1.ts, l4-4-1.ts, l4-4-2.ts, l5-1-1.ts, l5-1-2.ts, l5-1-3.ts, l5-2-1.ts, l5-3-1.ts, l5-4-1.ts, l6-1-1.ts, l6-2-1.ts, l6-3-1.ts, l6-3-10.ts, l6-3-11.ts, l6-3-12.ts, l6-3-2.ts, l6-3-3.ts, l6-3-4.ts, l6-3-5.ts, l6-3-6.ts, l6-3-7.ts, l6-3-8.ts, l6-3-9.ts, l6-4-1.ts, l7-1-1.ts, l7-1-2.ts, l7-1-3.ts, l7-2-1.ts, l7-2-2.ts, l7-3-1.ts, l7-3-2.ts, l8-1-1.ts, l8-2-1.ts, l8-3-1.ts, l8-4-1.ts, l9-1-1.ts, l9-1-2.ts, l9-2-1.ts, l9-3-1.ts, l9-4-1.ts, l9-4-2.ts, l9-5-1.ts, l9-6-1.ts
+=== TYPES ===
+// Content model for DevAtlas. Every lesson follows the Mentor lesson format,
+// so the lesson page can render any lesson without special cases.
+
+/** A paragraph of text. Supports `inline code`, **bold** and [links](https://…). */
+export type Rich = string;
+
+export type Level = "Beginner" | "Intermediate" | "Advanced";
+
+export interface CodeSample {
+  lang: string;
+  file?: string;
+  code: string;
+}
+
+export interface HandsOnStep {
+  title: string;
+  text?: Rich[];
+  code?: CodeSample;
+  output?: string;
+  notes?: Rich[];
+}
+
+/** A left-to-right flow of boxes, used for "under the hood" diagrams. */
+export interface FlowNode {
+  label: string;
+  sub?: string;
+}
+export interface Diagram {
+  title: string;
+  nodes: FlowNode[];
+  /** Optional label for the arrow after node i. */
+  edges?: string[];
+  caption?: Rich;
+}
+
+export interface Mistake {
+  mistake: string;
+  why: string;
+  wrong: string;
+  fix: string;
+}
+
+export type PracticeTag = "Security" | "Performance" | "Cost" | "Maintainability" | "Reliability";
+
+export interface QuizQuestion {
+  kind: "mcq" | "output" | "bug";
+  prompt: Rich;
+  code?: CodeSample;
+  options: string[];
+  answer: number;
+  explanation: Rich;
+}
+
+export interface HomeworkTask {
+  title: string;
+  brief: Rich[];
+  criteria: string[];
+  hints: string[];
+  solution: { text: Rich[]; code?: CodeSample; output?: string; pitfalls?: string[] };
+}
+
+export interface Lesson {
+  id: string; // e.g. "0.1.1" = phase.module.number
+  title: string;
+  minutes: number;
+  level: Level;
+  prerequisites: string[];
+  summary: string;
+  terms: { term: string; def: string }[];
+  problem: Rich[];
+  concept: { analogy: Rich[]; precise: Rich[] };
+  underTheHood: { text: Rich[]; diagram?: Diagram };
+  handsOn: HandsOnStep[];
+  companies: Rich[];
+  mistakes: Mistake[];
+  bestPractices: { tag: PracticeTag; text: Rich }[];
+  interview: { q: string; a: Rich }[];
+  quickCheck: QuizQuestion[];
+  cheatSheet: Rich[];
+  homework: {
+    basic: HomeworkTask;
+    intermediate: HomeworkTask;
+    challenge: HomeworkTask;
+    capstone: HomeworkTask;
+  };
+  deeper: { label: string; url: string }[];
+  nextPreview: Rich;
+}
+
+/**
+ * The small, always-loaded part of a lesson, generated into src/data/lessonMeta.generated.ts by
+ * scripts/gen-lesson-meta.mjs. Lists, search, glossary and revision only need this; the full
+ * Lesson is loaded on demand with loadLesson(id).
+ */
+export interface LessonMeta extends Pick<Lesson, "id" | "title" | "minutes" | "level" | "summary" | "terms" | "interview" | "quickCheck" | "cheatSheet"> {
+  capstone: Pick<HomeworkTask, "title" | "criteria">;
+  /** Hands-on steps with code plus homework tiers whose solution has code. */
+  codeSamples: number;
+  /** Source file name in src/data/lessons, e.g. "l0-1-1.ts". */
+  file: string;
+}
+
+export interface LessonStub {
+  id: string;
+  title: string;
+  /** Learning objectives shown while full content is being written. */
+  objectives: string[];
+}
+
+export interface Module {
+  id: string; // "0.1"
+  title: string;
+  lessons: LessonStub[];
+}
+
+export interface Phase {
+  id: number;
+  title: string;
+  tagline: string;
+  icon: string;
+  weeks: number; // baseline at ~10 h/week
+  areas: Area[];
+  modules: Module[];
+}
+
+export type Area =
+  | "programming"
+  | "frontend"
+  | "backend"
+  | "databases"
+  | "dsa"
+  | "cloud"
+  | "devops"
+  | "ai"
+  | "foundations"
+  | "architecture"
+  | "career";
+
+/** A curated external link on the Resources page. Every URL was opened and checked by hand. */
+export interface ResourceLink {
+  label: string;
+  url: string;
+}
+
+export interface ReadLink extends ResourceLink {
+  kind: "repo" | "article" | "docs";
+}
+
+export interface VideoLink extends ResourceLink {
+  channel: string;
+  lang: "Hindi" | "English";
+}
+
+/**
+ * One topic: short revision lines plus the best repo/article, video and practice link found for it.
+ * A topic with no revision lines and no links is listed but still waiting for verified links.
+ */
+export interface ResourceTopic {
+  id: string;
+  title: string;
+  /** The course lesson that covers this topic, if any. */
+  lessonId?: string;
+  revision: string[];
+  read?: ReadLink;
+  video?: VideoLink;
+  practice?: ResourceLink;
+}
+
+/** An end-to-end course inside a section, e.g. React inside Frontend. */
+export interface ResourceCourse {
+  id: string;
+  title: string;
+  topics: ResourceTopic[];
+}
+
+export interface ResourceSection {
+  id: string;
+  title: string;
+  icon: string;
+  tagline: string;
+  /** Set for sections that mirror a curriculum phase. */
+  phaseId?: number;
+  courses: ResourceCourse[];
+}
+
+=== l4-3-1.ts ===
+ ["Use a bigger server", "Move parsing to tokio::task::spawn_blocking", "Add more routes", "Use unwrap"],
+      answer: 1,
+      explanation: "CPU-heavy work blocks the async worker thread; run it on the blocking pool.",
+    },
+    {
+      kind: "mcq",
+      prompt: "A POST with malformed JSON reaches this handler: `async fn create(Json(item): Json<NewsItem>)`. What happens?",
+      options: ["Handler runs with default values", "Axum rejects it with a 4xx before the handler runs", "The server panics", "500 error"],
+      answer: 1,
+      explanation: "The Json extractor fails and Axum returns a client error response.",
+    },
+  ],
+  cheatSheet: [
+    "Router::new().route(path, get(h).post(h2)).with_state(state).",
+    "Extractors: State, Path, Query, Json, headers.",
+    "Return Result<impl IntoResponse, AppError>; impl IntoResponse for AppError.",
+    "Arc for sharing; tokio::sync locks across awaits; keep locks short.",
+    "spawn for background tasks; spawn_blocking for CPU work.",
+    "Bound concurrency: buffer_unordered(n) / Semaphore; timeouts everywhere.",
+    "Test with Router + tower::ServiceExt::oneshot.",
+    "Graceful shutdown on SIGTERM.",
+  ],
+  homework: {
+    basic: {
+      title: "Add DELETE and topic stats",
+      brief: ["Add DELETE /items/{id} (204 or 404) and GET /stats returning item counts per topic, with tests using oneshot."],
+      criteria: ["Correct status codes", "Stats computed under a read lock only", "Tests pass"],
+      hints: ["StatusCode::NO_CONTENT; a HashMap<String, usize> serialises to a JSON object."],
+      solution: {
+        text: ["Write lock for delete, read lock for stats, both held only for the minimal scope."],
+        code: {
+          lang: "rust",
+          code: `async fn delete_item(State(state): State<AppState>, Path(id): Path<u64>) -> Result<StatusCode, AppError> {
+    match state.items.write().await.remove(&id) {
+        Some(_) => Ok(StatusCode::NO_CONTENT),
+        None => Err(AppError::NotFound(id)),
+    }
+}
+
+async fn stats(State(state): State<AppState>) -> Json<HashMap<String, usize>> {
+    let mut counts = HashMap::new();
+    for item in state.items.read().await.values() {
+        *counts.entry(item.topic.clone()).or_insert(0) += 1;
+    }
+    Json(counts)
+}
+
+// .route("/items/{id}", get(get_item).delete(delete_item))
+// .route("/stats", get(stats))`,
+        },
+      },
+    },
+    intermediate: {
+      title: "Middleware: timeout, tracing and request ids",
+      brief: ["Add tower-http layers: TraceLayer for structured request logs, a TimeoutLayer of 5 seconds, and request-id propagation (SetRequestIdLayer + PropagateRequestIdLayer). Show logs for one request."],
+      criteria: ["Layers applied to the router", "Timeout returns a 408/503-style response (depending on configuration)", "Request id present in response headers and logs"],
+      hints: ["cargo add tower-http --features trace,timeout,request-id ; cargo add tracing tracing-subscriber"],
+      solution: {
+        text: [
+          "Layers wrap the router like middleware, and order matters. In a ServiceBuilder the first layer is the outermost. SetRequestIdLayer comes before TraceLayer, so the span can read the id. PropagateRequestIdLayer comes before TimeoutLayer, so a 408 produced by the timeout passes back through it and still carries the id. Checked against tower-http 0.7.1 with axum 0.8.9: `TimeoutLayer::new(duration)` is deprecated since tower-http 0.6.7; `with_status_code` makes the status explicit.",
+          "The custom make_span_with puts method, URI and request id on the span, so every log line inside the request has them. One request with `curl -H 'x-request-id: demo-1' localhost:3000/items/42` produced (timestamps removed): `DEBUG request{method=GET uri=/items/42 request_id=\"demo-1\"}: tower_http::trace::on_response: finished processing request latency=0 ms status=404`, and the response carried `x-request-id: demo-1`.",
+          "The tests use oneshot as in the lesson. The timeout test runs on a paused Tokio clock (`start_paused = true`, which needs tokio's test-util feature), so a handler sleeping 10 seconds hits the 5-second timeout instantly in virtual time.",
+        ],
+        code: {
+          lang: "rust", file: "src/main.rs",
+          code: `// cargo add tower --features util
+// cargo add tower-http --features trace,timeout,request-id
+// cargo add tracing ; cargo add tracing-subscriber --features env-filter
+// cargo add --dev tokio --features test-util,macros,rt     (paused clock in the timeout test)
+//
+// src/main.rs: NewsItem, AppState, AppError and the handlers are unchanged from the lesson.
+use std::{collections::HashMap, sync::Arc, time::Duration};
+
+use axum::{
+    extract::{Path, Query, State},
+    http::{Request, StatusCode},
+    response::{IntoResponse, Response},
+    routing::get,
+    Json, Router,
+};
+use serde::{Deserialize, Serialize};
+use tokio::sync::RwLock;
+use tower::ServiceBuilder;
+use tower_http::{
+    request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},
+    timeout::TimeoutLayer,
+    trace::TraceLayer,
+};
+
+// ... structs and handlers from the lesson ...
+
+fn routes(state: AppState) -> Router {
+    Router::new()
+        .route("/health", get(|| async { "ok" }))
+        .route("/items", get(list_items).post(create_item))
+        .route("/items/{id}", get(get_item))
+        .with_state(state)
+}
+
+/// Middleware stack. ServiceBuilder applies layers top to bottom, outermost first:
+/// the id is set before tracing (so the span has it) and copied to the response
+/// after the timeout layer (so a 408 also carries it).
+fn with_middleware(router: Router) -> Router {
+    router.layer(
+        ServiceBuilder::new()
+            .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid)) // keeps a caller's x-request-id, else a UUID
+            .layer(TraceLayer::new_for_http().make_span_with(|req: &Request<_>| {
+                let request_id = req.headers().get("x-request-id").and_then(|v| v.to_str().ok()).unwrap_or("-");
+                tracing::info_span!("request", method = %req.method(), uri = %req.uri(), request_id)
+            }))
+            .layer(PropagateRequestIdLayer::x_request_id())
+            .layer(TimeoutLayer::with_status_code(StatusCode::REQUEST_TIMEOUT, Duration::from_secs(5))),
+    )
+}
+
+fn app(state: AppState) -> Router {
+    with_middleware(routes(state))
+}
+
+#[tokio::main]
+async fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "news_service=info,tower_http=debug".into()),
+        )
+        .init();
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.expect("bind port 3000");
+    tracing::info!("listening on {}", listener.local_addr().expect("local addr"));
+    axum::serve(listener, app(AppState::default()))
+        .with_graceful_shutdown(async { tokio::signal::ctrl_c().await.ok(); })
+        .await
+        .expect("server error");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn generates_a_request_id_when_missing() {
+        let res = app(AppState::default()).oneshot(Request::get("/health").body(Body::empty()).unwrap()).await.unwrap();
+        let id = res.headers()["x-request-id"].to_str().unwrap();
+        assert_eq!(id.len(), 36, "expected a UUID, got {id}");
+    }
+
+    #[tokio::test]
+    async fn propagates_the_callers_request_id() {
+        let req = Request::get("/items/7").header("x-request-id", "req-123").body(Body::empty()).unwrap();
+        let res = app(AppState::default()).oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+        assert_eq!(res.headers()["x-request-id"], "req-123");
+    }
+
+    #[tokio::test(start_paused = true)] // paused clock: the 10 s sleep finishes instantly in virtual time
+    async fn slow_handlers_get_408_with_the_request_id() {
+        let slow = Router::new().route("/slow", get(|| async {
+            tokio::time::sleep(Duration::from_secs(10)).await;
+            "too late"
+        }));
+        let req = Request::get("/slow").header("x-request-id", "req-slow").body(Body::empty()).unwrap();
+        let res = with_middleware(slow).oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::REQUEST_TIMEOUT);
+        assert_eq!(res.headers()["x-request-id"], "req-slow");
+    }
+}`,
+        },
+        output: "$ cargo test -q\n\nrunning 3 tests\n...\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+      },
+    },
+    challenge: {
+      title: "Persist with sqlx and PostgreSQL",
+      brief: ["Replace the in-memory map with PostgreSQL using sqlx (PgPool in state), with a migration for the items table, and keep all handler signatures the same. Map sqlx errors into AppError."],
+      criteria: ["Pool shared in state", "Migrations via sqlx-cli or sqlx::migrate!", "Unique constraint on url, conflict → 409"],
+      hints: ["sqlx::query_as!(…) checks queries at compile time against DATABASE_URL (or offline metadata)."],
+      solution: {
+        text: [
+          "State becomes { db: PgPool }, and the handler signatures are the same as before, apart from ids becoming i64 because PostgreSQL has no unsigned integers. Each handler runs a query with bound parameters ($1, $2), so there is no string-built SQL. A unique violation (SQLSTATE 23505) is detected with `is_unique_violation()` in a `From<sqlx::Error> for AppError` impl, becomes AppError::Conflict and returns 409. Any other database error is logged and returned as a generic 500, so SQL details never reach the client.",
+          "`query_as!` checks each SQL string and its column types against the real schema at compile time, which is why DATABASE_URL must point at a migrated database during `cargo build` (or you commit offline metadata with `cargo sqlx prepare`). `sqlx::migrate!()` embeds ./migrations in the binary and applies them at startup, tracked in the _sqlx_migrations table. For several replicas, run the migrations as a separate deploy step instead.",
+          "The tests use `#[sqlx::test]`, which creates a fresh database per test from DATABASE_URL and applies the migrations, then drive the router with oneshot as in the lesson. They cover create, get, list, the 409 on a duplicate url (constraint name items_url_key) and the 404. Verified against PostgreSQL 16 with sqlx 0.9.0, axum 0.8.9; clippy is clean.",
+        ],
+        code: {
+          lang: "rust", file: "migrations + src/main.rs",
+          code: `// cargo add sqlx --features runtime-tokio,postgres,macros,migrate   (sqlx 0.9.0)
+// ---- migrations/20261018000000_create_items.sql ----
+// CREATE TABLE items (
+//     id    BIGINT PRIMARY KEY,
+//     title TEXT   NOT NULL CHECK (btrim(title) <> ''),
+//     url   TEXT   NOT NULL,
+//     topic TEXT   NOT NULL,
+//     CONSTRAINT items_url_key UNIQUE (url)
+// );
+// CREATE INDEX items_topic_id_idx ON items (topic, id DESC);   -- list by topic, newest first
+
+// ---- src/main.rs (DATABASE_URL must point at a migrated database at compile time, or use cargo sqlx prepare for offline builds) ----
+use axum::{
+    extract::{Path, Query, State},
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    routing::get,
+    Json, Router,
+};
+use serde::{Deserialize, Serialize};
+use sqlx::{postgres::PgPoolOptions, PgPool};
+
+// PostgreSQL has no unsigned integers, so ids are i64 (BIGINT) end to end.
+#[derive(Clone, Serialize, Deserialize)]
+struct NewsItem {
+    id: i64,
+    title: String,
+    url: String,
+    topic: String,
+}
+
+#[derive(Clone)]
+struct AppState {
+    db: PgPool, // a pool is an Arc inside: cloning per request is cheap
+}
+
+enum AppError {
+    NotFound(i64),
+    Invalid(String),
+    Conflict(String),
+    Database(sqlx::Error),
+}
+
+impl From<sqlx::Error> for AppError {
+    fn from(e: sqlx::Error) -> Self {
+        match &e {
+            // 23505 unique_violation: duplicate id (primary key) or duplicate url
+            sqlx::Error::Database(db) if db.is_unique_violation() => {
+                AppError::Conflict(format!("item already exists ({})", db.constraint().unwrap_or("unique")))
+            }
+            _ => AppError::Database(e),
+        }
+    }
+}
+
+impl IntoResponse for AppError {
+    fn into_response(self) -> Response {
+        let (status, message) = match self {
+            AppError::NotFound(id) => (StatusCode::NOT_FOUND, format!("news item {id} not found")),
+            AppError::Invalid(msg) => (StatusCode::UNPROCESSABLE_ENTITY, msg),
+            AppError::Conflict(msg) => (StatusCode::CONFLICT, msg),
+            AppError::Database(e) => {
+                eprintln!("database error: {e}"); // details in logs, not in the response
+                (StatusCode::INTERNAL_SERVER_ERROR, "internal error".to_string())
+            }
+        };
+        (status, Json(serde_json::json!({ "error": message }))).into_response()
+    }
+}
+
+#[derive(Deserialize)]
+struct ListParams {
+    topic: Option<String>,
+    limit: Option<i64>,
+}
+
+async fn list_items(State(state): State<AppState>, Query(p): Query<ListParams>) -> Result<Json<Vec<NewsItem>>, AppError> {
+    let limit = p.limit.unwrap_or(20);
+    if !(1..=100).contains(&limit) {
+        return Err(AppError::Invalid("limit must be between 1 and 100".into()));
+    }
+    // query_as! checks this SQL and the column types against the schema at compile time
+    let items = sqlx::query_as!(
+        NewsItem,
+        "SELECT id, title, url, topic FROM items WHERE ($1::text IS NULL OR topic = $1) ORDER BY id DESC LIMIT $2",
+        p.topic,
+        limit
+    )
+    .fetch_all(&state.db)
+    .await?;
+    Ok(Json(items))
+}
+
+async fn get_item(State(state): State<AppState>, Path(id): Path<i64>) -> Result<Json<NewsItem>, AppError> {
+    sqlx::query_as!(NewsItem, "SELECT id, title, url, topic FROM items WHERE id = $1", id)
+        .fetch_optional(&state.db)
+        .await?
+        .map(Json)
+        .ok_or(AppError::NotFound(id))
+}
+
+async fn create_item(State(state): State<AppState>, Json(item): Json<NewsItem>) -> Result<(StatusCode, Json<NewsItem>), AppError> {
+    if item.title.trim().is_empty() {
+        return Err(AppError::Invalid("title is required".into()));
+    }
+    let saved = sqlx::query_as!(
+        NewsItem,
+        "INSERT INTO items (id, title, url, topic) VALUES ($1, $2, $3, $4) RETURNING id, title, url, topic",
+        item.id,
+        item.title,
+        item.url,
+        item.topic
+    )
+    .fetch_one(&state.db)
+    .await?; // unique violation -> AppError::Conflict via From
+    Ok((StatusCode::CREATED, Json(saved)))
+}
+
+fn app(state: AppState) -> Router {
+    Router::new()
+        .route("/health", get(|| async { "ok" }))
+        .route("/items", get(list_items).post(create_item))
+        .route("/items/{id}", get(get_item))
+        .with_state(state)
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let url = std::env::var("DATABASE_URL")?; // e.g. postgres://news:...@localhost/news (never hard-coded)
+    let db = PgPoolOptions::new().max_connections(10).connect(&url).await?;
+    sqlx::migrate!().run(&db).await?; // applies ./migrations once; tracked in _sqlx_migrations
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
+    println!("listening on {}", listener.local_addr()?);
+    axum::serve(listener, app(AppState { db }))
+        .with_graceful_shutdown(async { tokio::signal::ctrl_c().await.ok(); })
+        .await?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::Request;
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    async fn send(pool: &PgPool, req: Request<Body>) -> (StatusCode, String) {
+        let res = app(AppState { db: pool.clone() }).oneshot(req).await.unwrap();
+        let status = res.status();
+        let body = res.into_body().collect().await.unwrap().to_bytes();
+        (status, String::from_utf8(body.to_vec()).unwrap())
+    }
+
+    fn post(json: &str) -> Request<Body> {
+        Request::post("/items").header("content-type", "application/json").body(Body::from(json.to_string())).unwrap()
+    }
+
+    // #[sqlx::test] creates a fresh database per test (from DATABASE_URL) and applies ./migrations
+    #[sqlx::test]
+    async fn create_get_list_and_conflict(pool: PgPool) {
+        let item = r#"{"id":1,"title":"Rust 2024 edition","url":"https://example.com/r","topic":"rust"}"#;
+        assert_eq!(send(&pool, post(item)).await.0, StatusCode::CREATED);
+        let (status, body) = send(&pool, Request::get("/items/1").body(Body::empty()).unwrap()).await;
+        assert_eq!((status, body.as_str()), (StatusCode::OK, item));
+
+        let same_url = r#"{"id":2,"title":"Copy","url":"https://example.com/r","topic":"rust"}"#;
+        assert_eq!(send(&pool, post(same_url)).await, (StatusCode::CONFLICT, r#"{"error":"item already exists (items_url_key)"}"#.into()));
+
+        let (_, list) = send(&pool, Request::get("/items?topic=rust").body(Body::empty()).unwrap()).await;
+        assert_eq!(list, format!("[{item}]"));
+    }
+
+    #[sqlx::test]
+    async fn missing_item_is_404(pool: PgPool) {
+        let (status, body) = send(&pool, Request::get("/items/42").body(Body::empty()).unwrap()).await;
+        assert_eq!((status, body.as_str()), (StatusCode::NOT_FOUND, r#"{"error":"news item 42 not found"}"#));
+    }
+}`,
+        },
+        output: "$ DATABASE_URL=postgres://...@localhost/news cargo test -q\n\nrunning 2 tests\n..\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+      },
+    },
+    capstone: {
+      title: "DevAtlas: Rust news service",
+      brief: ["Combine the ingester parser (lessons 1.4.x) with this Axum service: a background task refreshes feeds every 5 minutes with bounded concurrency, and the API serves /items, /items/{id}, /stats and /health. Containerise it with a multi-stage Dockerfile."],
+      criteria: ["Bounded, timed-out feed fetching", "Typed errors, no unwrap in handlers", "Docker image under 50 MB (e.g. distroless or debian-slim runtime stage)"],
+      hints: ["Build stage: rust image + cargo build --release; runtime: a slim base with only the binary and CA certificates."],
+      solution: {
+        text: ["A multi-stage build copies only the compiled binary into a minimal runtime image, typically tens of megabytes, compared with hundreds for a full toolchain image (lesson 9.1.1)."],
+      },
+    },
+  },
+  deeper: [
+    { label: "Axum docs (docs.rs)", url: "https://docs.rs/axum/latest/axum/" },
+    { label: "Tokio tutorial", url: "https://tokio.rs/tokio/tutorial" },
+    { label: "tower-http", url: "https://docs.rs/tower-http/latest/tower_http/" },
+    { label: "sqlx", url: "https://github.com/launchbadge/sqlx" },
+  ],
+  nextPreview: "Next: API design: REST, GraphQL and gRPC, versioning and pagination.",
+};
+
+=== l4-4-1.ts ===
+h volume?",
+      options: ["REST polling every second", "gRPC server streaming", "GraphQL query", "Email"],
+      answer: 1,
+      explanation: "gRPC supports efficient streaming over HTTP/2 with typed messages.",
+    },
+    {
+      kind: "bug",
+      prompt: "Users scrolling the news feed see some stories twice. Pagination uses ?offset=20&limit=20 ordered by published DESC. Why?",
+      options: ["The limit is too small", "New stories inserted at the top shift every offset, so earlier items reappear", "Missing CORS", "The client caches too much"],
+      answer: 1,
+      explanation: "Switch to cursor pagination keyed on (published, id).",
+    },
+  ],
+  cheatSheet: [
+    "REST: plural nouns + methods + status codes + ProblemDetails + OpenAPI.",
+    "GraphQL: client-shaped queries; add limits and DataLoader.",
+    "gRPC: Protobuf, HTTP/2, streaming, deadlines; internal calls.",
+    "Additive changes safe; rename/remove/retype are breaking.",
+    "Version when you must; Deprecation + Sunset headers; monitor usage.",
+    "Cursor pagination: opaque token, keyset query, LIMIT n+1, tie-breaker id.",
+    "Contracts in Git with breaking-change checks in CI.",
+  ],
+  homework: {
+    basic: {
+      title: "Design the DevAtlas REST API",
+      brief: ["Write an OpenAPI 3 YAML for users/me, lessons (list with filter/sort/cursor, get), progress (list, upsert) and attempts (create, list). Include error responses using ProblemDetails."],
+      criteria: ["Plural nouns, correct methods and codes", "Consistent list envelope with nextCursor", "Error schema reused via $ref"],
+      hints: ["Define components.schemas.Problem once and reference it."],
+      solution: {
+        text: ["A compact spec with shared components keeps the API consistent and lets you generate clients and docs."],
+        code: {
+          lang: "yaml",
+          file: "openapi.yaml (excerpt)",
+          code: `openapi: 3.0.3
+info: { title: DevAtlas API, version: "1.0" }
+paths:
+  /v1/lessons:
+    get:
+      parameters:
+        - { name: phase, in: query, schema: { type: integer } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+        - { name: after, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: A page of lessons
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Lesson" } }
+                  nextCursor: { type: string, nullable: true }
+        "400": { $ref: "#/components/responses/Problem" }
+components:
+  schemas:
+    Lesson:
+      type: object
+      required: [id, title, minutes]
+      properties: { id: { type: string }, title: { type: string }, minutes: { type: integer } }
+    Problem:
+      type: object
+      properties: { type: { type: string }, title: { type: string }, status: { type: integer }, detail: { type: string } }
+  responses:
+    Problem:
+      description: Error
+      content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } }`,
+        },
+      },
+    },
+    intermediate: {
+      title: "Cursor pagination in the .NET API",
+      brief: ["Implement GET /v1/lessons?limit&after with opaque cursors over (UpdatedAt, Id) in EF Core, returning { items, nextCursor }. Reject tampered cursors with 400."],
+      criteria: ["Keyset query with tie-breaker", "LIMIT n+1 to detect more pages", "Invalid cursor → 400 ProblemDetails"],
+      hints: ["Base64url-encode JSON {t, id}; optionally sign with HMAC to detect tampering."],
+      solution: {
+        text: ["Same algorithm as the Python version: decode the cursor, filter where (UpdatedAt < t) or (UpdatedAt == t and Id < id), order by UpdatedAt desc then Id desc, take limit + 1. EF Core translates the OR form reliably on every provider."],
+      },
+    },
+    challenge: {
+      title: "Breaking-change detector",
+      brief: ["Write a script that compares two OpenAPI JSON files and reports breaking changes: removed paths, removed response properties, newly required request properties, and type changes. Run it in CI on pull requests."],
+      criteria: ["Detects the four change types", "Exit code 1 on breaking changes", "Clear report"],
+      hints: ["Walk paths → methods → responses → schemas; resolve $ref first."],
+      solution: {
+        text: ["A focused checker catches the common breaks; mature teams use established tools (for example openapi-diff or oasdiff) that cover many more cases. The key idea is that contract changes get reviewed automatically, not discovered by clients."],
+        code: {
+          lang: "python",
+          code: `import json, sys
+
+def props(schema: dict) -> dict:
+    return schema.get("properties", {}) if isinstance(schema, dict) else {}
+
+def check(old: dict, new: dict) -> list[str]:
+    problems = []
+    for path, methods in old.get("paths", {}).items():
+        if path not in new.get("paths", {}):
+            problems.append(f"removed path {path}"); continue
+        for method, op in methods.items():
+            new_op = new["paths"][path].get(method)
+            if new_op is None:
+                problems.append(f"removed {method.upper()} {path}"); continue
+            old_req = op.get("requestBody", {}).get("content", {}).get("application/json", {}).get("schema", {})
+            new_req = new_op.get("requestBody", {}).get("content", {}).get("application/json", {}).get("schema", {})
+            for name in set(new_req.get("required", [])) - set(old_req.get("required", [])):
+                problems.append(f"{method.upper()} {path}: request field '{name}' became required")
+            old_res = op.get("responses", {}).get("200", {}).get("content", {}).get("application/json", {}).get("schema", {})
+            new_res = new_op.get("responses", {}).get("200", {}).get("content", {}).get("application/json", {}).get("schema", {})
+            for name, spec in props(old_res).items():
+                if name not in props(new_res):
+                    problems.append(f"{method.upper()} {path}: response field '{name}' removed")
+                elif spec.get("type") != props(new_res)[name].get("type"):
+                    problems.append(f"{method.upper()} {path}: response field '{name}' changed type")
+    return problems
+
+if __name__ == "__main__":
+    found = check(json.load(open(sys.argv[1])), json.load(open(sys.argv[2])))
+    print("\\n".join(found) or "no breaking changes")
+    sys.exit(1 if found else 0)`,
+        },
+      },
+    },
+    capstone: {
+      title: "DevAtlas: API contract and pagination",
+      brief: ["Prefix DevAtlas API routes with /v1, add cursor pagination to every list endpoint, publish the OpenAPI document as a CI artifact, and add a breaking-change check against main."],
+      criteria: ["All lists return { items, nextCursor }", "OpenAPI artifact per build", "CI fails on breaking changes unless a version bump is made"],
+      hints: ["Generate the OpenAPI document during the test job and diff against the main branch's artifact."],
+      solution: {
+        text: ["Contract checks turn API compatibility into an automated gate, like tests for behaviour."],
+      },
+    },
+  },
+  deeper: [
+    { label: "Microsoft REST API Guidelines", url: "https://github.com/microsoft/api-guidelines" },
+    { label: "Google API Design Guide", url: "https://cloud.google.com/apis/design" },
+    { label: "GraphQL: Learn", url: "https://graphql.org/learn/" },
+    { label: "gRPC: Introduction", url: "https://grpc.io/docs/what-is-grpc/introduction/" },
+  ],
+  nextPreview: "Next: idempotency, rate limiting, queues and caching: making APIs safe to retry and resilient under load.",
+};
+
+=== l4-4-2.ts ===
+ 4 requests arrive. How many are allowed?",
+      options: ["4", "3", "2", "1"],
+      answer: 1,
+      explanation: "The bucket starts full with 3 tokens; the 4th gets 429.",
+    },
+    {
+      kind: "bug",
+      prompt: "Sometimes the 'lesson completed' event is never published, though the progress row is saved. Code: save progress, commit, then publish to the queue. Fix?",
+      options: ["Publish first, then save", "Use the outbox pattern in the same transaction", "Increase the queue timeout", "Retry the HTTP request"],
+      answer: 1,
+      explanation: "A crash between commit and publish loses the event; the outbox makes both durable together.",
+    },
+  ],
+  cheatSheet: [
+    "Idempotency-Key + fingerprint + stored response; atomic with the action.",
+    "Rate limit per key; 429 + Retry-After; distributed counters for many replicas.",
+    "Token bucket: refill rate + burst capacity.",
+    "Slow work → queue → 202 Accepted → workers.",
+    "At-least-once delivery → idempotent consumers; DLQ after N attempts.",
+    "Outbox: event row in the same transaction; relay publishes.",
+    "Cache-aside + invalidate on write + single-flight for hot keys.",
+  ],
+  homework: {
+    basic: {
+      title: "Fixed window vs token bucket",
+      brief: ["Implement a fixed-window limiter (N per minute) and show with timestamps how a client can send 2N requests within two seconds across a window boundary. Show the token bucket does not allow that."],
+      criteria: ["Both limiters implemented", "Boundary burst demonstrated with explicit timestamps", "Explanation"],
+      hints: ["Send N requests at t=59.9s and N at t=60.1s."],
+      solution: {
+        text: ["Fixed windows reset counters at boundaries, so requests just before and after the reset both pass. A token bucket only refills at its rate, so the burst is capped at its capacity."],
+        code: {
+          lang: "python",
+          code: `class FixedWindow:
+    def __init__(self, limit: int, window: float) -> None:
+        self.limit, self.window, self.counts = limit, window, {}
+    def allow(self, key: str, now: float) -> bool:
+        bucket = (key, int(now // self.window))
+        self.counts[bucket] = self.counts.get(bucket, 0) + 1
+        return self.counts[bucket] <= self.limit
+
+fw = FixedWindow(limit=5, window=60)
+times = [59.9] * 5 + [60.1] * 5
+print(sum(fw.allow("k", t) for t in times), "of 10 allowed within 0.2s")   # 10 of 10`,
+        },
+      },
+    },
+    intermediate: {
+      title: "Idempotency in ASP.NET Core with EF Core",
+      brief: ["Implement an endpoint filter that requires Idempotency-Key on POST /v1/purchases, stores (key, fingerprint, status, response) in an IdempotencyRecords table with a unique key, and replays responses. Handle a concurrent duplicate (unique violation) with 409."],
+      criteria: ["Unique index on Key", "Replay returns identical status and body", "Different body with same key → 422"],
+      hints: ["Insert the record with status 'in_progress' before running the action."],
+      solution: {
+        text: ["Insert first to claim the key (the unique index makes the claim atomic), run the action, then update the record with the response. A second request that fails to insert because of the unique violation either waits and re-reads or returns 409 while the first is in progress."],
+      },
+    },
+    challenge: {
+      title: "Implement the outbox relay",
+      brief: ["Add an Outbox table to DevAtlas (Id, Type, Payload, CreatedAt, SentAt). When progress is completed, insert an outbox row in the same SaveChanges. Write a background service that polls unsent rows, publishes them (to a log or a real queue) and marks them sent, handling crashes between publish and update."],
+      criteria: ["Same transaction for data and outbox", "Relay is safe to run after a crash (at-least-once)", "Consumers deduplicate by event id"],
+      hints: ["Poll with ORDER BY CreatedAt LIMIT 100; use the event Id as the message id for consumer deduplication."],
+      solution: {
+        text: ["Because the relay might publish and then crash before marking the row sent, events can be published twice: that is why the event id travels with the message and consumers keep a processed-ids table. Many teams use a library (MassTransit, NServiceBus, Wolverine in .NET) that implements outbox and inbox patterns."],
+      },
+    },
+    capstone: {
+      title: "DevAtlas: reliable background work",
+      brief: ["Add a queue (Redis streams, RabbitMQ or a cloud queue) to DevAtlas: the API publishes lesson.completed via an outbox; a worker awards badges idempotently; the weekly digest is a scheduled job enqueueing one message per user. Add per-user rate limits on the AI /ask endpoint."],
+      criteria: ["No slow work in HTTP handlers", "Duplicate events do not double-award badges", "429 with Retry-After on /ask abuse"],
+      hints: ["Start with docker-compose services for the broker and worker."],
+      solution: {
+        text: ["With idempotency, queues, the outbox and rate limits, DevAtlas's backend handles retries, spikes and partial failures the way production systems must."],
+      },
+    },
+  },
+  deeper: [
+    { label: "Stripe Docs: Idempotent requests", url: "https://docs.stripe.com/api/idempotent_requests" },
+    { label: "Rate limiting middleware in ASP.NET Core", url: "https://learn.microsoft.com/en-us/aspnet/core/performance/rate-limit" },
+    { label: "microservices.io: Transactional outbox", url: "https://microservices.io/patterns/data/transactional-outbox.html" },
+    { label: "AWS Builders' Library: Timeouts, retries and backoff with jitter", url: "https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/" },
+  ],
+  nextPreview: "Next phase: databases in depth. Indexes and query plans: why your site is slow on Friday, and how to read EXPLAIN to fix it.",
+};
+
+=== l5-1-2.ts ===
+ of MySQL InnoDB?",
+      options: ["READ UNCOMMITTED", "READ COMMITTED", "REPEATABLE READ", "SERIALIZABLE"],
+      answer: 2,
+      explanation: "InnoDB defaults to REPEATABLE READ; PostgreSQL defaults to READ COMMITTED.",
+    },
+    {
+      kind: "bug",
+      prompt: "Two transfers occasionally fail with deadlock errors. One locks wallet A then B; the other locks B then A. Best fix?",
+      options: ["Increase lock timeout", "Always lock wallets in ascending id order (and retry on deadlock)", "Use READ UNCOMMITTED", "Remove the transaction"],
+      answer: 1,
+      explanation: "Consistent ordering removes the cycle; retries handle rare remaining cases.",
+    },
+  ],
+  cheatSheet: [
+    "BEGIN … COMMIT/ROLLBACK; keep it short.",
+    "Anomalies: dirty read, non-repeatable read, phantom, lost update, write skew.",
+    "Defaults: PostgreSQL READ COMMITTED; MySQL InnoDB REPEATABLE READ.",
+    "Atomic: UPDATE … SET x = x - 1 WHERE … AND x > 0 → check rowcount.",
+    "Pessimistic: SELECT … FOR UPDATE. Optimistic: version column.",
+    "Constraints as safety net: CHECK, UNIQUE, FK.",
+    "Lock in consistent order; retry deadlocks (1213 / 40P01) and 40001.",
+  ],
+  homework: {
+    basic: {
+      title: "Wallet transfer with invariants",
+      brief: ["Using SQLite in Python, implement transfer(from_id, to_id, amount) in one transaction: fail without changes if funds are insufficient, write a ledger row, and prove with 50 concurrent random transfers that the total balance never changes and no balance goes negative."],
+      criteria: ["Single transaction per transfer", "CHECK (balance >= 0) constraint", "Invariant test passes"],
+      hints: ["Use BEGIN IMMEDIATE in SQLite to serialise writers."],
+      solution: {
+        text: ["Atomic conditional debit plus a CHECK constraint make insufficient funds impossible; the sum is invariant because each transfer debits and credits the same amount in one transaction."],
+        code: {
+          lang: "python",
+          code: `import os, random, sqlite3, tempfile, threading
+
+path = os.path.join(tempfile.mkdtemp(), "wallet.db")
+s = sqlite3.connect(path)
+s.execute("CREATE TABLE wallets (id INTEGER PRIMARY KEY, balance INTEGER NOT NULL CHECK (balance >= 0))")
+s.execute("CREATE TABLE ledger (src INTEGER, dst INTEGER, amount INTEGER)")
+s.executemany("INSERT INTO wallets VALUES (?, ?)", [(i, 100) for i in range(1, 6)])
+s.commit()
+
+def transfer(src: int, dst: int, amount: int) -> bool:
+    db = sqlite3.connect(path, timeout=10, isolation_level=None)
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        cur = db.execute("UPDATE wallets SET balance = balance - ? WHERE id = ? AND balance >= ?", (amount, src, amount))
+        if cur.rowcount != 1:
+            db.execute("ROLLBACK"); return False
+        db.execute("UPDATE wallets SET balance = balance + ? WHERE id = ?", (amount, dst))
+        db.execute("INSERT INTO ledger VALUES (?, ?, ?)", (src, dst, amount))
+        db.execute("COMMIT"); return True
+    except Exception:
+        db.execute("ROLLBACK"); raise
+
+random.seed(1)
+jobs = [threading.Thread(target=transfer, args=(random.randint(1, 5), random.randint(1, 5), random.randint(1, 80))) for _ in range(50)]
+for j in jobs: j.start()
+for j in jobs: j.join()
+total, minimum = s.execute("SELECT SUM(balance), MIN(balance) FROM wallets").fetchone()
+assert total == 500 and minimum >= 0
+print("total", total, "min", minimum)`,
+        },
+      },
+    },
+    intermediate: {
+      title: "Observe isolation in MySQL",
+      brief: ["With two MySQL sessions (two terminals running `docker exec -it mysql-lab mysql -uroot -p…`), demonstrate: (1) REPEATABLE READ gives the same result for a repeated SELECT inside a transaction even after the other session commits; (2) SELECT … FOR UPDATE makes the second session wait. Record each step."],
+      criteria: ["Step-by-step transcript of both sessions", "Correct explanation of each observation"],
+      hints: ["SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED; to compare."],
+      solution: {
+        text: [
+          "Session A: BEGIN; SELECT seats_left FROM sessions WHERE id=1; → 5. Session B: UPDATE … SET seats_left=4 (autocommit). Session A: SELECT again → still 5 under REPEATABLE READ, because InnoDB gives the transaction a consistent snapshot taken at its first read. Under READ COMMITTED every statement gets a fresh snapshot, so A sees B's commit immediately.",
+          "A detail worth knowing: inside the same REPEATABLE READ transaction, `SELECT … FOR UPDATE` returned 4, while the plain SELECT before and after it returned 5. Locking reads (and UPDATE/DELETE) always work on the latest committed row version; only plain reads use the snapshot. That is why read-then-update code must use a locking read or an atomic UPDATE.",
+          "Locking: A: BEGIN; SELECT … FOR UPDATE; B: UPDATE the same row → blocks until A commits or rolls back, and both decrements are applied. If A never finishes, B fails after innodb_lock_wait_timeout with error 1205. B's plain SELECT does not wait at all, because MVCC readers never block on row locks.",
+          "Every result in the comments was observed on MySQL 8.0 by running these exact statements on two connections.",
+        ],
+        code: {
+          lang: "sql",
+          file: "isolation_transcript.sql",
+          code: `-- Two terminals, both: docker exec -it mysql-lab mysql -uroot -p shop
+-- [A] / [B] says which terminal runs the next lines. Results observed on MySQL 8.0 are in comments.
+
+-- Setup (either terminal)
+CREATE TABLE sessions (id INT PRIMARY KEY, seats_left INT NOT NULL);
+INSERT INTO sessions VALUES (1, 5);
+
+-- ===== 1. REPEATABLE READ keeps a snapshot =====
+-- [A]
+SELECT @@transaction_isolation;                           -- REPEATABLE-READ (InnoDB default)
+BEGIN;
+SELECT seats_left FROM sessions WHERE id = 1;             -- 5  (the snapshot is taken at this first read)
+-- [B]  autocommit: committed immediately
+UPDATE sessions SET seats_left = 4 WHERE id = 1;          -- Query OK, 1 row affected
+-- [A]
+SELECT seats_left FROM sessions WHERE id = 1;             -- still 5: plain reads use the snapshot
+SELECT seats_left FROM sessions WHERE id = 1 FOR UPDATE;  -- 4: locking reads see the latest committed row
+SELECT seats_left FROM sessions WHERE id = 1;             -- 5 again: back to the snapshot
+COMMIT;
+SELECT seats_left FROM sessions WHERE id = 1;             -- 4: new transaction, new snapshot
+
+-- ===== 2. Same steps under READ COMMITTED =====
+-- [A]
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+BEGIN;
+SELECT seats_left FROM sessions WHERE id = 1;             -- 4
+-- [B]
+UPDATE sessions SET seats_left = 3 WHERE id = 1;
+-- [A]
+SELECT seats_left FROM sessions WHERE id = 1;             -- 3: every statement takes a fresh snapshot
+COMMIT;
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+
+-- ===== 3. SELECT ... FOR UPDATE makes the other writer wait =====
+-- [A]
+BEGIN;
+SELECT seats_left FROM sessions WHERE id = 1 FOR UPDATE;  -- 3, row is now locked by A
+-- [B]
+SET SESSION innodb_lock_wait_timeout = 5;
+UPDATE sessions SET seats_left = seats_left - 1 WHERE id = 1;   -- hangs ...
+-- [A]
+UPDATE sessions SET seats_left = seats_left - 1 WHERE id = 1;
+COMMIT;
+-- [B] the UPDATE returns as soon as A commits: Query OK, 1 row affected (2.00 sec)
+SELECT seats_left FROM sessions WHERE id = 1;             -- 1: both decrements applied, none lost
+
+-- ===== 4. Lock wait timeout =====
+-- [A]
+BEGIN;
+SELECT seats_left FROM sessions WHERE id = 1 FOR UPDATE;  -- 1, and A does not commit
+-- [B]
+UPDATE sessions SET seats_left = seats_left - 1 WHERE id = 1;
+-- after 5 s: ERROR 1205 (HY000): Lock wait timeout exceeded; try restarting transaction
+SELECT seats_left FROM sessions WHERE id = 1;             -- 1, instantly: plain reads never wait for row locks
+-- [A]
+ROLLBACK;`,
+        },
+        pitfalls: [
+          "Forgetting that the mysql client is in autocommit mode: without BEGIN, each SELECT is its own transaction and you will not see the snapshot effect",
+          "Leaving terminal A's transaction open and wondering why every later write from B hangs",
+        ],
+      },
+    },
+    challenge: {
+      title: "Write skew and SERIALIZABLE",
+      brief: ["Model 'at least one mentor must be on call': two mentors each check that the other is on call and then go off call at the same time. Show this anomaly under snapshot-based isolation and fix it with SERIALIZABLE (PostgreSQL) or SELECT … FOR UPDATE on the relevant rows (MySQL). Explain why a row-level check alone fails."],
+      criteria: ["Anomaly reproduced or reasoned with a precise timeline", "Fix with explanation", "Retry handling for serialization failures"],
+      hints: ["Each transaction reads both rows but writes only its own row, so there is no direct write-write conflict."],
+      solution: {
+        text: [
+          "Timeline: T1 reads count(on_call)=2, T2 reads count=2, T1 sets mentor A off, T2 sets mentor B off, both commit → zero on call. No row was written by both, so row-level conflict detection does not fire: this is write skew. A CHECK constraint cannot help either, because the rule ('at least one row') spans several rows and each row on its own is valid.",
+          "The script replays that exact interleaving with two connections. Under REPEATABLE READ (snapshot isolation in PostgreSQL) both commits succeed and nobody is on call. Under SERIALIZABLE, PostgreSQL's SSI notices the read/write dependency cycle and fails T2's commit with SQLSTATE 40001; the retry wrapper re-runs the whole check-then-write, T2 now sees only one mentor on call and is refused.",
+          "The MySQL-style fix is to lock the set the decision depends on: `SELECT id FROM mentors WHERE on_call ORDER BY id FOR UPDATE`, then count in the application (PostgreSQL does not allow FOR UPDATE with count(*)). T2 blocks on the row locks, and when T1 commits, its locking read sees the latest committed rows, finds one mentor and refuses. The same function behaves the same way on MySQL 8.0 under its default REPEATABLE READ.",
+        ],
+        code: {
+          lang: "python",
+          file: "write_skew.py",
+          code: `"""Write skew: 'at least one mentor on call', reproduced and fixed in PostgreSQL."""
+import os
+import random
+import threading
+import time
+
+import psycopg
+from psycopg import IsolationLevel
+
+DSN = os.environ.get("DATABASE_URL", "postgresql://postgres@localhost:5432/postgres")  # password via PGPASSWORD
+RETRYABLE = {"40001", "40P01"}
+
+def connect(level: IsolationLevel) -> psycopg.Connection:
+    conn = psycopg.connect(DSN)
+    conn.isolation_level = level
+    return conn
+
+def reset() -> None:
+    with psycopg.connect(DSN, autocommit=True) as db:
+        db.execute("DROP TABLE IF EXISTS mentors")
+        db.execute("CREATE TABLE mentors (id int PRIMARY KEY, name text NOT NULL, on_call boolean NOT NULL)")
+        db.execute("INSERT INTO mentors VALUES (1, 'Asha', true), (2, 'Ravi', true)")
+
+def on_call_names() -> list[str]:
+    with psycopg.connect(DSN) as db:
+        return [r[0] for r in db.execute("SELECT name FROM mentors WHERE on_call ORDER BY id")]
+
+def count_on_call(conn: psycopg.Connection) -> int:
+    return conn.execute("SELECT count(*) FROM mentors WHERE on_call").fetchone()[0]
+
+def go_off(conn: psycopg.Connection, mentor_id: int) -> None:
+    conn.execute("UPDATE mentors SET on_call = false WHERE id = %s", (mentor_id,))
+
+def request_off_call(conn: psycopg.Connection, mentor_id: int) -> bool:
+    """The whole check-then-write as one unit of work (what the retry wrapper re-runs)."""
+    if count_on_call(conn) < 2:
+        return False
+    go_off(conn, mentor_id)
+    return True
+
+def run_in_transaction(conn, work, attempts: int = 5):
+    for i in range(attempts):
+        try:
+            result = work(conn)
+            conn.commit()
+            return result
+        except psycopg.Error as e:
+            conn.rollback()
+            if e.sqlstate not in RETRYABLE or i == attempts - 1:
+                raise
+            time.sleep((2 ** i) * 0.01 * random.random())
+
+def race(level: IsolationLevel) -> None:
+    reset()
+    t1, t2 = connect(level), connect(level)
+    seen1, seen2 = count_on_call(t1), count_on_call(t2)     # both read before either writes
+    print(f"T1 sees {seen1} on call, T2 sees {seen2} on call")
+    go_off(t1, 1)                                          # different rows: no write-write conflict
+    go_off(t2, 2)
+    t1.commit()
+    try:
+        t2.commit()
+        print("T2 commit: OK")
+    except psycopg.errors.SerializationFailure as e:
+        t2.rollback()
+        print(f"T2 commit: {e.sqlstate} serialization failure -> retrying the whole transaction")
+        allowed = run_in_transaction(t2, lambda c: request_off_call(c, 2))
+        print(f"T2 retry: request {'granted' if allowed else 'refused, Asha is already off call'}")
+    print(f"{level.name}: on call now = {on_call_names()}\\n")
+    t1.close(); t2.close()
+
+def request_off_call_locking(conn: psycopg.Connection, mentor_id: int) -> bool:
+    """MySQL-style fix (works in PostgreSQL too): lock the rows the decision depends on."""
+    rows = conn.execute("SELECT id FROM mentors WHERE on_call ORDER BY id FOR UPDATE").fetchall()
+    if len(rows) < 2:
+        return False
+    go_off(conn, mentor_id)
+    return True
+
+def race_with_locks() -> None:
+    reset()
+    t1, t2 = connect(IsolationLevel.READ_COMMITTED), connect(IsolationLevel.READ_COMMITTED)
+    results: dict[str, bool] = {}
+    request_off_call_locking(t1, 1)                        # T1 holds both row locks, not committed yet
+    worker = threading.Thread(target=lambda: results.update(t2=run_in_transaction(
+        t2, lambda c: request_off_call_locking(c, 2))))
+    worker.start()
+    time.sleep(0.5)                                        # T2 is now blocked on the row locks
+    t1.commit()                                            # T2 wakes up and re-checks the current rows
+    worker.join()
+    print(f"FOR UPDATE: T1 granted, T2 {'granted' if results['t2'] else 'refused'}; on call now = {on_call_names()}")
+    t1.close(); t2.close()
+
+if __name__ == "__main__":
+    race(IsolationLevel.REPEATABLE_READ)                   # snapshot isolation: anomaly
+    race(IsolationLevel.SERIALIZABLE)                      # SSI detects it, one transaction retries
+    race_with_locks()`,
+        },
+        output: "T1 sees 2 on call, T2 sees 2 on call\nT2 commit: OK\nREPEATABLE_READ: on call now = []\n\nT1 sees 2 on call, T2 sees 2 on call\nT2 commit: 40001 serialization failure -> retrying the whole transaction\nT2 retry: request refused, Asha is already off call\nSERIALIZABLE: on call now = ['Ravi']\n\nFOR UPDATE: T1 granted, T2 refused; on call now = ['Ravi']",
+        pitfalls: [
+          "Retrying only the failed COMMIT or UPDATE: the decision was made on stale data, so the whole transaction (including the read) must run again",
+          "Using SERIALIZABLE without a retry loop: 40001 errors are expected behaviour under load, not bugs",
+        ],
+      },
+    },
+    capstone: {
+      title: "DevAtlas: safe live-session booking",
+      brief: ["Add live mentoring sessions to DevAtlas (sessions, bookings tables) with an atomic booking endpoint, CHECK and UNIQUE constraints, deadlock-aware retries, and a concurrency test that fires 200 parallel bookings at a 20-seat session."],
+      criteria: ["Exactly 20 bookings after the test", "No duplicate bookings per user", "Endpoint returns 409 when full"],
+      hints: ["Use Testcontainers MySQL (lesson 4.1.2) for the concurrency test."],
+      solution: {
+        text: [
+          "The atomic UPDATE with rowcount check plus the bookings insert in one transaction is enough; constraints guarantee correctness even if a future code path forgets the rule.",
+          "`UPDATE live_sessions SET seats_left = seats_left - 1 WHERE id = @id AND seats_left > 0` decides and takes the seat in one statement. If it affects no row, the session is full (409) or does not exist (404). The booking insert runs in the same transaction, so a duplicate booking (error 1062 from the `one_booking_per_user` primary key) rolls back and gives the seat back.",
+          "CHECK (seats_left BETWEEN 0 AND capacity) is the safety net (MySQL 8.0.16+ enforces CHECK). Deadlocks (1213) and lock wait timeouts (1205) retry the whole transaction with jittered backoff, up to five attempts.",
+          "The test starts a real MySQL 8.0 in a Testcontainer, fires 200 parallel POSTs at a 20-seat session through WebApplicationFactory and checks the HTTP results and the database: exactly 20 × 201 Created, 180 × 409, 20 distinct users booked, seats_left = 0. It passes on .NET 9 (`dotnet test`, about 15 to 30 s including the container start).",
+        ],
+        code: {
+          lang: "csharp",
+          file: "Booking.Api/Program.cs + Booking.Tests/BookingTests.cs",
+          code: `// dotnet add Booking.Api package MySqlConnector
+// dotnet add Booking.Tests package Microsoft.AspNetCore.Mvc.Testing; dotnet add Booking.Tests package Testcontainers.MySql
+
+// Booking.Api/Program.cs: atomic live-session booking (MySQL 8 via MySqlConnector)
+using MySqlConnector;
+
+var builder = WebApplication.CreateBuilder(args);
+var cs = builder.Configuration.GetConnectionString("Booking")
+         ?? throw new InvalidOperationException("ConnectionStrings:Booking is not configured");  // env/secret store, not code
+builder.Services.AddSingleton(new MySqlDataSource(cs));
+var app = builder.Build();
+
+await using (var conn = await app.Services.GetRequiredService<MySqlDataSource>().OpenConnectionAsync())
+    await new MySqlCommand(BookingService.Schema, conn).ExecuteNonQueryAsync();   // real apps: a migration
+
+app.MapPost("/sessions/{sessionId:long}/bookings", async (long sessionId, BookRequest req, MySqlDataSource db) =>
+    await BookingService.BookAsync(db, sessionId, req.UserId) switch
+    {
+        BookingOutcome.Booked => Results.Created($"/sessions/{sessionId}/bookings/{req.UserId}", new { sessionId, req.UserId }),
+        BookingOutcome.Full => Results.Conflict(new { error = "session is full" }),
+        BookingOutcome.AlreadyBooked => Results.Conflict(new { error = "you already booked this session" }),
+        _ => Results.NotFound(),
+    });
+
+app.Run();
+
+public record BookRequest(long UserId);
+public enum BookingOutcome { Booked, Full, AlreadyBooked, NotFound }
+
+public static class BookingService
+{
+    public const string Schema = """
+        CREATE TABLE IF NOT EXISTS live_sessions (
+          id         BIGINT AUTO_INCREMENT PRIMARY KEY,
+          title      VARCHAR(200) NOT NULL,
+          capacity   INT NOT NULL CHECK (capacity > 0),
+          seats_left INT NOT NULL,
+          CONSTRAINT seats_in_range CHECK (seats_left BETWEEN 0 AND capacity)
+        );
+        CREATE TABLE IF NOT EXISTS bookings (
+          session_id BIGINT NOT NULL,
+          user_id    BIGINT NOT NULL,
+          booked_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          CONSTRAINT one_booking_per_user PRIMARY KEY (session_id, user_id),
+          FOREIGN KEY (session_id) REFERENCES live_sessions (id)
+        );
+        """;
+
+    public static async Task<BookingOutcome> BookAsync(MySqlDataSource db, long sessionId, long userId)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return await TryBookAsync(db, sessionId, userId);
+            }
+            catch (MySqlException e) when (attempt < 5 &&
+                e.ErrorCode is MySqlErrorCode.LockDeadlock or MySqlErrorCode.LockWaitTimeout)
+            {
+                await Task.Delay(Random.Shared.Next(5, 25) * attempt);   // backoff with jitter, then rerun everything
+            }
+        }
+    }
+
+    private static async Task<BookingOutcome> TryBookAsync(MySqlDataSource db, long sessionId, long userId)
+    {
+        await using var conn = await db.OpenConnectionAsync();
+        await using var tx = await conn.BeginTransactionAsync();
+
+        // 1) check and decrement in ONE statement: no window for another request to sneak in
+        var take = new MySqlCommand(
+            "UPDATE live_sessions SET seats_left = seats_left - 1 WHERE id = @id AND seats_left > 0", conn, tx);
+        take.Parameters.AddWithValue("@id", sessionId);
+        if (await take.ExecuteNonQueryAsync() == 0)
+        {
+            await tx.RollbackAsync();
+            var exists = new MySqlCommand("SELECT COUNT(*) FROM live_sessions WHERE id = @id", conn);
+            exists.Parameters.AddWithValue("@id", sessionId);
+            return Convert.ToInt64(await exists.ExecuteScalarAsync()) > 0 ? BookingOutcome.Full : BookingOutcome.NotFound;
+        }
+
+        // 2) the booking row in the same transaction; the primary key rejects a second booking by the same user
+        var insert = new MySqlCommand("INSERT INTO bookings (session_id, user_id) VALUES (@s, @u)", conn, tx);
+        insert.Parameters.AddWithValue("@s", sessionId);
+        insert.Parameters.AddWithValue("@u", userId);
+        try
+        {
+            await insert.ExecuteNonQueryAsync();
+        }
+        catch (MySqlException e) when (e.ErrorCode == MySqlErrorCode.DuplicateKeyEntry)
+        {
+            await tx.RollbackAsync();                                    // gives the seat back
+            return BookingOutcome.AlreadyBooked;
+        }
+        await tx.CommitAsync();
+        return BookingOutcome.Booked;
+    }
+}
+
+public partial class Program;   // lets WebApplicationFactory<Program> find the app
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Booking.Tests/BookingTests.cs: 200 parallel requests against real MySQL in a Testcontainer
+using System.Net;
+using System.Net.Http.Json;
+using Microsoft.AspNetCore.Mvc.Testing;
+using MySqlConnector;
+using Testcontainers.MySql;
+
+public sealed class BookingTests : IAsyncLifetime
+{
+    private readonly MySqlContainer _mysql = new MySqlBuilder("mysql:8.0").Build();
+
+    public Task InitializeAsync() => _mysql.StartAsync();
+    public Task DisposeAsync() => _mysql.DisposeAsync().AsTask();
+
+    [Fact]
+    public async Task Two_hundred_parallel_bookings_fill_exactly_twenty_seats()
+    {
+        await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(b =>
+            b.UseSetting("ConnectionStrings:Booking", _mysql.GetConnectionString()));
+        var client = factory.CreateClient();                              // starts the app, creates the schema
+        await using var db = new MySqlConnection(_mysql.GetConnectionString());
+        await db.OpenAsync();
+        await new MySqlCommand(
+            "INSERT INTO live_sessions (id, title, capacity, seats_left) VALUES (1, 'SQL office hours', 20, 20)", db)
+            .ExecuteNonQueryAsync();
+
+        var responses = await Task.WhenAll(Enumerable.Range(1, 200).Select(userId =>
+            client.PostAsJsonAsync("/sessions/1/bookings", new BookRequest(userId))));
+
+        Assert.Equal(20, responses.Count(r => r.StatusCode == HttpStatusCode.Created));
+        Assert.Equal(180, responses.Count(r => r.StatusCode == HttpStatusCode.Conflict));
+        Assert.Equal(20L, await ScalarAsync(db, "SELECT COUNT(DISTINCT user_id) FROM bookings WHERE session_id = 1"));
+        Assert.Equal(0L, await ScalarAsync(db, "SELECT seats_left FROM live_sessions WHERE id = 1"));
+
+        // a second session: the same user cannot book twice, and the seat is given back
+        await new MySqlCommand("INSERT INTO live_sessions (id, title, capacity, seats_left) VALUES (2, 'Docker Q&A', 5, 5)", db)
+            .ExecuteNonQueryAsync();
+        Assert.Equal(HttpStatusCode.Created, (await client.PostAsJsonAsync("/sessions/2/bookings", new BookRequest(7))).StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, (await client.PostAsJsonAsync("/sessions/2/bookings", new BookRequest(7))).StatusCode);
+        Assert.Equal(4L, await ScalarAsync(db, "SELECT seats_left FROM live_sessions WHERE id = 2"));
+        Assert.Equal(HttpStatusCode.NotFound, (await client.PostAsJsonAsync("/sessions/99/bookings", new BookRequest(7))).StatusCode);
+    }
+
+    private static async Task<long> ScalarAsync(MySqlConnection db, string sql) =>
+        Convert.ToInt64(await new MySqlCommand(sql, db).ExecuteScalarAsync());
+}`,
+        },
+        pitfalls: [
+          "Reading seats_left in C#, checking it, then writing the new value: exactly the lost update from the hands-on, just slower",
+          "Inserting the booking in a separate transaction: a crash between the two statements loses a seat",
+          "Testing with the EF InMemory provider or SQLite: neither reproduces MySQL's locking, so the race never shows up",
+        ],
+      },
+    },
+  },
+  deeper: [
+    { label: "PostgreSQL: Transaction isolation", url: "https://www.postgresql.org/docs/current/transaction-iso.html" },
+    { label: "MySQL 8.4: InnoDB transaction isolation levels", url: "https://dev.mysql.com/doc/refman/8.4/en/innodb-transaction-isolation-levels.html" },
+    { label: "MySQL 8.4: Deadlocks in InnoDB", url: "https://dev.mysql.com/doc/refman/8.4/en/innodb-deadlocks.html" },
+    { label: "Designing Data-Intensive Applications, ch. 7 (book)", url: "https://dataintensive.net/" },
+  ],
+  nextPreview: "Next: data modeling and normalization: designing schemas that stay correct as the product grows.",
+};
+
+=== l5-4-1.ts ===
+ their old name for a few seconds. Writes go to the primary, all reads go to a replica. Cause?",
+      options: ["Browser cache only", "Replication lag: the replica has not applied the write yet", "Wrong isolation level", "Missing index"],
+      answer: 1,
+      explanation: "Use read-your-writes routing to the primary right after a write.",
+    },
+    {
+      kind: "mcq",
+      prompt: "Which proves your backups work?",
+      options: ["The backup job exit code is 0", "Restoring into a fresh database and running data checks", "The backup file size", "A green dashboard"],
+      answer: 1,
+      explanation: "Only a successful restore with sanity checks proves recoverability.",
+    },
+  ],
+  cheatSheet: [
+    "Expand → dual-write → backfill (batches) → switch → contract.",
+    "Online DDL: CREATE INDEX CONCURRENTLY; MySQL ALGORITHM=INSTANT/INPLACE, LOCK=NONE.",
+    "lock_timeout on migrations; never block behind long transactions.",
+    "RPO = data loss budget; RTO = downtime budget.",
+    "Backups: automated, encrypted, off-site, restore-tested.",
+    "Replicas: watch lag; read-your-writes from primary.",
+    "Shard last; partition and archive first.",
+  ],
+  homework: {
+    basic: {
+      title: "Write the migration plan",
+      brief: ["Plan splitting users.name into first_name and last_name without downtime. List every migration, code deploy and data job in order, and what runs during each step."],
+      criteria: ["Each step backward compatible", "Backfill strategy for existing rows", "Contract step last"],
+      hints: ["Old code keeps writing name during the transition."],
+      solution: {
+        text: [
+          "1) Migration: add first_name, last_name nullable. 2) Deploy v2: on write, set name and the new columns; on read, prefer new columns, fall back to splitting name. 3) Batched backfill splitting name for rows where first_name IS NULL. 4) Deploy v3: read/write only new columns (still write name if other services read it). 5) After all consumers move, drop name in a later migration.",
+          "The script runs the whole plan on MySQL 8 in order. One extra migration sits between the backfill and v3: once every row has first_name, M2 makes first_name NOT NULL and name nullable, so v3 can insert rows without a name. It uses ALGORITHM=INPLACE, LOCK=NONE, so MySQL rebuilds the table while reads and writes continue, or fails immediately instead of taking a blocking lock.",
+          "Splitting rules are a product decision, not only SQL: everything after the first space becomes last_name ('Ravi Kumar Rao' → 'Kumar Rao'), and mononyms such as 'Cher' get a NULL last_name, which is why last_name stays nullable. The v2 read expression uses the same rule, so users see identical values before and after their row is backfilled.",
+          "Check before each step: before M2, `not_backfilled` must be 0; before M3, the old column must have no readers left (search the code, other services, reports and ETL jobs). MySQL 8.0.29+ can drop a column with ALGORITHM=INSTANT.",
+        ],
+        code: {
+          lang: "sql",
+          file: "split_name.sql",
+          code: `-- Split users.name into first_name + last_name without downtime (MySQL 8.0.29+)
+-- Every step is its own migration, deploy or job, run in this order. [vN] = app versions live during the step.
+
+-- The table today (v1 reads and writes only name)
+CREATE TABLE users (
+  id    BIGINT AUTO_INCREMENT PRIMARY KEY,
+  email VARCHAR(254) NOT NULL UNIQUE,
+  name  VARCHAR(200) NOT NULL
+);
+INSERT INTO users (email, name) VALUES
+  ('asha@x.dev', 'Asha Sharma'), ('ravi@x.dev', 'Ravi Kumar Rao'), ('cher@x.dev', 'Cher'), ('li@x.dev', 'Li Wei');
+
+-- STEP 1, migration M1 [v1]: expand. Nullable columns, metadata-only change, v1 does not notice.
+ALTER TABLE users ADD COLUMN first_name VARCHAR(100) NULL, ADD COLUMN last_name VARCHAR(100) NULL, ALGORITHM=INSTANT;
+
+-- STEP 2, deploy v2 [v1 -> v2 rolling]: dual-write, read new columns with a fallback to name.
+-- v2 signup writes both shapes:
+INSERT INTO users (email, name, first_name, last_name) VALUES ('meera@x.dev', 'Meera Iyer', 'Meera', 'Iyer');
+-- v2 read: works for old rows (not yet backfilled) and new rows alike
+SELECT id,
+       COALESCE(first_name, SUBSTRING_INDEX(name, ' ', 1)) AS first_name,
+       COALESCE(last_name, NULLIF(TRIM(SUBSTRING(name, CHAR_LENGTH(SUBSTRING_INDEX(name, ' ', 1)) + 1)), '')) AS last_name
+FROM users ORDER BY id;
+
+-- STEP 3, backfill job [v2]: small batches by primary key range, one short transaction each, throttled.
+-- Resumable: it only touches rows where first_name IS NULL.
+DELIMITER //
+CREATE PROCEDURE backfill_names(IN batch_size INT, IN pause_seconds DECIMAL(4,2))
+BEGIN
+  DECLARE last_id BIGINT DEFAULT 0;
+  DECLARE max_id BIGINT;
+  SELECT COALESCE(MAX(id), 0) INTO max_id FROM users;
+  WHILE last_id < max_id DO
+    UPDATE users
+       SET first_name = SUBSTRING_INDEX(name, ' ', 1),
+           last_name  = NULLIF(TRIM(SUBSTRING(name, CHAR_LENGTH(SUBSTRING_INDEX(name, ' ', 1)) + 1)), '')
+     WHERE id > last_id AND id <= last_id + batch_size AND first_name IS NULL;   -- autocommit: one txn per batch
+    SET last_id = last_id + batch_size;
+    DO SLEEP(pause_seconds);                      -- protect live traffic and replica lag
+  END WHILE;
+END //
+DELIMITER ;
+CALL backfill_names(2, 0.01);                     -- production: batch_size 1000 or so
+SELECT COUNT(*) AS not_backfilled FROM users WHERE first_name IS NULL;   -- must be 0 before step 4
+
+-- STEP 4, migration M2 [v2]: first_name is now always set; name may stop being written.
+-- In-place rebuild with concurrent reads and writes (fails fast instead of locking if that is not possible).
+ALTER TABLE users MODIFY first_name VARCHAR(100) NOT NULL, MODIFY name VARCHAR(200) NULL, ALGORITHM=INPLACE, LOCK=NONE;
+
+-- STEP 5, deploy v3 [v2 -> v3 rolling]: read and write only first_name/last_name. v2 still writes name; fine.
+INSERT INTO users (email, first_name, last_name) VALUES ('sam@x.dev', 'Sam', 'Okafor');
+
+-- STEP 6, migration M3, a LATER release [v3 only, and every other reader of users.name has moved]: contract.
+ALTER TABLE users DROP COLUMN name, ALGORITHM=INSTANT;
+SELECT id, email, first_name, last_name FROM users ORDER BY id;`,
+        },
+        output: "+----+------------+-----------+\n| id | first_name | last_name |\n+----+------------+-----------+\n|  1 | Asha       | Sharma    |\n|  2 | Ravi       | Kumar Rao |\n|  3 | Cher       | NULL      |\n|  4 | Li         | Wei       |\n|  5 | Meera      | Iyer      |\n+----+------------+-----------+\n+----------------+\n| not_backfilled |\n+----------------+\n|              0 |\n+----------------+\n+----+-------------+------------+-----------+\n| id | email       | first_name | last_name |\n+----+-------------+------------+-----------+\n|  1 | asha@x.dev  | Asha       | Sharma    |\n|  2 | ravi@x.dev  | Ravi       | Kumar Rao |\n|  3 | cher@x.dev  | Cher       | NULL      |\n|  4 | li@x.dev    | Li         | Wei       |\n|  5 | meera@x.dev | Meera      | Iyer      |\n|  6 | sam@x.dev   | Sam        | Okafor    |\n+----+-------------+------------+-----------+",
+        pitfalls: [
+          "Making name nullable in the same release that stops writing it: old v2 pods still running during the rollout are fine, but any code path that still reads name must handle NULL first",
+          "One UPDATE for the whole table as the backfill: a long transaction, a long lock and a burst of replica lag",
+        ],
+      },
+    },
+    intermediate: {
+      title: "Automated restore test in CI",
+      brief: ["Create a scheduled GitHub Actions workflow that starts PostgreSQL in a service container, restores the latest backup artifact (or a seeded dump), runs sanity queries (row counts, latest timestamp), and fails loudly if checks fail."],
+      criteria: ["Scheduled trigger", "Service container for PostgreSQL", "Clear failure on bad data"],
+      hints: ["on: schedule: - cron: '0 3 * * *'"],
+      solution: {
+        text: ["A scheduled workflow turns 'we think backups work' into a daily verified fact."],
+        code: {
+          lang: "yaml",
+          file: ".github/workflows/restore-test.yml",
+          code: `name: restore-test
+on:
+  schedule: [{ cron: "0 3 * * *" }]
+  workflow_dispatch:
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env: { POSTGRES_PASSWORD: test }
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-retries 10
+    env:
+      PGHOST: localhost
+      PGUSER: postgres
+      PGPASSWORD: test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch latest backup
+        run: ./scripts/fetch-latest-backup.sh backup.dump      # e.g. from S3 with a read-only role
+      - name: Restore
+        run: createdb restore_test && pg_restore --no-owner -d restore_test backup.dump
+      - name: Sanity checks
+        run: |
+          users=$(psql -tA -d restore_test -c "SELECT COUNT(*) FROM users")
+          latest=$(psql -tA -d restore_test -c "SELECT EXTRACT(EPOCH FROM now() - MAX(created_at))/3600 FROM quiz_attempts")
+          echo "users=$users hours_since_latest=$latest"
+          [ "$users" -gt 0 ]
+          awk -v h="$latest" 'BEGIN { exit (h < 26) ? 0 : 1 }'`,
+        },
+      },
+    },
+    challenge: {
+      title: "Choose a shard key",
+      brief: ["DevAtlas becomes a B2B platform with 5,000 company tenants; the largest tenant has 30% of all activity. Evaluate tenant_id, user_id and lesson_id as shard keys for progress data: hotspots, cross-shard queries, rebalancing. Recommend a design."],
+      criteria: ["Pros and cons per candidate", "Handling of the oversized tenant", "Recommendation with migration path"],
+      hints: ["Consider giving very large tenants dedicated shards."],
+      solution: {
+        text: [
+          "tenant_id keeps each company's queries on one shard (good for reporting and isolation) but the 30% tenant creates a hotspot; mitigate by placing it on its own shard or sub-sharding it by user. user_id spreads load evenly but makes per-tenant reports cross-shard. lesson_id concentrates popular lessons (hotspots) and breaks user-centric queries. Recommendation: tenant-based placement with a lookup table (tenant → shard) so big tenants can be moved or split, using a platform such as Vitess or Citus rather than hand-rolled routing.",
+          "The script simulates 200,000 progress events for 5,000 tenants (one whale with 30%) over 8 shards and measures the busiest shard against the mean. hash(tenant_id) puts the whale and its neighbours on one shard at 38% of all traffic (3.1x the mean). hash(user_id) is perfectly even (1.01x) but every per-tenant report fans out to all 8 shards. hash(lesson_id) is worst: a long tail of popular lessons gives one shard 58%.",
+          "The recommended design is a directory table (tenant_id → shard) for normal tenants, with the whale sub-sharded by user_id across four dedicated shards. The busiest shard drops to 17.8% (1.4x the mean), every normal tenant's report still touches exactly one shard, and only the whale's report fans out to 4 shards. Migration path: start with the directory pointing every tenant at shard 0, move tenants one at a time (copy, verify, flip the directory row, delete), and move the whale last.",
+          "Results are from a seeded simulation, so they are reproducible, but real activity distributions differ: measure yours before choosing.",
+        ],
+        code: {
+          lang: "python",
+          file: "shard_key.py",
+          code: `"""Compare shard keys for DevAtlas B2B progress data: 5,000 tenants, the largest has 30% of all activity."""
+import random
+import zlib
+from collections import Counter
+
+SHARDS, TENANTS, EVENTS, LESSONS = 8, 5000, 200_000, 400
+rnd = random.Random(7)
+
+# Activity model: tenant 1 is the whale (30%); the other 4,999 follow a mild long tail.
+weights = [0.0] + [1 / (t ** 0.6) for t in range(2, TENANTS + 1)]
+tail = sum(weights)
+weights[0] = tail * 0.30 / 0.70
+tenants = rnd.choices(range(1, TENANTS + 1), weights=weights, k=EVENTS)
+users_per_tenant = lambda t: 20_000 if t == 1 else 5 + (t * 37) % 400   # whale has 20k users
+events = [(t, rnd.randrange(users_per_tenant(t)), min(int(rnd.paretovariate(1.2)), LESSONS) - 1) for t in tenants]
+
+def shard_of(key) -> int:
+    return zlib.crc32(str(key).encode()) % SHARDS     # stable hash, unlike Python's hash()
+
+def report(name: str, placement) -> None:
+    load = Counter(placement(t, u, l) for t, u, l in events)
+    loads = [load.get(s, 0) for s in range(SHARDS)]
+    mean = EVENTS / SHARDS
+    print(f"{name:<34} max/mean {max(loads) / mean:4.2f}   busiest shard {max(loads) / EVENTS:5.1%}   "
+          f"per shard: {[round(x / EVENTS * 100) for x in loads]}")
+
+def cross_shard(name: str, key_of) -> None:
+    """'All progress for tenant 1234' touches how many shards?"""
+    shards = {placement for t, u, l in events if t == 1234 for placement in [key_of(t, u, l)]}
+    print(f"  {name:<32} shards touched by one tenant's report: {len(shards)} of {SHARDS}")
+
+print(f"{EVENTS:,} events, {SHARDS} shards, whale tenant share {sum(1 for t,_,_ in events if t == 1) / EVENTS:.1%}")
+report("hash(tenant_id)", lambda t, u, l: shard_of(t))
+report("hash(user_id) (unique per tenant)", lambda t, u, l: shard_of((t, u)))
+report("hash(lesson_id)", lambda t, u, l: shard_of(l))
+
+# Recommended: directory (tenant -> shard), the whale gets sub-sharded by user across 4 dedicated shards
+directory = {t: shard_of(t) % 4 + 4 for t in range(1, TENANTS + 1)}   # normal tenants share shards 4-7
+def directory_placement(t: int, u: int, l: int) -> int:
+    return shard_of((t, u)) % 4 if t == 1 else directory[t]           # whale: shards 0-3 by user
+report("directory + whale sub-sharded", directory_placement)
+
+print("\\nCross-shard cost of a per-tenant report (tenant 1234):")
+cross_shard("hash(tenant_id)", lambda t, u, l: shard_of(t))
+cross_shard("hash(user_id)", lambda t, u, l: shard_of((t, u)))
+cross_shard("directory + whale sub-sharded", directory_placement)
+whale_shards = {directory_placement(t, u, l) for t, u, l in events if t == 1}
+print(f"  whale report touches {len(whale_shards)} shards (fan out + merge), all other tenants touch 1")`,
+        },
+        output: "200,000 events, 8 shards, whale tenant share 30.1%\nhash(tenant_id)                    max/mean 3.07   busiest shard 38.4%   per shard: [9, 8, 9, 9, 9, 9, 9, 38]\nhash(user_id) (unique per tenant)  max/mean 1.01   busiest shard 12.6%   per shard: [12, 13, 12, 13, 12, 12, 13, 13]\nhash(lesson_id)                    max/mean 4.60   busiest shard 57.5%   per shard: [4, 58, 2, 6, 2, 9, 3, 17]\ndirectory + whale sub-sharded      max/mean 1.43   busiest shard 17.8%   per shard: [8, 7, 8, 8, 17, 18, 17, 17]\n\nCross-shard cost of a per-tenant report (tenant 1234):\n  hash(tenant_id)                  shards touched by one tenant's report: 1 of 8\n  hash(user_id)                    shards touched by one tenant's report: 8 of 8\n  directory + whale sub-sharded    shards touched by one tenant's report: 1 of 8\n  whale report touches 4 shards (fan out + merge), all other tenants touch 1",
+        pitfalls: [
+          "Python's built-in hash() for routing: it changes between processes. Use a stable hash such as crc32 or the platform's own",
+          "Hash-sharding by tenant with no directory: you can never move or split one tenant without resharding everything",
+        ],
+      },
+    },
+    capstone: {
+      title: "DevAtlas: data operations runbook",
+      brief: ["Write docs/runbooks/database.md for DevAtlas: migration rules (expand/contract, lock timeouts), backup schedule and retention, RPO/RTO targets, restore procedure with commands, replica read routing, and who to page. Add the restore-test workflow."],
+      criteria: ["Concrete commands, not vague advice", "RPO/RTO stated and justified", "Restore test running on a schedule"],
+      hints: ["Write it so someone new can follow it at 3 a.m."],
+      solution: {
+        text: ["A runbook plus an automated restore test is what turns backups into recoverability; you will reuse this format for every service in Phase 9."],
+      },
+    },
+  },
+  deeper: [
+    { label: "PostgreSQL: Backup and restore", url: "https://www.postgresql.org/docs/current/backup.html" },
+    { label: "MySQL 8.4: Online DDL operations", url: "https://dev.mysql.com/doc/refman/8.4/en/innodb-online-ddl-operations.html" },
+    { label: "gh-ost (GitHub's online schema migration tool)", url: "https://github.com/github/gh-ost" },
+    { label: "Vitess (sharding for MySQL)", url: "https://vitess.io/docs/" },
+  ],
+  nextPreview: "Next phase: architecture and system design. SOLID, design patterns and clean architecture.",
+};

@@ -1,0 +1,759 @@
+=== BRANCHES & PRS ===
+7f8fce4 Merge pull request #3 from Abhishek18071999/claude/project-thread-tjwapp
+da0bbf6 Resources: AI, RAG and AI Automation practice links and page URLs
+012eec3 Resources: merge more verified links (databases, DSA, career, AI)
+9b353bd Resources: verified links for Python, C#, ASP.NET, Rust, AWS, Azure, DevOps and SQL
+f499a6e Resources: verified links for HTML, CSS, JavaScript and React
+cf18bcf Resources: render code in revision lines, scroll section pills on phones
+25437eb Merge pull request #2 from Abhishek18071999/claude/project-thread-tjwapp
+515fd99 Merge remote-tracking branch 'origin/claude/vibrant-mendel-tttjb2' into claude/project-thread-tjwapp
+bd557e9 Add Resources page: end-to-end courses per area with verified links
+4d69a79 Merge pull request #1 from Abhishek18071999/claude/project-thread-r8cz24
+ffe5611 Add system design lessons 6.3.10-6.3.12 and Phase 6 credits
+0dd2415 Add system design lessons 6.3.2-6.3.9 based on the System Design Primer
+fbaa56c Add 3.5.1, 4.3.1 challenge and 5.4.1 challenge solution code
+8197f4b Lazy-load lessons, generated metadata, Phase 3/4/5 homework code and fixes
+b01ff95 Phase 6, 9 and 10 homework solutions with verified code and design docs
+68f5f91 Phase 1 homework code, .NET 9 checks and a required-check-safe 1.1.4 workflow
+131f529 Phase 0 and 2 homework solutions with verified code; small text fixes
+31ca69d Checkpoint: homework solution code in progress
+f488010 Add lesson metadata generator script; checkpoint 1.1.1 capstone solution
+5d849e6 Home and README: all 73 lessons are full; show runnable example count
+d24753b Fix next-lesson previews that pointed at the wrong lesson
+e10e6b0 Add Phase 10 lessons: portfolio/resume (10.1.1) and interviews (10.2.1)
+39c74b2 Add lesson 9.6.1: blue-green, canary, SLOs and postmortems; Phase 9 complete
+331227c Add lesson 9.5.1: logs, metrics, traces and DevSecOps
+6302c38 Add lesson 9.4.2: config, secrets and Helm
+
+3	Resources: verified links for Frontend, Programming, Cloud and DevOps courses	claude/project-thread-tjwapp	MERGED	2026-10-19T00:01:10Z
+2	Resources page: end-to-end courses with verified links per topic	claude/project-thread-tjwapp	MERGED	2026-10-18T20:05:07Z
+1	Add system design lessons 6.3.2–6.3.12 based on the System Design Primer	claude/project-thread-r8cz24	MERGED	2026-10-18T19:49:57Z
+
+=== TOOLS ===
+10.0.301
+py: Python 3.11.15
+cargo: Command failed: cargo --version
+'cargo' is not recognized as an internal or external command,
+operable program or batch file.
+
+=== TESTS ===
+allLessons.ts:
+import type { Lesson } from "../types";
+import { lessons as meta } from "../data/lessons";
+
+// Tests check the full content of every lesson, so they load all lesson files eagerly
+// (the app itself loads them one at a time with loadLesson).
+const modules = import.meta.glob<{ lesson: Lesson }>("../data/lessons/l*.ts", { eager: true });
+const byId = new Map(Object.values(modules).map((m) => [m.lesson.id, m.lesson]));
+
+/** Every full lesson, in curriculum order. */
+export const lessons: Lesson[] = meta.map((m) => byId.get(m.id)!).filter(Boolean);
+/** Number of lesson files found, to catch files missing from the generated metadata. */
+export const lessonFileCount = byId.size;
+
+content.test.ts:
+import { describe, expect, it } from "vitest";
+import { allStubs, phases } from "../data/curriculum";
+import { lessons } from "./allLessons";
+import { milestones } from "../data/capstone";
+import { classify } from "../data/newsTopics";
+
+describe("lesson content follows the Mentor format", () => {
+  it("every full lesson has a curriculum entry", () => {
+    const ids = new Set(allStubs.map((s) => s.id));
+    for (const l of lessons) expect(ids.has(l.id), l.id).toBe(true);
+  });
+
+  it("lesson ids are unique across the curriculum", () => {
+    const ids = allStubs.map((s) => s.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("full lessons are listed in curriculum order", () => {
+    const order = allStubs.map((s) => s.id);
+    const positions = lessons.map((l) => order.indexOf(l.id));
+    expect([...positions].sort((a, b) => a - b)).toEqual(positions);
+  });
+
+  for (const l of lessons) {
+    describe(`lesson ${l.id}`, () => {
+      it("has every required section", () => {
+        expect(l.problem.length).toBeGreaterThan(0);
+        expect(l.concept.analogy.length).toBeGreaterThan(0);
+        expect(l.concept.precise.length).toBeGreaterThan(0);
+        expect(l.underTheHood.text.length).toBeGreaterThan(0);
+        expect(l.handsOn.length).toBeGreaterThan(0);
+        expect(l.companies.length).toBeGreaterThan(0);
+        expect(l.mistakes.length).toBeGreaterThanOrEqual(4);
+        expect(l.bestPractices.length).toBeGreaterThan(0);
+        expect(l.interview).toHaveLength(3);
+        expect(l.quickCheck).toHaveLength(3);
+        expect(l.cheatSheet.length).toBeGreaterThanOrEqual(5);
+        expect(l.cheatSheet.length).toBeLessThanOrEqual(10);
+        expect(l.deeper.length).toBeGreaterThan(0);
+      });
+
+      it("quick-check answers point at a real option", () => {
+        for (const q of l.quickCheck) {
+          expect(q.answer).toBeGreaterThanOrEqual(0);
+          expect(q.answer).toBeLessThan(q.options.length);
+          expect(new Set(q.options).size, `duplicate options in: ${q.prompt}`).toBe(q.options.length);
+        }
+      });
+
+      it("every homework tier has criteria and a model solution", () => {
+        for (const tier of ["basic", "intermediate", "challenge", "capstone"] as const) {
+          const t = l.homework[tier];
+          expect(t.criteria.length, tier).toBeGreaterThan(0);
+          expect(t.solution.text.length, tier).toBeGreaterThan(0);
+        }
+      });
+
+      it("links are https", () => {
+        for (const d of l.deeper) expect(d.url).toMatch(/^https:\/\//);
+      });
+
+      it("has no hardcoded secrets in code samples", () => {
+        const code = l.handsOn.map((s) => s.code?.code ?? "").join("\n");
+        expect(code).not.toMatch(/sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}/);
+      });
+    });
+  }
+});
+
+describe("curriculum and capstone", () => {
+  it("has 11 phases numbered 0..10", () => {
+    expect(phases.map((p) => p.id)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+  });
+  it("every milestone points at a full lesson", () => {
+    const ids = new Set(lessons.map((l) => l.id));
+    for (const m of milestones) expect(ids.has(m.lessonId), m.id).toBe(true);
+  });
+});
+
+describe("news classification", () => {
+  it("tags stories by topic", () => {
+    expect(classify("Show HN: A Kubernetes operator in Rust").map((t) => t.id)).toEqual(expect.arrayContaining(["devops", "langs"]));
+    expect(classify("PostgreSQL 18 released").map((t) => t.id)).toContain("data");
+    expect(classify("My grandmother's apple pie")).toEqual([]);
+  });
+});
+
+lessonMeta.test.ts:
+/// <reference types="node" />
+// @vitest-environment node
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
+import { lessonMeta } from "../data/lessonMeta.generated";
+import { lessonFileCount, lessons } from "./allLessons";
+
+describe("generated lesson metadata", () => {
+  it("is up to date with src/data/lessons", () => {
+    const root = fileURLToPath(new URL("../..", import.meta.url));
+    // exits non-zero (and execFileSync throws) when the generated file differs from a fresh run
+    const run = () =>
+      execFileSync(process.execPath, ["--experimental-strip-types", "--no-warnings", "scripts/gen-lesson-meta.mjs", "--check"], { cwd: root, encoding: "utf8", stdio: "pipe" });
+    expect(run).not.toThrow();
+  });
+
+  it("has one entry per lesson file", () => {
+    expect(lessonMeta).toHaveLength(lessonFileCount);
+    expect(lessons).toHaveLength(lessonFileCount);
+  });
+});
+
+logic.test.ts:
+import { describe, expect, it } from "vitest";
+import { tokenize } from "../lib/highlight";
+import { buildRoadmap, nextLessonId, progressCard, totalWeeks } from "../lib/roadmap";
+import { initialState, nextCard, streak, type Profile } from "../lib/store";
+import { lessons } from "../data/lessons";
+import { lessons as fullLessons } from "./allLessons";
+
+const profile: Profile = {
+  name: "Asha",
+  levels: {},
+  goal: "ai-engineer",
+  hoursPerWeek: 10,
+  targetMonths: 9,
+  os: "linux",
+  language: "English",
+  style: "code",
+  createdAt: "2026-01-01T00:00:00Z",
+};
+
+describe("spaced repetition", () => {
+  const now = new Date("2026-10-18T12:00:00Z");
+  it("promotes a remembered card and schedules it later", () => {
+    expect(nextCard({ box: 1, due: "2026-10-18" }, true, now)).toEqual({ box: 2, due: "2026-10-20" });
+  });
+  it("caps at box 5", () => {
+    expect(nextCard({ box: 5, due: "2026-10-18" }, true, now).box).toBe(5);
+  });
+  it("sends a missed card back to box 1, due tomorrow", () => {
+    expect(nextCard({ box: 4, due: "2026-10-18" }, false, now)).toEqual({ box: 1, due: "2026-10-19" });
+  });
+});
+
+describe("streak", () => {
+  const now = new Date("2026-10-18T12:00:00Z");
+  it("counts consecutive days ending today", () => {
+    expect(streak(["2026-10-16", "2026-10-17", "2026-10-18"], now)).toBe(3);
+  });
+  it("still counts when today has no activity yet", () => {
+    expect(streak(["2026-10-16", "2026-10-17"], now)).toBe(2);
+  });
+  it("breaks on a gap", () => {
+    expect(streak(["2026-10-14", "2026-10-17", "2026-10-18"], now)).toBe(2);
+  });
+});
+
+describe("roadmap", () => {
+  it("puts the goal's core phases first", () => {
+    const plan = buildRoadmap(profile);
+    expect(plan[0].phase.id).toBe(0);
+    expect(plan.findIndex((p) => p.phase.id === 7)).toBeLessThan(plan.findIndex((p) => p.phase.id === 3));
+    expect(plan).toHaveLength(11);
+  });
+  it("gets shorter with more hours per week", () => {
+    expect(totalWeeks(buildRoadmap({ ...profile, hoursPerWeek: 20 }))).toBeLessThan(totalWeeks(buildRoadmap(profile)));
+  });
+  it("marks claimed experience for verification", () => {
+    const plan = buildRoadmap({ ...profile, levels: { ai: "advanced" } });
+    expect(plan.find((p) => p.phase.id === 7)?.emphasis).toBe("verify");
+  });
+  it("next lesson skips completed ones", () => {
+    const state = { ...initialState, lessons: { [lessons[0].id]: { status: "completed" as const, updatedAt: "" } } };
+    expect(nextLessonId(state)).toBe(lessons[1].id);
+  });
+  it("progress card has every field", () => {
+    const card = progressCard({ ...initialState, profile });
+    for (const f of ["PROGRESS CARD", "Learner:", "Current:", "Completed:", "Homework pending:", "Quiz scores:", "Weak areas:", "Capstone status:", "Next:"]) expect(card).toContain(f);
+  });
+});
+
+describe("highlighter", () => {
+  it("never loses characters", () => {
+    for (const l of fullLessons)
+      for (const s of l.handsOn)
+        if (s.code) expect(tokenize(s.code.code, s.code.lang).map((t) => t.text).join("")).toBe(s.code.code);
+  });
+  it("recognises comments, strings and keywords", () => {
+    const t = tokenize('def f():\n    return "x"  # done', "python");
+    expect(t.find((x) => x.type === "keyword")?.text).toBe("def");
+    expect(t.find((x) => x.type === "string")?.text).toBe('"x"');
+    expect(t.find((x) => x.type === "comment")?.text).toBe("# done");
+  });
+});
+
+missing-code.test.ts:
+import { describe, expect, it } from "vitest";
+import { lessons } from "./allLessons";
+
+const tiers = ["basic", "intermediate", "challenge", "capstone"] as const;
+
+// Lists every homework tier whose model solution is still text-only.
+// Prints the list; it does not fail, because some tiers may stay text-only by design.
+describe("homework solutions with code", () => {
+  it("lists tiers without solution.code", () => {
+    const missing = lessons.flatMap((l) =>
+      tiers.filter((t) => !l.homework[t].solution.code).map((t) => `${l.id} ${t}`),
+    );
+    console.log(missing.length ? `text-only solutions (${missing.length}):\n${missing.join("\n")}` : "every tier has code");
+    expect(Array.isArray(missing)).toBe(true);
+  });
+});
+
+resources.test.ts:
+import { describe, expect, it } from "vitest";
+import { allStubs, phases } from "../data/curriculum";
+import { allTopics, isReady, resourcesForLesson, sections } from "../data/resources";
+
+describe("resource sections", () => {
+  it("has AI, AI Automation and RAG sections", () => {
+    for (const id of ["ai", "ai-automation", "rag"]) expect(sections.map((s) => s.id)).toContain(id);
+  });
+
+  it("covers every curriculum phase except AI engineering, which the AI sections cover", () => {
+    const covered = new Set(sections.map((s) => s.phaseId));
+    for (const p of phases) if (p.id !== 7) expect(covered.has(p.id), p.title).toBe(true);
+  });
+
+  it("section, course and topic ids are unique", () => {
+    expect(new Set(sections.map((s) => s.id)).size).toBe(sections.length);
+    const courses = sections.flatMap((s) => s.courses.map((c) => c.id));
+    expect(new Set(courses).size).toBe(courses.length);
+    const topics = sections.flatMap(allTopics).map((t) => t.id);
+    expect(new Set(topics).size).toBe(topics.length);
+  });
+
+  const stubIds = new Set(allStubs.map((s) => s.id));
+  for (const s of sections)
+    for (const c of s.courses)
+      describe(`${s.id}/${c.id}`, () => {
+        it("has topics", () => expect(c.topics.length).toBeGreaterThan(0));
+        it("topics have short revision lines and well-formed links", () => {
+          for (const t of c.topics) {
+            expect(t.revision.length, t.id).toBeLessThanOrEqual(4);
+            for (const r of t.revision) expect(r.length, t.id).toBeLessThanOrEqual(220);
+            for (const l of [t.read, t.video, t.practice]) if (l) expect(l.url, t.id).toMatch(/^https:\/\//);
+            if (t.video) {
+              expect(t.video.url, t.id).toMatch(/^https:\/\/(www\.)?youtube\.com\/(watch\?v=|playlist\?list=)/);
+              expect(["Hindi", "English"]).toContain(t.video.lang);
+            }
+            if (t.lessonId) expect(stubIds.has(t.lessonId), `${t.id} -> ${t.lessonId}`).toBe(true);
+          }
+        });
+      });
+
+  it("links lessons to their resource topics", () => {
+    const r = resourcesForLesson("0.1.1");
+    expect(r.length).toBeGreaterThan(0);
+    for (const x of r) expect(isReady(x.topic)).toBe(true);
+  });
+});
+
+=== RESOURCES DIR ===
+ai-automation.ts, ai.ts, backend.ts, career.ts, cloud.ts, databases.ts, devops.ts, dsa.ts, foundations.ts, frontend.ts, index.ts, programming.ts, rag.ts, sections.ts, system-design.ts
+=== HANDSON l4-4-1.ts ===
+handsOn: [
+    {
+      title: "REST resource design for DevAtlas",
+      code: {
+        lang: "text",
+        code: `GET    /v1/lessons?phase=4&sort=-updatedAt&limit=20&after=eyJ0Ijo…   list (filter, sort, cursor)
+GET    /v1/lessons/4.4.1                                                one
+POST   /v1/lessons                                                      create → 201 + Location
+PATCH  /v1/lessons/4.4.1                                                partial update
+DELETE /v1/lessons/4.4.1                                                204
+GET    /v1/me/progress                                                  current user's progress
+PUT    /v1/me/progress/4.4.1      { "status": "completed", "score": 0.9 }   idempotent upsert
+POST   /v1/lessons/4.4.1/attempts                                       create a quiz attempt (not idempotent)
+
+List response:
+{ "items": [ … ], "nextCursor": "eyJ0Ijo…", "hasMore": true }`,
+      },
+    },
+    {
+      title: "Cursor pagination, end to end (Python + SQLite to run anywhere)",
+      code: {
+        lang: "python",
+        file: "cursor_pagination.py",
+        code: `import base64, json, sqlite3
+
+db = sqlite3.connect(":memory:")
+db.execute("CREATE TABLE news (id INTEGER PRIMARY KEY, published INTEGER, title TEXT)")
+db.execute("CREATE INDEX idx_news_pub ON news (published DESC, id DESC)")
+db.executemany("INSERT INTO news (id, published, title) VALUES (?, ?, ?)",
+               [(i, 1000 + i // 2, f"story {i}") for i in range(1, 12)])   # some equal timestamps
+
+def encode(row) -> str:
+    return base64.urlsafe_b64encode(json.dumps({"p": row[1], "id": row[0]}).encode()).decode()
+
+def decode(cursor: str) -> tuple[int, int]:
+    d = json.loads(base64.urlsafe_b64decode(cursor))
+    return d["p"], d["id"]
+
+def page(limit: int, after: str | None = None) -> dict:
+    if after:
+        p, i = decode(after)
+        rows = db.execute("SELECT id, published, title FROM news WHERE (published, id) < (?, ?) "
+                          "ORDER BY published DESC, id DESC LIMIT ?", (p, i, limit + 1)).fetchall()
+    else:
+        rows = db.execute("SELECT id, published, title FROM news ORDER BY published DESC, id DESC LIMIT ?",
+                          (limit + 1,)).fetchall()
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    return {"items": [r[2] for r in rows], "nextCursor": encode(rows[-1]) if has_more else None}
+
+p1 = page(4); print(p1["items"])
+p2 = page(4, p1["nextCursor"]); print(p2["items"])
+p3 = page(4, p2["nextCursor"]); print(p3["items"], p3["nextCursor"])`,
+      },
+      output: "['story 11', 'story 10', 'story 9', 'story 8']\n['story 7', 'story 6', 'story 5', 'story 4']\n['story 3', 'story 2', 'story 1'] None",
+      notes: ["Row-value comparison `(a, b) < (?, ?)` needs SQLite 3.15+, MySQL and PostgreSQL support it too. The id tie-breaker prevents skipping or repeating stories with equal timestamps."],
+    },
+    {
+      title: "GraphQL: one query for the dashboard",
+      code: {
+        lang: "text",
+        file: "dashboard.graphql",
+        code: `query Dashboard {
+  me {
+    name
+    streakDays
+    progress(first: 5) {
+      lesson { id title minutes }
+      status
+      score
+    }
+    recommendations(first: 3) { id title }
+  }
+}`,
+      },
+      notes: ["One round trip returns exactly these fields. The server must enforce depth/complexity limits and batch resolvers with DataLoader to avoid N+1."],
+    },
+    {
+      title: "gRPC contract between services",
+      code: {
+        lang: "text",
+        file: "news.proto",
+        code: `syntax = "proto3";
+package devatlas.news.v1;
+
+service NewsService {
+  rpc GetItem (GetItemRequest) returns (NewsItem);
+  rpc ListItems (ListItemsRequest) returns (ListItemsResponse);
+  rpc WatchItems (WatchRequest) returns (stream NewsItem);   // server streaming
+}
+
+message GetItemRequest { uint64 id = 1; }
+message ListItemsRequest { string topic = 1; int32 page_size = 2; string page_token = 3; }
+message ListItemsResponse { repeated NewsItem items = 1; string next_page_token = 2; }
+message WatchRequest { string topic = 1; }
+
+message NewsItem {
+  uint64 id = 1;
+  string title = 2;
+  string url = 3;
+  string topic = 4;
+  reserved 5;                    // field 5 was removed; never reuse the number
+  int64 published_unix = 6;
+}`,
+      },
+      notes: ["Generate clients with protoc plugins: Grpc.Tools for C#, tonic-build for Rust, grpcio-tools for Python. Always set deadlines on gRPC calls."],
+    },
+    {
+      title: "Evolve without breaking: deprecation in ASP.NET Core",
+      code: {
+        lang: "csharp",
+        code: `// v1 keeps working; v2 adds the new shape
+var v1 = app.MapGroup("/v1/lessons");
+var v2 = app.MapGroup("/v2/lessons");
+
+v1.MapGet("/{id}", (string id, ILessonStore s) => s.Find(id) is { } l
+        ? Results.Ok(new { l.Id, l.Title, minutes = l.Minutes })
+        : Results.NotFound())
+  .AddEndpointFilter(async (ctx, next) =>
+  {
+      ctx.HttpContext.Response.Headers["Deprecation"] = "true";
+      ctx.HttpContext.Response.Headers["Sunset"] = "Wed, 30 Jun 2027 00:00:00 GMT";
+      ctx.HttpContext.Response.Headers.Link = "</v2/lessons>; rel=\\"successor-version\\"";
+      return await next(ctx);
+  });
+
+v2.MapGet("/{id}", (string id, ILessonStore s) => s.Find(id) is { } l
+        ? Results.Ok(new { l.Id, l.Title, duration = new { minutes = l.Minutes } })
+        : Results.NotFound());`,
+      },
+      notes: ["Track who still calls v1 (logs/metrics by client), notify them, and remove v1 only after the sunset date and traffic reaches zero."],
+    },
+  ],
+  
+=== HANDSON l4-4-2.ts ===
+handsOn: [
+    {
+      title: "Idempotent POST with a key store",
+      code: {
+        lang: "python",
+        file: "idempotency.py",
+        code: `import hashlib, json, uuid
+
+class IdempotencyStore:
+    """In production: a DB table with UNIQUE(key) and the response stored in the same transaction."""
+    def __init__(self) -> None:
+        self.records: dict[str, tuple[str, dict]] = {}
+
+    def run(self, key: str, body: dict, action) -> tuple[int, dict]:
+        fingerprint = hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
+        if key in self.records:
+            stored_fp, stored_response = self.records[key]
+            if stored_fp != fingerprint:
+                return 422, {"error": "Idempotency-Key reused with a different request body"}
+            return 200, stored_response                   # replay: no second charge
+        response = action(body)
+        self.records[key] = (fingerprint, response)
+        return 201, response
+
+charges: list[dict] = []
+def charge(body: dict) -> dict:
+    charges.append(body)
+    return {"chargeId": f"ch_{len(charges)}", "amount": body["amount"]}
+
+store = IdempotencyStore()
+key = str(uuid.uuid4())
+print(store.run(key, {"amount": 4900, "course": "devatlas-pro"}, charge))
+print(store.run(key, {"amount": 4900, "course": "devatlas-pro"}, charge))   # client retry after timeout
+print(store.run(key, {"amount": 9900, "course": "devatlas-pro"}, charge))
+print("charges made:", len(charges))`,
+      },
+      output: "(201, {'chargeId': 'ch_1', 'amount': 4900})\n(200, {'chargeId': 'ch_1', 'amount': 4900})\n(422, {'error': 'Idempotency-Key reused with a different request body'})\ncharges made: 1",
+    },
+    {
+      title: "Token bucket rate limiter",
+      code: {
+        lang: "python",
+        file: "token_bucket.py",
+        code: `from dataclasses import dataclass
+
+@dataclass
+class Bucket:
+    tokens: float
+    last: float
+
+class TokenBucketLimiter:
+    def __init__(self, rate_per_sec: float, burst: int) -> None:
+        self.rate, self.burst = rate_per_sec, burst
+        self.buckets: dict[str, Bucket] = {}
+
+    def allow(self, key: str, now: float) -> tuple[bool, float]:
+        """Returns (allowed, retry_after_seconds)."""
+        b = self.buckets.setdefault(key, Bucket(tokens=self.burst, last=now))
+        b.tokens = min(self.burst, b.tokens + (now - b.last) * self.rate)   # refill
+        b.last = now
+        if b.tokens >= 1:
+            b.tokens -= 1
+            return True, 0.0
+        return False, (1 - b.tokens) / self.rate
+
+limiter = TokenBucketLimiter(rate_per_sec=2, burst=3)
+for t in [0, 0, 0, 0, 0.5, 1.0, 1.0, 1.0]:
+    ok, retry = limiter.allow("partner-42", t)
+    print(t, "allow" if ok else f"429 Retry-After {retry:.1f}s")`,
+      },
+      output: "0 allow\n0 allow\n0 allow\n0 429 Retry-After 0.5s\n0.5 allow\n1.0 allow\n1.0 429 Retry-After 0.5s\n1.0 429 Retry-After 0.5s",
+    },
+    {
+      title: "Built-in rate limiting in ASP.NET Core",
+      code: {
+        lang: "csharp",
+        code: `using System.Threading.RateLimiting;
+
+builder.Services.AddRateLimiter(o =>
+{
+    o.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    o.AddPolicy("per-user", ctx => RateLimitPartition.GetTokenBucketLimiter(
+        partitionKey: ctx.User.Identity?.Name ?? ctx.Connection.RemoteIpAddress?.ToString() ?? "anon",
+        factory: _ => new TokenBucketRateLimiterOptions
+        {
+            TokenLimit = 20,                                   // burst
+            TokensPerPeriod = 10, ReplenishmentPeriod = TimeSpan.FromSeconds(1),
+            QueueLimit = 0,
+        }));
+});
+
+app.UseRateLimiter();
+app.MapGet("/v1/news", () => "...").RequireRateLimiting("per-user");`,
+      },
+      notes: ["These limiters are per instance. With several API replicas, use a distributed limiter (Redis) or enforce limits at the API gateway/CDN."],
+    },
+    {
+      title: "Queue + worker with retries and a dead-letter queue (simulated)",
+      code: {
+        lang: "python",
+        file: "worker.py",
+        code: `import asyncio, random
+
+async def send_digest(job: dict) -> None:
+    if random.random() < 0.3:                          # flaky email provider
+        raise ConnectionError("SMTP timeout")
+    print(f"sent digest to {job['email']}")
+
+async def worker(queue: asyncio.Queue, dead_letters: list, sent: set) -> None:
+    while True:
+        job = await queue.get()
+        try:
+            if job["id"] in sent:                       # idempotent consumer: skip duplicates
+                continue
+            await send_digest(job)
+            sent.add(job["id"])
+        except ConnectionError:
+            job["attempts"] += 1
+            if job["attempts"] >= 3:
+                dead_letters.append(job)               # park for inspection, do not retry forever
+            else:
+                await asyncio.sleep(0.01 * 2 ** job["attempts"])   # backoff
+                await queue.put(job)
+        finally:
+            queue.task_done()
+
+async def main() -> None:
+    random.seed(7)
+    queue: asyncio.Queue = asyncio.Queue()
+    dead, sent = [], set()
+    for i in range(5):
+        queue.put_nowait({"id": i, "email": f"user{i}@example.com", "attempts": 0})
+    workers = [asyncio.create_task(worker(queue, dead, sent)) for _ in range(2)]
+    await queue.join()
+    for w in workers:
+        w.cancel()
+    print("sent:", len(sent), "dead-lettered:", [j["id"] for j in dead])
+
+asyncio.run(main())`,
+      },
+      notes: ["In production the queue is a durable broker (SQS, Service Bus, RabbitMQ); the shape is identical: ack on success, retry with backoff, dead-letter after N attempts, idempotent processing. Exact output depends on the random failures."],
+    },
+    {
+      title: "Cache-aside with invalidation and single-flight",
+      code: {
+        lang: "python",
+        file: "cache.py",
+        code: `import asyncio, time
+
+class Cache:
+    def __init__(self) -> None:
+        self.data: dict[str, tuple[float, object]] = {}
+        self.inflight: dict[str, asyncio.Future] = {}
+
+    async def get_or_load(self, key: str, ttl: float, loader):
+        hit = self.data.get(key)
+        if hit and hit[0] > time.monotonic():
+            return hit[1]
+        if key in self.inflight:                          # single-flight: wait for the in-progress load
+            return await self.inflight[key]
+        fut = asyncio.get_running_loop().create_future()
+        self.inflight[key] = fut
+        try:
+            value = await loader()
+            self.data[key] = (time.monotonic() + ttl, value)
+            fut.set_result(value)
+            return value
+        except Exception as e:
+            fut.set_exception(e)
+            raise
+        finally:
+            del self.inflight[key]
+
+    def invalidate(self, key: str) -> None:
+        self.data.pop(key, None)
+
+db_calls = 0
+async def load_lesson():
+    global db_calls
+    db_calls += 1
+    await asyncio.sleep(0.05)
+    return {"id": "4.4.2", "title": "Idempotency, rate limiting, queues and caching"}
+
+async def main():
+    cache = Cache()
+    await asyncio.gather(*(cache.get_or_load("lesson:4.4.2", 60, load_lesson) for _ in range(100)))
+    print("db calls for 100 concurrent requests:", db_calls)
+    cache.invalidate("lesson:4.4.2")                     # after an update to the lesson
+    await cache.get_or_load("lesson:4.4.2", 60, load_lesson)
+    print("db calls after invalidation:", db_calls)
+
+asyncio.run(main())`,
+      },
+      output: "db calls for 100 concurrent requests: 1\ndb calls after invalidation: 2",
+    },
+  ],
+  
+=== CURRICULUM 6.4 ===
+6.4",
+        title: "Design cases",
+        lessons: [
+          { id: "6.4.1", title: "URL shortener, chat, news feed, rate limiter", objectives: ["Interview framework", "Trade-off narration"] },
+          { id: "6.4.2", title: "Scale from one server to millions of users", objectives: ["Evolve a design one bottleneck at a time", "Know which building block fixes what"] },
+          { id: "6.4.3", title: "Design a web crawler", objectives: ["URL frontier and politeness", "Duplicate detection at scale"] },
+          { id: "6.4.4", title: "Design Mint.com: a personal finance app", objectives: ["Scheduled ingestion pipelines", "Categorise and aggregate safely"] },
+          { id: "6.4.5", title: "Design a social graph and a search query cache", objectives: ["Graph search across shards", "LRU cache in front of search"] },
+          { id: "6.4.6", title: "Design sales rank by category", objectives: ["Batch aggregation with MapReduce", "Serve precomputed rankings"] },
+        ],
+      },
+    ],
+  },
+  {
+    id: 7,
+    title: "AI engineering",
+    tagline: "LLMs, RAG, agents and AI automation in production",
+    icon: "🤖",
+    weeks: 8,
+    areas: ["ai"],
+    modules: [
+      {
+        id: "7.1",
+        title: "LLM foundations",
+        lessons: [
+          { id: "7.1.1", title: "How LLMs work: tokens, embeddings, attention, temperature", objectives: ["Mental model of next-token prediction", "Control cost and randomness"] },
+          { id: "7.1.2", title: "Prompt engineering that survives production", objectives: ["Structured prompts", "Few-shot and XML tags"] },
+          { id: "7.1.3", title: "Calling LLM APIs: structured output, tools, streaming", objectives: ["Function calling", "Streaming UIs"] },
+        ],
+      },
+      {
+        id: "7.2",
+        title: "Retrieval-augmented generation",
+        lessons: [
+          { id: "7.2.1", title: "RAG end to end", objectives: ["Chunk, embed, retrieve, assemble, cite", "Diagnose RAG failures"] },
+          { id: "7.2.2", title: "Hybrid search, reranking and RAG evaluation", objectives: ["BM25 + vectors", "Measure retrieval quality"] },
+        ],
+      },
+      {
+        id: "7.3",
+        title: "Agents and automation",
+        lessons: [
+          { id: "7.3.1", title: "Agents, tools and MCP", objectives: ["Agent loop", "When a workflow beats an agent"] },
+          { id: "7.3.2", title: "Guardrails, evals, cost and observability", objectives: ["Prompt injection defence", "Eval suites"] },
+        ],
+      },
+    ],
+  },
+  {
+    id: 8,
+    title: "Cloud: AWS and Azure",
+    tagline: "The same ideas on two clouds, side by side",
+    icon: "☁️",
+    weeks: 6,
+    areas: ["cloud"],
+    modules: [
+      { id: "8.1", title: "Compute", lessons: [{ id: "8.1.1", title: "VMs, functions and containers on AWS and Azure", objectives: ["EC2 vs Azure VMs", "Lambda vs Functions"] }] },
+      { id: "8.2", title: "Storage and databases", lessons: [{ id: "8.2.1", title: "S3, Blob, RDS, Azure SQL, DynamoDB, Cosmos DB", objectives: ["Pick a managed store", "Durability vs availability"] }] },
+      { id: "8.3", title: "Networking and identity", lessons: [{ id: "8.3.1", title: "VPC/VNet, load balancers, IAM/Entra ID, secrets", objectives: ["Least privilege", "Private networking"] }] },
+      { id: "8.4", title: "AI services and cost", lessons: [{ id: "8.4.1", title: "Bedrock, Azure OpenAI and avoiding surprise bills", objectives: ["Budgets and alerts", "Free tiers"] }] },
+    ],
+  },
+  {
+    id: 9,
+    title: "DevOps and SRE",
+    tagline: "Ship safely, run reliably, sleep at night",
+    icon: "🚀",
+    weeks: 8,
+    areas: ["devops"],
+    modules: [
+      {
+        id: "9.1",
+        title: "Containers",
+        lessons: [
+          { id: "9.1.1", title: "Docker in depth: images, layers and multi-stage builds", objectives: ["Small, secure images", "Compose for local stacks"] },
+          { id: "9.1.2", title: "Docker Compose for multi-service apps", objectives: ["Networks and volumes", "Healthchecks"] },
+        ],
+      },
+      { id: "9.2", title: "CI/CD", lessons: [{ id: "9.2.1", title: "GitHub Actions and Azure Pipelines", objectives: ["Build, test, deploy", "Secrets in CI"] }] },
+      { id: "9.3", title: "Infrastructure as Code", lessons: [{ id: "9.3.1", title: "Terraform", objectives: ["State and modules", "Plan before apply"] }] },
+      {
+        id: "9.4",
+        title: "Kubernetes",
+        lessons: [
+          { id: "9.4.1", title: "Pods, deployments, services and ingress", objectives: ["Desired state", "Rolling updates"] },
+          { id: "9.4.2", title: "Config, secrets and Helm", objectives: ["ConfigMaps and Secrets", "Helm charts"] },
+        ],
+      },
+      { id: "9.5", title: "Observability and security", lessons: [{ id: "9.5.1", title: "Logs, metrics, traces and DevSecOps", objectives: ["OpenTelemetry", "Image and dependency scanning"] }] },
+      { id: "9.6", title: "Releases and SRE", lessons: [{ id: "9.6.1", title: "Blue-green, canary, SLOs and postmortems", objectives: ["Safe rollouts", "Error budgets"] }] },
+    ],
+  },
+  {
+    id: 10,
+    title: "Career",
+    tagline: "Turn skills into offers",
+    icon: "🎯",
+    weeks: 2,
+    areas: ["career"],
+    modules: [
+      { id: "10.1", title: "Portfolio and resume", lessons: [{ id: "10.1.1", title: "Portfolio, resume and GitHub profile", objectives: ["Show impact, not tasks", "README that sells"] }] },
+      { id: "10.2", title: "Interviews", lessons: [{ id: "10.2.1", title: "DSA, system design and behavioral interviews", objectives: ["STAR stories", "Think aloud"] }] },
+    ],
+  },
+];
+
+export const allStubs = phases.flatMap((p) => p.modules.flatMap((m) => m.lessons.map((l) => ({ ...l, phase: p, module: m }))));

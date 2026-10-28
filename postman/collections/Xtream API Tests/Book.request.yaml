@@ -1,0 +1,76 @@
+$kind: http-request
+name: Book
+method: POST
+url: '{{baseUrl}}/Air/Book'
+order: 5000
+headers:
+  - key: Content-Type
+    value: application/json
+  - key: Token
+    value: 'Bearer {{token}}'
+  - key: X-Correlation-ID
+    value: '{{$guid}}'
+body:
+  type: json
+  content: |-
+    {
+      "searchIdentifier": "{{searchIdentifier}}",
+      "flightOptionId": {{flightOptionId}},
+      "brandId": null,
+      "flightPassengerList": [
+        {
+          "Title": "Mr",
+          "FirstName": "QA",
+          "LastName": "Automation",
+          "Email": "{{passengerEmail}}",
+          "DOB": "2000-10-11",
+          "Gender": "M",
+          "PaxType": "ADT",
+          "Mobile": "{{passengerMobile}}",
+          "PassportNumber": "{{passportNumber}}",
+          "PassengerNationality": "IN",
+          "PassportDOI": "2021-01-15T00:00:00",
+          "PassportDOE": "2030-01-15T00:00:00",
+          "PassportIssuedCountry": "IN",
+          "SeatPref": null,
+          "MealPref": null,
+          "ancilliaries": []
+        }
+      ]
+    }
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      let body = {};
+      try { body = pm.response.json(); } catch (e) {}
+
+      pm.test('book HTTP 200', () => pm.response.to.have.status(200));
+      pm.test('book envelope status is 200', () => pm.expect(body.statusCode).to.eql(200));
+
+      const result = body.result || {};
+      const bookingId = result.bookingId ?? result.bookingID ?? result.id;
+      pm.test('book returns bookingId', () => pm.expect(bookingId).to.not.be.oneOf([undefined, null, '']));
+      if (bookingId != null) { pm.collectionVariables.set('bookingId', String(bookingId)); }
+
+      const amount = result.orderAmount ?? result.totalFare ?? result.amount ?? result.totalAmount;
+      pm.test('book returns an order amount', () => pm.expect(Number(amount)).to.be.greaterThan(0));
+      if (amount != null) { pm.collectionVariables.set('bookedAmount', String(amount)); }
+
+      const seatAmount = result.seatAmount ?? result.totalSeatAmount;
+      const refundedSeatAmount = result.refundedSeatAmount;
+      if (seatAmount != null) { pm.collectionVariables.set('seatAmount', String(seatAmount)); }
+      if (refundedSeatAmount != null) { pm.collectionVariables.set('refundedSeatAmount', String(refundedSeatAmount)); }
+
+      if (seatAmount != null && refundedSeatAmount != null && amount != null) {
+        pm.test('book orderAmount nets refunded seat money', () => {
+          const net = Number(result.totalFare) - Number(refundedSeatAmount);
+          pm.expect(Number(amount)).to.be.closeTo(net, 0.01);
+        });
+      }
+
+      if (amount != null && pm.collectionVariables.get('validatedFareTotal') && Number(seatAmount || 0) === 0) {
+        pm.test('book amount matches validated fare when no seats are charged', () => {
+          pm.expect(Number(amount)).to.be.closeTo(Number(pm.collectionVariables.get('validatedFareTotal')), 0.01);
+        });
+      }

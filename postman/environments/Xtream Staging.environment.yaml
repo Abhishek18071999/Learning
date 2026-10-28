@@ -1,0 +1,74 @@
+name: Xtream Staging
+values:
+  - key: baseUrl
+    value: 'https://xtreamapi-staging.corefares.net'
+    enabled: true
+    type: default
+    description: Xtream API staging base URL.
+  - key: token
+    value: ''
+    enabled: true
+    type: secret
+    description: Bearer token. Leave empty to obtain one from the Login request, or inject with --env-var token=... at run time.
+  - key: username
+    value: ''
+    enabled: true
+    type: secret
+    description: Staging login email. Inject with --env-var username=... or set locally.
+  - key: password
+    value: ''
+    enabled: true
+    type: secret
+    description: Staging login password. Inject with --env-var password=... or set locally.
+  - key: origin
+    value: 'DXB'
+    enabled: true
+    type: default
+  - key: destination
+    value: 'JFK'
+    enabled: true
+    type: default
+  - key: departureDate
+    value: '2026-12-15'
+    enabled: true
+    type: default
+  - key: returnDate
+    value: '0001-01-01'
+    enabled: true
+    type: default
+  - key: adultCount
+    value: '1'
+    enabled: true
+    type: default
+  - key: childCount
+    value: '0'
+    enabled: true
+    type: default
+  - key: infantCount
+    value: '0'
+    enabled: true
+    type: default
+  - key: cabinClass
+    value: 'Economy'
+    enabled: true
+    type: default
+  - key: passengerEmail
+    value: 'qa.automation@example.com'
+    enabled: true
+    type: default
+  - key: moneyTolerance
+    value: '5'
+    enabled: true
+    type: default
+    description: >-
+      Maximum difference between totalFare and totalBaseFare + totalTax, in currency
+      minor units. Current staging data shows a systematic 5-unit rounding delta;
+      set to 0 to fail on any discrepancy.
+  - key: passengerMobile
+    value: '9876543210'
+    enabled: true
+    type: default
+  - key: passportNumber
+    value: 'A123876645'
+    enabled: true
+    type: default

@@ -1,0 +1,62 @@
+$kind: http-request
+name: Validate
+method: POST
+url: '{{baseUrl}}/Air/Validate'
+order: 3000
+headers:
+  - key: Content-Type
+    value: application/json
+  - key: Token
+    value: 'Bearer {{token}}'
+  - key: X-Correlation-ID
+    value: '{{$guid}}'
+body:
+  type: json
+  content: |-
+    {
+      "searchIdentifier": "{{searchIdentifier}}",
+      "flightOptionId": {{flightOptionId}},
+      "brandId": null
+    }
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      let body = {};
+      try { body = pm.response.json(); } catch (e) {}
+
+      pm.test('validate HTTP 200', () => pm.response.to.have.status(200));
+      pm.test('validate envelope status is 200', () => pm.expect(body.statusCode).to.eql(200));
+
+      const result = Array.isArray(body.result) ? body.result[0] : body.result;
+      pm.test('validate returns one priced itinerary', () => pm.expect(result).to.be.an('object'));
+
+      if (!result) { return; }
+
+      pm.test('validate preserves searchIdentifier', () => {
+        pm.expect(result.searchIdentifier).to.eql(pm.collectionVariables.get('searchIdentifier') || result.searchIdentifier);
+      });
+
+      const fare = (result.airCalculatedFlightFares || [])[0] || {};
+      const total = Number(result.totalFare);
+      const base = Number(fare.totalBaseFare);
+      const tax = Number(fare.totalTax);
+      const tol = Number(pm.environment.get('moneyTolerance') || 5);
+      pm.test(`validate totalFare reconciles with totalBaseFare + totalTax (tolerance ${tol})`, () => {
+        pm.expect(Number.isFinite(total), 'totalFare missing').to.be.true;
+        pm.expect(Math.abs(total - (base + tax)), `total=${total} base=${base} tax=${tax}`).to.be.at.most(tol);
+      });
+      pm.test(`validate totalBaseFare reconciles with per-passenger base sum (tolerance ${tol})`, () => {
+        const perPax =
+          Number(fare.singleAdtBaseFare || 0) * Number(fare.adtCount || 0) +
+          Number(fare.singleChdBaseFare || 0) * Number(fare.chdCount || 0) +
+          Number(fare.singleInfBaseFare || 0) * Number(fare.infCount || 0);
+        pm.expect(Math.abs(base - perPax), `base=${base} perPax=${perPax}`).to.be.at.most(tol);
+      });
+
+      const currency = fare.branchCurrency || result.currency;
+      if (Number.isFinite(total)) { pm.collectionVariables.set('validatedFareTotal', String(total)); }
+      if (currency) { pm.collectionVariables.set('validatedCurrency', String(currency)); }
+
+      const segs = result.airFlightSegments || [];
+      pm.test('validate returns flight segments', () => pm.expect(segs.length).to.be.greaterThan(0));

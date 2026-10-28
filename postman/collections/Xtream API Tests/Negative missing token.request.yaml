@@ -1,0 +1,42 @@
+$kind: http-request
+name: 'Negative: missing token'
+method: POST
+url: '{{baseUrl}}/Air/Search'
+order: 9100
+headers:
+  - key: Content-Type
+    value: application/json
+body:
+  type: json
+  content: |-
+    {
+      "departureDateTime": "{{departureDate}}",
+      "returnDateTime": "{{returnDate}}",
+      "origin": "{{origin}}",
+      "destination": "{{destination}}",
+      "AirTravelType": "OneWay",
+      "adultCount": {{adultCount}},
+      "childCount": {{childCount}},
+      "infantCount": {{infantCount}},
+      "cabinClass": "{{cabinClass}}",
+      "isMultiDestination": false
+    }
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      let body = {};
+      try { body = pm.response.json(); } catch (e) {}
+
+      const httpCode = pm.response.code;
+      const apiCode = body.statusCode;
+      const rejected = [400, 401, 403].includes(httpCode) || [400, 401, 403].includes(apiCode);
+      pm.test('missing token is rejected with 400/401/403', () => {
+        pm.expect(rejected, `HTTP ${httpCode}, envelope ${apiCode}`).to.be.true;
+      });
+      pm.test('rejection explains that the token is required', () => {
+        pm.expect(JSON.stringify(body).toLowerCase()).to.include('token');
+      });
+      pm.test('missing token never returns itineraries', () => {
+        pm.expect(Array.isArray(body.result) ? body.result.length : 0).to.eql(0);
+      });

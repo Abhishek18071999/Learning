@@ -1,0 +1,44 @@
+$kind: http-request
+name: TicketOrder
+method: POST
+url: '{{baseUrl}}/Air/Book'
+order: 6000
+headers:
+  - key: Content-Type
+    value: application/json
+  - key: Token
+    value: 'Bearer {{token}}'
+  - key: X-Correlation-ID
+    value: '{{$guid}}'
+body:
+  type: json
+  content: |-
+    {
+      "bookingId": {{bookingId}}
+    }
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      let body = {};
+      try { body = pm.response.json(); } catch (e) {}
+
+      pm.test('ticket HTTP 200', () => pm.response.to.have.status(200));
+      pm.test('ticket envelope status is 200', () => pm.expect(body.statusCode).to.eql(200));
+
+      const result = body.result || {};
+      pm.test('ticket response references the booking', () => {
+        pm.expect(result).to.be.an('object');
+        pm.expect(String(result.bookingId ?? pm.collectionVariables.get('bookingId'))).to.eql(String(pm.collectionVariables.get('bookingId')));
+      });
+
+      const ticketNumber = result.ticketNumber ?? result.ticketNo ?? result.pnr;
+      if (ticketNumber) {
+        pm.collectionVariables.set('ticketNumber', String(ticketNumber));
+        pm.test('ticket number is non-empty', () => pm.expect(String(ticketNumber)).to.not.be.empty);
+      }
+
+      pm.test('ticket did not report a failure', () => {
+        const status = String(result.status ?? result.bookingStatus ?? '').toLowerCase();
+        pm.expect(status).to.not.include('fail');
+      });

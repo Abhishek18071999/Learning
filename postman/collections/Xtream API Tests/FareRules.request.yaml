@@ -1,0 +1,34 @@
+$kind: http-request
+name: FareRules
+method: POST
+url: '{{baseUrl}}/Air/FareRules'
+order: 4000
+headers:
+  - key: Content-Type
+    value: application/json
+  - key: Token
+    value: 'Bearer {{token}}'
+  - key: X-Correlation-ID
+    value: '{{$guid}}'
+body:
+  type: json
+  content: |-
+    {
+      "searchIdentifier": "{{searchIdentifier}}",
+      "flightOptionId": {{flightOptionId}},
+      "brandId": null
+    }
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      let body = {};
+      try { body = pm.response.json(); } catch (e) {}
+
+      pm.test('fare rules HTTP 200', () => pm.response.to.have.status(200));
+      pm.test('fare rules envelope status is 200', () => pm.expect(body.statusCode).to.eql(200));
+      pm.test('fare rules returns content', () => {
+        const result = body.result;
+        const hasContent = Array.isArray(result) ? result.length > 0 : !!result;
+        pm.expect(hasContent, JSON.stringify(body).slice(0, 300)).to.be.true;
+      });

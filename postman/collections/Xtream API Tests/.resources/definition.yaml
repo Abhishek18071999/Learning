@@ -1,0 +1,30 @@
+$kind: collection
+name: Xtream API Tests
+description: >-
+  Chained regression suite for the Xtream staging API. Covers Search, BrandedFare,
+  Validate, FareRules, Book, TicketOrder, GetBooking and Cancel, plus negative
+  cases. Response assertions check money math so the JSON the client receives
+  cannot drift from the amounts the client displays.
+variables:
+  - key: token
+    value: ''
+  - key: searchIdentifier
+    value: ''
+  - key: flightOptionId
+    value: ''
+  - key: brandId
+    value: ''
+  - key: validatedFareTotal
+    value: ''
+  - key: validatedCurrency
+    value: ''
+  - key: bookingId
+    value: ''
+  - key: bookedAmount
+    value: ''
+  - key: seatAmount
+    value: ''
+  - key: refundedSeatAmount
+    value: ''
+auth:
+  type: noauth

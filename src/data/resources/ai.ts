@@ -111,6 +111,19 @@ export const ai: ResourceSection = {
           practice: { label: "ChatGPT Prompt Engineering for Developers (DeepLearning.AI, Jupyter notebook labs)", url: "https://www.deeplearning.ai/courses/chatgpt-prompt-eng" },
         },
         {
+          id: "context-engineering",
+          title: "Context engineering and prompt caching",
+          lessonId: "7.4.2",
+          revision: [
+            "Context engineering is curating exactly which tokens go into the limited context window each turn: system prompt, tools, examples, message history and retrieved text.",
+            "Treat context as a finite resource: LLMs have an attention budget and recall falls as context grows (context rot), so keep it informative but tight.",
+            "Prompt caching stores a stable prompt prefix and reuses it across requests to cut cost and latency; put the cache breakpoint at the end of the static part, not on content that changes.",
+            "Long-horizon agents use compaction, structured note-taking and sub-agents so they never drown in an ever-growing context window.",
+          ],
+          read: { label: "Effective context engineering for AI agents (Anthropic Engineering)", url: "https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents", kind: "article" },
+          practice: { label: "Prompt caching (Claude docs: cache_control, TTLs and how to structure prompts for cache hits)", url: "https://platform.claude.com/docs/en/build-with-claude/prompt-caching" },
+        },
+        {
           id: "llm-apis",
           title: "Calling LLM APIs: structured output, function calling, streaming",
           lessonId: "7.1.3",
@@ -185,6 +198,18 @@ export const ai: ResourceSection = {
           read: { label: "Evaluate model and system for safety (Google Responsible Generative AI Toolkit)", url: "https://ai.google.dev/responsible/docs/evaluation", kind: "docs" },
           video: { label: "Why Large Language Models Hallucinate", url: "https://www.youtube.com/watch?v=cfqtFvWOfg0", channel: "IBM Technology", lang: "English" },
           practice: { label: "Arena: compare models side by side, vote, and see the LLM leaderboard", url: "https://arena.ai/" },
+        },
+        {
+          id: "llm-as-judge",
+          title: "LLM-as-judge and golden datasets",
+          lessonId: "7.4.3",
+          revision: [
+            "A golden dataset is a fixed set of inputs with expected outputs or scored labels, gathered from real traffic or synthesized to cover your failure modes.",
+            "LLM-as-judge uses a strong model to score or critique outputs; align it against human labels and measure precision and recall, not just raw agreement.",
+            "Layer evals like software tests: fast rule-based assertions on every change, model/human eval on a cadence, and A/B tests for mature products.",
+            "Re-run the same scored dataset before and after any prompt or model change; a golden dataset also doubles as a fine-tuning and debugging corpus.",
+          ],
+          read: { label: "Your AI Product Needs Evals (Hamel Husain)", url: "https://hamel.dev/blog/posts/evals/", kind: "article" },
         },
         {
           id: "ai-safety-prompt-injection",

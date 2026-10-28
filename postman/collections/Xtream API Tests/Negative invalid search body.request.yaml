@@ -1,0 +1,30 @@
+$kind: http-request
+name: 'Negative: invalid search body'
+method: POST
+url: '{{baseUrl}}/Air/Search'
+order: 9200
+headers:
+  - key: Content-Type
+    value: application/json
+  - key: Token
+    value: 'Bearer {{token}}'
+body:
+  type: json
+  content: |-
+    {}
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      let body = {};
+      try { body = pm.response.json(); } catch (e) {}
+
+      const httpCode = pm.response.code;
+      const apiCode = body.statusCode;
+      const failed = httpCode >= 400 || (apiCode != null && apiCode >= 400);
+      pm.test('empty search body is rejected', () => {
+        pm.expect(failed, `HTTP ${httpCode}, envelope ${apiCode}`).to.be.true;
+      });
+      pm.test('empty search body never returns itineraries', () => {
+        pm.expect(Array.isArray(body.result) ? body.result.length : 0).to.eql(0);
+      });
